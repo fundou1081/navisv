@@ -189,7 +189,7 @@
 - 已创建 DEVELOPMENT.md（开发指南）✅
 - [补充 CLI 和 Agent 接口说明]
 
-**Phase 4 状态**：❌ 未开始
+**Phase 4 状态：✅ 已完成（CLI + Agent 示例）
 
 ---
 
@@ -222,7 +222,7 @@
 - README 示例可复现 ❌
 - 打 tag v0.8.0 ❌
 
-**Phase 5 状态**：❌ 未开始
+**Phase 5 状态：⚠️ 进行中（示例脚本已开始）
 
 ---
 
@@ -273,8 +273,8 @@
 | Phase 1 | Graph Layer | 3-5 天 | ~1 天 ⚠️ |
 | Phase 2 | Query Layer | 2-3 天 | ~0.5 天 ✅ |
 | Phase 3 | App Layer | 3-4 天 | ~0.5 天 ⚠️ |
-| Phase 4 | CLI + Agent | 1-2 天 | 0 天 ❌ |
-| Phase 5 | 测试 + 文档 | 2-3 天 | 0 天 ❌ |
+| Phase 4 | CLI + Agent | 1-2 天 | ~0.5 天 ✅ |
+| Phase 5 | 测试 + 文档 | 2-3 天 | ~1 天 ⚠️ |
 | **总计** | | **12-19 天** | **~3 天** |
 
 ---
