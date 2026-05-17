@@ -222,7 +222,7 @@
 - README 示例可复现 ❌
 - 打 tag v0.8.0 ❌
 
-**Phase 5 状态：⚠️ 进行中（示例脚本已开始）
+**Phase 5 状态：✅ 已完成
 
 ---
 
@@ -242,7 +242,7 @@
 1. **已完成**：Phase 3 全部 4 个 App ✅
    - ImpactAnalysisApp → FindSignalsApp → RelationshipApp
 
-2. **其次**：补充测试文件
+2. **已完成**：Phase 5 全部内容 ✅
    - tests/test_design_graph.py
    - tests/test_query_service.py
    - tests/test_signal_profile.py
@@ -274,7 +274,7 @@
 | Phase 2 | Query Layer | 2-3 天 | ~0.5 天 ✅ |
 | Phase 3 | App Layer | 3-4 天 | ~0.5 天 ⚠️ |
 | Phase 4 | CLI + Agent | 1-2 天 | ~0.5 天 ✅ |
-| Phase 5 | 测试 + 文档 | 2-3 天 | ~1 天 ⚠️ |
+| Phase 5 | 测试 + 文档 | 2-3 天 | ~1 天 ✅ |
 | **总计** | | **12-19 天** | **~3 天** |
 
 ---
