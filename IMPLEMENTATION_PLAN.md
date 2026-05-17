@@ -168,7 +168,7 @@
 - 极端情况验证 ⚠️
 - [未开始]
 
-**Phase 3 状态**：⚠️ 1/4 完成（SignalProfileApp）
+**Phase 3 状态**：✅ 4/4 完成
 
 ---
 
@@ -232,14 +232,14 @@
 |--------|------|------|
 | M0 | 原型验证通过（Phase 0 完成）| ✅ 已完成 |
 | M1 | Graph + Query 层可用（Phase 1–2）| ✅ 已完成 |
-| M2 | 核心 App 可用（Phase 3）| ⚠️ 进行中（1/4）|
+| M2 | 核心 App 可用（Phase 3）| ✅ 已完成（4/4）|
 | M3 | v0.8 发布（含 CLI、文档、实验性 App）| ❌ 未开始 |
 
 ---
 
 ## 下一步行动（按优先级）
 
-1. **立即**：完成 Phase 3 剩余 3 个 App
+1. **已完成**：Phase 3 全部 4 个 App ✅
    - ImpactAnalysisApp → FindSignalsApp → RelationshipApp
 
 2. **其次**：补充测试文件
