@@ -126,6 +126,10 @@ class DesignGraph:
                 src_path = drv.path.rootSymbol.hierarchicalPath if hasattr(drv, 'path') and drv.path else None
                 if not src_path:
                     continue
+                # self-loop 表示该信号有 slang driver 信息（即使是 self-loop）
+                # 但查询时通常不需要 self-loop，所以仍跳过它
+                if src_path == node_id:
+                    continue
                 # 确保 src 节点存在
                 if src_path not in self.graph.nodes():
                     # 添加未在节点列表中的隐式节点

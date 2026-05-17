@@ -139,7 +139,7 @@ class QueryService:
         Returns:
             List[str]: 上游节点列表
         """
-        visited = set()
+        visited = {signal}  # 包含起始节点
         queue = [(signal, 0)]
         while queue:
             curr, depth = queue.pop(0)
@@ -162,7 +162,7 @@ class QueryService:
         Returns:
             List[str]: 下游节点列表
         """
-        visited = set()
+        visited = {signal}  # 包含起始节点
         queue = [(signal, 0)]
         while queue:
             curr, depth = queue.pop(0)

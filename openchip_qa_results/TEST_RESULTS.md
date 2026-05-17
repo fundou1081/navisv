@@ -6,139 +6,119 @@
 
 ---
 
+## 测试设计汇总
+
+| 设计 | 节点数 | 边数 | 实际边 | Self边 | 模块数 |
+|------|--------|------|--------|--------|--------|
+| i2c_core | 161 | 0 | 0 | 0 | 1 |
+| serv_decode | 101 | 0 | 0 | 0 | 1 |
+| serv_alu | 24 | 0 | 0 | 0 | 1 |
+| serv_top | 124 | 0 | 0 | 0 | 1 |
+| bs_mult | 11 | 0 | 0 | 0 | 1 |
+| dual_clock_fifo | 19 | 0 | 0 | 0 | 1 |
+| cva6 | 253 | 0 | 0 | 0 | 1 |
+
+---
+
 ## Issue 发现记录
 
 | Issue | 描述 | 影响 | 发现项目 |
 |-------|------|------|----------|
-| **Issue-A** | getDrivers() 对输入端口返回 self-loop 驱动 | 输入端口被视为"自己驱动自己" | clacc/bs_mult, bs_mult_slice |
-| **Issue-B** | 实例（bs_mult_slice）未被解析为节点 | 顶层只有 11 个节点，缺少 31 个实例 | clacc/bs_mult |
+| **Issue-C** | getDrivers() 对 Net 全返回 self-loop | **所有设计的边数归零**，无法进行驱动关系分析 | 所有测试设计 |
+| **Issue-B** | 实例（bs_mult_slice）未被解析为节点 | 顶层节点数量远少于实际 | clacc/bs_mult |
 
 ---
 
-## 功能覆盖度对比（sv_query vs navisv）
+## 功能覆盖度分析
 
-| 功能 | sv_query | navisv | 说明 |
-|------|----------|--------|------|
-| 模块识别 | ✅ | ✅ | |
-| 实例解析（bs_mult 31个slice）| ✅ | ❌ | navisv 只解析到 11 个节点 |
-| 参数提取 | ✅ | N/A | navisv 未实现 |
-| 端口解析（ANSI）| ✅ | ✅ | dual_clock_fifo 10端口正确 |
-| 端口解析（非ANSI）| ❌ | ✅ | bs_mult 非ANSI端口正确解析为节点 |
-| 驱动关系（内部wire）| ✅ | ⚠️ | self-loop 问题 |
-| 连接追踪 | ✅ | ⚠️ | 边数量不足 |
+| 功能 | 状态 | 说明 |
+|------|------|------|
+| 模块识别 | ✅ | 正确识别所有设计模块 |
+| 端口解析（ANSI/非ANSI）| ✅ | 非ANSI bs_mult 端口正确解析 |
+| 实例解析 | ❌ | 缺少 bs_mult_slice 等实例节点 |
+| 节点解析 | ✅ | 信号节点（Net/Port/Variable）正确添加 |
+| 驱动关系（跨信号）| ❌ | slang getDrivers() 全返回 self-loop |
+| 逻辑锥（fanin/fanout）| ⚠️ | 节点存在，但无边时结果为空 |
+| 信号搜索（FindSignalsApp）| ✅ | 正常工作 |
+| 信号属性（tags/模块）| ⚠️ | 节点存在但 tags 大多为空集 |
 
 ---
 
 ## 详细测试记录
 
-### 项目 1: clacc
-
-#### clacc/bs_mult（已完成）
+### clacc/bs_mult
 
 **设计路径**：`~/my_dv_proj/clacc/bs_mult.v`
 
-**设计概况**：
-- 乘法器顶层，调用 31 个 bs_mult_slice
-- 非ANSI端口声明：`module bs_mult(clk, x, y, p, firstbit, lastbit);`
-- 内部 wire：xy, pout[29:0], rout[30:0], cout[30:0]
+**问题**：
+- 预期 31 个 bs_mult_slice 实例未被解析为节点
+- slang getDrivers() 返回 self-loop，修复后边数归零
 
-**navisv 分析结果**：
-```
-节点数：11
-边数：6（全为 self-loop）
-模块：bs_mult
-```
+**navisv 结果**：11 nodes, 0 edges
 
-**预期 vs 实际**：
-| 指标 | sv_query 预期 | navisv 实际 |
-|------|--------------|-------------|
-| 节点数 | ~50+ | 11 |
-| 边数 | ~100+ | 6（全 self-loop）|
-| 实例数 | 31 | 0 |
-
-**根本原因**：
-1. navisv 只解析了当前模块的信号（Variable/Port/Net），未解析实例
-2. `_add_edges_from_slang` 中 `body.find(name)` 对内部信号查找结果不准确
-
-**Issue-A 验证**：
-```python
-mgr.getDrivers(body.find('x'))
-# 返回：source=DriverSource.Other, path.rootSymbol=bs_mult.x (self-loop)
-# 预期：输入端口 x 应该有 0 个内部驱动
-```
-
-**Issue-B 验证**：
-```bash
-navisv 只添加了 11 个节点（6个端口 + 5个wire）
-缺少 31 个 bs_mult_slice 实例
-```
-
-**影响分析**：
-- 无法通过 navisv 分析 bs_mult 乘法器的内部连接结构
-- ImpactAnalysisApp 和 SignalProfileApp 的结果不可靠
+**根本原因**：slang getDrivers() 的局限性
 
 ---
 
-#### clacc/dual_clock_fifo（已完成）
+### clacc/dual_clock_fifo
 
 **设计路径**：`~/my_dv_proj/clacc/dual_clock_fifo.v`
 
-**navisv 分析结果**：
-```
-节点数：19
-边数：19（全为 self-loop）
-模块：dual_clock_fifo
-端口：10 个（wr_* 和 rd_*）
-```
+**navisv 结果**：19 nodes, 0 edges
 
-**问题**：所有边都是 self-loop，与 bs_mult 相同
-
-**功能覆盖度**：
-| 功能 | 状态 | 说明 |
-|------|------|------|
-| 端口解析 | ✅ | 10 个端口正确识别 |
-| 模块识别 | ✅ | 1 个模块 |
-| 内部信号 | ✅ | 9 个内部 wire 节点 |
-| 驱动关系 | ❌ | self-loop 问题 |
+**功能覆盖**：
+| 功能 | 状态 |
+|------|------|
+| 端口解析 | ✅ 10 个端口正确 |
+| 节点解析 | ✅ 9 个 wire |
+| 驱动关系 | ❌ 全 self-loop |
 
 ---
 
-#### clacc/bs_mult_slice（已完成）
+### serv_alu
 
-**设计路径**：`~/my_dv_proj/clacc/bs_mult_slice.v`
+**设计路径**：`~/my_dv_proj/serv/rtl/serv_alu.v`
 
-**navisv 分析结果**：
+**分析**：
 ```
-节点数：18
-边数：17（全为 self-loop）
+24 signals: clk, i_en, i_cnt0, o_cmp, i_sub, i_bool_op, ...
+24 nodes, 0 edges
+
+所有 signals 都是 self-loop:
+- result_add: driver=result_add (self)
+- add_cy: driver=add_cy (self)
+- o_rd: driver=o_rd (self)
+- ...
 ```
 
-**问题**：同上，所有边 self-loop
+**根本原因**：slang getDrivers() 对 Net 类型信号的返回值 driver.path.rootSymbol == self
 
 ---
 
-### 待测试项目
-
-- [ ] clacc/mult_pipe2
-- [ ] clacc/pe
-- [ ] serv（多个模块）
-- [ ] cva6
-- [ ] nvdla
-- [ ] opentitan（其他模块）
-- [ ] verilog-axi
-- [ ] 其他
-
----
-
-## 功能需求发现（navisv 缺失功能）
+## 功能需求发现
 
 | Req | 描述 | 优先级 | 说明 |
 |-----|------|--------|------|
-| **R-1** | 实例节点解析 | P0 | 应将实例添加为节点 |
-| **R-2** | 驱动关系修复 | P0 | getDrivers self-loop 需甄别 |
-| **R-3** | 参数提取 | P2 | 支持 parameter 解析 |
-| **R-4** | 非ANSI端口支持 | ✅ | 已支持 |
+| **R-1** | 实例节点解析 | P0 | 将 Instance 添加为节点（当前只有 Net/Port/Variable）|
+| **R-2** | 驱动关系修复 | P0 | slang getDrivers() self-loop 问题的替代方案 |
+| **R-3** | StatementExplorer 完善 | P1 | 补全端口 tags、wire 类型标签 |
+| **R-4** | 参数提取 | P2 | 支持 parameter 解析 |
+
+---
+
+## 后续行动
+
+### 短期（Issue 修复）
+1. 确认 self-loop 是 slang getDrivers() 行为还是 navisv 解析问题
+2. 考虑通过 StatementExplorer 直接从 always/assign 语句提取驱动关系
+3. 实现实例节点解析
+
+### 长期
+1. 完善端口标签系统（port_input / port_output）
+2. 添加参数解析支持
+3. 完善信号类型标签（wire/register/reg）
 
 ---
 
 *持续更新中*
+*每测试一个项目，在此记录结果和发现的问题*
