@@ -101,12 +101,13 @@ class TestDesignGraphEdges:
         assert all(isinstance(e, tuple) and len(e) == 2 for e in edges)
 
     def test_slang_edges_have_source_slang(self, simple_graph):
-        """所有 drives 关系的边 source 字段应为 'slang'"""
+        """所有 drives 关系的边 source 字段应为 'slang' 或 'netlist_graph'"""
         for src, dst in simple_graph.edges():
             edge = simple_graph.edge_attr(src, dst)
             if edge.get("relation") == "drives":
-                assert edge.get("source") == "slang", \
-                    f"边 ({src} -> {dst}) source 应为 'slang'"
+                # source 可以是 'slang' (getDrivers) 或 'netlist_graph' (BFS fallback)
+                assert edge.get("source") in ('slang', 'netlist_graph'), \
+                    f"边 ({src} -> {dst}) source 应为 'slang' 或 'netlist_graph'"
 
     def test_all_edges_have_required_attributes(self, simple_graph):
         """每条边都有 relation, timing, source, confidence 字段"""

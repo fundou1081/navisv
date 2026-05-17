@@ -150,6 +150,128 @@ class DesignGraph:
                     confidence='high',
                     meta={})
 
+        # Fallback: 如果 getDrivers() 没有产生任何边，使用 NetlistGraph BFS
+        if self.graph.number_of_edges() == 0:
+            self._add_edges_from_netlist_graph_bfs(nl)
+
+    def _add_edges_from_netlist_graph_bfs(self, nl) -> None:
+        """
+        使用 slang-netlist NetlistGraph BFS 遍历添加边。
+        
+        原理：通过 get_comb_fan_in() BFS 追踪每个信号的驱动源，
+        直到遇到 Input Port 为止（Input Port 是外部驱动，停止追踪）。
+        
+        优点：绕过 getDrivers() self-loop 问题，能找到真实驱动关系。
+        """
+        sl_graph = self._slang_graph
+        root = self._comp.getRoot()
+        inst = list(root)[1]
+        module_name = inst.name  # e.g. 'serv_alu'
+        
+        def get_ultimate_drivers(signal_name: str) -> list:
+            """BFS 找到 signal_name 的终极 Input Port 驱动源"""
+            start_nodes = sl_graph.find_nodes(f'{module_name}.{signal_name}')
+            if not start_nodes:
+                return []
+            
+            visited_ids = set()
+            queue = [(start_nodes[0], 0)]
+            ultimate_drivers = []
+            
+            while queue:
+                node, depth = queue.pop(0)
+                node_id = id(node)
+                if node_id in visited_ids:
+                    continue
+                visited_ids.add(node_id)
+                
+                kn = str(node.kind)
+                nm = node.name if hasattr(node, 'name') else None
+                if nm == signal_name:
+                    # 跳过自己，但继续追踪其 fan_in
+                    if depth < 10:
+                        try:
+                            for item in sl_graph.get_comb_fan_in(node):
+                                queue.append((item, depth + 1))
+                        except:
+                            pass
+                    continue
+                
+                # Input Port 是终极驱动源
+                if kn == 'NodeKind.Port':
+                    try:
+                        if node.direction.name == 'In':
+                            ultimate_drivers.append(nm)
+                    except:
+                        pass
+                    continue  # Stop tracing from ports
+                
+                # State (时序元素) - 继续追踪
+                if kn == 'NodeKind.State':
+                    if depth < 10:
+                        try:
+                            for item in sl_graph.get_comb_fan_in(node):
+                                queue.append((item, depth + 1))
+                        except:
+                            pass
+                    continue
+                
+                # Max depth protection
+                if depth >= 10:
+                    continue
+                
+                # 尝试遍历 fan_in
+                try:
+                    for item in sl_graph.get_comb_fan_in(node):
+                        queue.append((item, depth + 1))
+                except:
+                    pass
+            
+            return list(set(ultimate_drivers))
+        
+        # 对 body 中每个信号调用 BFS 建边
+        body = inst.body
+        for sym in body:
+            kn = getattr(sym, 'kind', None)
+            kn = kn.name if hasattr(kn, 'name') else str(kn) if kn else ''
+            if kn not in ('Variable', 'Port', 'State', 'Net'):
+                continue
+            
+            signal_name = getattr(sym, 'name', None)
+            if not signal_name:
+                continue
+            
+            signal_path = sym.hierarchicalPath
+            drivers = get_ultimate_drivers(signal_name)
+            
+            for driver in drivers:
+                driver_path = f'{module_name}.{driver}'
+                if driver_path == signal_path:
+                    continue
+                
+                # 确保 driver 节点存在
+                if driver_path not in self.graph.nodes():
+                    self.graph.add_node(driver_path,
+                        name=driver,
+                        module=module_name,
+                        bit_width=(0, 0),
+                        tags=set(),
+                        meta={})
+                
+                # 添加边（source='netlist_graph' 标记来源）
+                if not self.graph.has_edge(driver_path, signal_path):
+                    self.graph.add_edge(driver_path, signal_path,
+                        relation='drives',
+                        timing='unknown',
+                        qualifier=None,
+                        bounds=None,
+                        source_location=None,
+                        source='netlist_graph',
+                        is_partial=False,
+                        confidence='high',
+                        meta={})
+
+
     def _annotate_edges_from_statements(self) -> None:
         """StatementExplorer 补充边属性"""
         from .statement_explorer import StatementExplorer
