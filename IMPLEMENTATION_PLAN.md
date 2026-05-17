@@ -200,10 +200,10 @@
 - ProtocolInferApp：命名 pattern 匹配 ❌
 - [未开始]
 
-### Step 5.2：集成测试 ❌
-- tests/test_integration.py ❌
-- golden reference 验证 ❌
-- [未开始]
+### Step 5.2：集成测试 ⚠️
+- tests/test_integration.py ⚠️
+- golden reference 验证 ⚠️
+- [已补充 test_graph.py / test_query.py / test_apps.py，Phase 5 末需整合]
 
 ### Step 5.3：示例脚本 ❌
 - examples/signal_profile_demo.py ❌
