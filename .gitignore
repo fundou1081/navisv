@@ -49,6 +49,7 @@ Thumbs.db
 *.v
 !examples/**/*.sv
 !examples/**/*.v
+!tests/fixtures/*.sv
 
 # Logs
 *.log
