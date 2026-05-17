@@ -4,6 +4,8 @@ from .signal_profile import SignalProfileApp
 from .impact_analysis import ImpactAnalysisApp
 from .find_signals import FindSignalsApp
 from .relationship import RelationshipApp
+from .fsm_detect import FsmDetectApp
+from .protocol_infer import ProtocolInferApp
 
 __all__ = [
     'BaseApp', 'AppResponse',
@@ -11,4 +13,6 @@ __all__ = [
     'ImpactAnalysisApp',
     'FindSignalsApp',
     'RelationshipApp',
+    'FsmDetectApp',
+    'ProtocolInferApp',
 ]

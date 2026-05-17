@@ -39,6 +39,8 @@ from navisv.apps import (
     ImpactAnalysisApp,
     FindSignalsApp,
     RelationshipApp,
+    FsmDetectApp,
+    ProtocolInferApp,
 )
 
 
@@ -81,6 +83,20 @@ def run_find(args, query):
         module=args.module or "",
         limit=args.limit,
     )
+    return r
+
+
+def run_fsm(args, query):
+    """FsmDetectApp"""
+    app = FsmDetectApp(query)
+    r = app.run(signal=args.signal or None, module=args.module or '')
+    return r
+
+
+def run_protocol(args, query):
+    """ProtocolInferApp"""
+    app = ProtocolInferApp(query)
+    r = app.run(signals=args.signals or None, pattern=args.pattern or '')
     return r
 
 
@@ -160,6 +176,16 @@ def main():
     p = sub.add_parser('sample', help='采样条件（待实现）')
     p.add_argument('signal', help='信号路径')
 
+    # navisv fsm
+    p = sub.add_parser('fsm', help='FSM 检测（实验性）')
+    p.add_argument('--signal', '-s', default='', help='限定起始信号')
+    p.add_argument('--module', '-m', default='', help='限定模块')
+
+    # navisv protocol
+    p = sub.add_parser('protocol', help='协议推断（实验性）')
+    p.add_argument('--pattern', '-p', default='', help='协议模式（如 valid/ready）')
+    p.add_argument('signals', nargs='*', default=[], help='信号列表（可选）')
+
     args = parser.parse_args()
 
     # 构建图
@@ -187,6 +213,10 @@ def main():
         elif args.command == 'sample':
             print("错误：sample 命令尚未实现（Phase 5）", file=sys.stderr)
             sys.exit(1)
+        elif args.command == 'fsm':
+            r = run_fsm(args, query)
+        elif args.command == 'protocol':
+            r = run_protocol(args, query)
         else:
             print(f"未知命令：{args.command}", file=sys.stderr)
             sys.exit(1)
@@ -195,6 +225,9 @@ def main():
 
     except Exception as e:
         print(f"错误：{e}", file=sys.stderr)
+        if args.json:
+            print(json.dumps({'error': str(e)}), file=sys.stderr)
+        sys.exit(1)
         if args.json:
             print(json.dumps({'error': str(e)}), file=sys.stderr)
         sys.exit(1)
