@@ -82,12 +82,13 @@ class DesignGraph:
         for tree in trees:
             self._comp.addSyntaxTree(tree)
 
-        # 检查编译错误
+        # 检查编译错误（只显示 Error 级别，减少噪音）
         diagnostics = self._comp.getAllDiagnostics()
         if len(diagnostics) > 0:
-            print("Compilation errors:")
-            for d in diagnostics:
-                print(f"  {d}")
+            error_count = sum(1 for i in range(len(diagnostics)) if diagnostics[i].isError())
+            if error_count > 0:
+                print(f"Compilation: {error_count} errors, {len(diagnostics) - error_count} warnings")
+            # 不打印详细 diagnostics，减少输出噪音
 
         # 3. 激发 elaboration（新版 slang 必须调用，否则无法分析）
         self._comp.getSemanticDiagnostics()
