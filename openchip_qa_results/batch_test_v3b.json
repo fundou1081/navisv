@@ -1,0 +1,112 @@
+[
+  {
+    "name": "serv/serv_alu",
+    "status": "OK",
+    "nodes": 24,
+    "edges": 9,
+    "sources": {
+      "pathfinder": 9
+    },
+    "edge_list": [
+      {
+        "src": "clk",
+        "dst": "o_rd",
+        "source": "pathfinder"
+      },
+      {
+        "src": "i_buf",
+        "dst": "o_rd",
+        "source": "pathfinder"
+      },
+      {
+        "src": "i_cmp_eq",
+        "dst": "o_cmp",
+        "source": "pathfinder"
+      },
+      {
+        "src": "i_cmp_eq",
+        "dst": "o_rd",
+        "source": "pathfinder"
+      },
+      {
+        "src": "i_cnt0",
+        "dst": "o_rd",
+        "source": "pathfinder"
+      },
+      {
+        "src": "i_en",
+        "dst": "o_rd",
+        "source": "pathfinder"
+      },
+      {
+        "src": "i_rd_sel",
+        "dst": "o_rd",
+        "source": "pathfinder"
+      },
+      {
+        "src": "i_rs1",
+        "dst": "o_rd",
+        "source": "pathfinder"
+      },
+      {
+        "src": "i_sub",
+        "dst": "o_rd",
+        "source": "pathfinder"
+      }
+    ]
+  },
+  {
+    "name": "serv/serv_decode",
+    "status": "OK",
+    "nodes": 101,
+    "edges": 3,
+    "sources": {
+      "pathfinder": 3
+    },
+    "edge_list": [
+      {
+        "src": "clk",
+        "dst": "o_alu_rd_sel",
+        "source": "pathfinder"
+      },
+      {
+        "src": "i_wb_en",
+        "dst": "o_alu_rd_sel",
+        "source": "pathfinder"
+      },
+      {
+        "src": "i_wb_rdt",
+        "dst": "o_alu_rd_sel",
+        "source": "pathfinder"
+      }
+    ]
+  },
+  {
+    "name": "darkriscv/darkriscv",
+    "status": "OK",
+    "nodes": 76,
+    "edges": 0,
+    "sources": {},
+    "edge_list": []
+  },
+  {
+    "name": "clacc/bs_mult",
+    "status": "OK",
+    "nodes": 11,
+    "edges": 0,
+    "sources": {},
+    "edge_list": []
+  },
+  {
+    "name": "tiny-gpu/core",
+    "status": "OK",
+    "nodes": 42,
+    "edges": 0,
+    "sources": {},
+    "edge_list": []
+  },
+  {
+    "name": "zipcpu/zipcpu",
+    "status": "FILE_NOT_FOUND"
+  }
+]
