@@ -185,9 +185,13 @@ class DesignGraph:
         slang-netlist 只提供 Port/State/Assignment 等信号节点，
         不包含 Instance（模块实例）节点。需要从 pyslang Compilation 中提取。
 
+        处理的 SymbolKind：
+        - Instance: 已实例化并 elaborator 的模块
+        - UninstantiatedDef: 引用但未 elaborator 的模块定义（如 bs_mult_slice I0）
+
         节点属性：
         - kind: 'Instance'
-        - tags: {'instance'}
+        - tags: {'instance'} 或 {'instance', 'uninstantiated'}
         - definition: 模块定义名
         """
         if not self._comp:
@@ -196,38 +200,56 @@ class DesignGraph:
         root = self._comp.getRoot()
         visited = set()
 
+        def add_instance(path, name, definition, is_instantiated) -> None:
+            """添加一个 Instance 节点"""
+            if path in visited:
+                return
+            visited.add(path)
+
+            tags = {'instance'}
+            if not is_instantiated:
+                tags.add('uninstantiated')
+
+            self.graph.add_node(path,
+                name=name,
+                module=path.rsplit('.', 1)[0] if '.' in path else path,
+                bit_width=(0, 0),
+                tags=tags,
+                node_kind='Instance',
+                definition=definition,
+                meta={})
+
         def traverse_scope(scope, prefix='') -> None:
-            """递归遍历 scope 中的所有 Instance"""
+            """递归遍历 scope 中的所有 Instance / UninstantiatedDef"""
             for sym in scope:
                 kind_str = str(sym.kind)
+
                 if kind_str == 'SymbolKind.Instance':
                     inst = sym
                     inst_name = getattr(inst, 'name', '')
                     path = f'{prefix}.{inst_name}' if prefix else inst_name
 
-                    # 避免重复
-                    if path in visited:
-                        continue
-                    visited.add(path)
-
-                    # 获取定义名
                     defn_name = ''
                     if hasattr(inst, 'body') and hasattr(inst.body, 'definition'):
                         defn_name = getattr(inst.body.definition, 'name', '')
 
-                    # 添加 Instance 节点
-                    self.graph.add_node(path,
-                        name=inst_name,
-                        module=path.rsplit('.', 1)[0] if '.' in path else path,
-                        bit_width=(0, 0),
-                        tags={'instance'},
-                        node_kind='Instance',
-                        definition=defn_name,
-                        meta={})
+                    add_instance(path, inst_name, defn_name, is_instantiated=True)
 
                     # 递归遍历 body 中的子 instances
                     if hasattr(inst, 'body'):
                         traverse_scope(inst.body, path)
+
+                elif kind_str == 'SymbolKind.UninstantiatedDef':
+                    # 未实例化的定义（如 bs_mult_slice I0）
+                    def_name = getattr(sym, 'name', '')
+                    path = f'{prefix}.{def_name}' if prefix else def_name
+
+                    # 获取引用的定义名
+                    defn_name = ''
+                    if hasattr(sym, 'definition'):
+                        defn_name = getattr(sym.definition, 'name', '')
+
+                    add_instance(path, def_name, defn_name, is_instantiated=False)
 
         traverse_scope(root)
 
