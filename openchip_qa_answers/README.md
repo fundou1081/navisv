@@ -6,7 +6,7 @@
 |------|------|------|
 | serv | serv_alu | ✅ 已完成 |
 | serv | serv_decode | ✅ 已完成 |
-| serv | serv_top | ⏳ 待分析 |
+| serv | serv_top | ✅ 已完成 |
 | clacc | bs_mult | ⏳ 待分析 |
 | darkriscv | darkriscv | ⏳ 待分析 |
 | ... | ... | ⏳ |
