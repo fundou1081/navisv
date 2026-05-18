@@ -156,117 +156,66 @@ class DesignGraph:
 
     def _add_edges_from_netlist_graph_bfs(self, nl) -> None:
         """
-        使用 slang-netlist NetlistGraph BFS 遍历添加边。
+        使用 PathFinder 查找所有输入->输出路径。
         
-        原理：通过 get_comb_fan_in() BFS 追踪每个信号的驱动源，
-        直到遇到 Input Port 为止（Input Port 是外部驱动，停止追踪）。
+        原理：对每个 Output Port，使用 PathFinder.find() 查找所有 Input Port 到它的路径。
+        如果路径非空，说明该 Input Port 驱动该 Output Port。
         
-        优点：绕过 getDrivers() self-loop 问题，能找到真实驱动关系。
+        优点：
+        - 比手动 BFS 更准确，能正确追踪通过 State 节点的路径
+        - 使用 slang-netlist 图算法，自动处理中间节点
+        - 比 BFS 找到更多边（如 i_en -> o_rd 而非只在 i_en -> cmp_r 停止）
         """
         sl_graph = self._slang_graph
+        finder = nl.PathFinder()
+        
         root = self._comp.getRoot()
         inst = list(root)[1]
         module_name = inst.name  # e.g. 'serv_alu'
         
-        def get_ultimate_drivers(signal_name: str) -> list:
-            """BFS 找到 signal_name 的终极 Input Port 驱动源"""
-            start_nodes = sl_graph.find_nodes(f'{module_name}.{signal_name}')
-            if not start_nodes:
-                return []
-            
-            visited_ids = set()
-            queue = [(start_nodes[0], 0)]
-            ultimate_drivers = []
-            
-            while queue:
-                node, depth = queue.pop(0)
-                node_id = id(node)
-                if node_id in visited_ids:
-                    continue
-                visited_ids.add(node_id)
-                
-                kn = str(node.kind)
-                nm = node.name if hasattr(node, 'name') else None
-                if nm == signal_name:
-                    # 跳过自己，但继续追踪其 fan_in
-                    if depth < 10:
-                        try:
-                            for item in sl_graph.get_comb_fan_in(node):
-                                queue.append((item, depth + 1))
-                        except:
-                            pass
-                    continue
-                
-                # Input Port 是终极驱动源
-                if kn == 'NodeKind.Port':
-                    try:
-                        if node.direction.name == 'In':
-                            ultimate_drivers.append(nm)
-                    except:
-                        pass
-                    continue  # Stop tracing from ports
-                
-                # State (时序元素) - 继续追踪
-                if kn == 'NodeKind.State':
-                    if depth < 10:
-                        try:
-                            for item in sl_graph.get_comb_fan_in(node):
-                                queue.append((item, depth + 1))
-                        except:
-                            pass
-                    continue
-                
-                # Max depth protection
-                if depth >= 10:
-                    continue
-                
-                # 尝试遍历 fan_in
-                try:
-                    for item in sl_graph.get_comb_fan_in(node):
-                        queue.append((item, depth + 1))
-                except:
-                    pass
-            
-            return list(set(ultimate_drivers))
+        # 获取所有端口
+        port_nodes = [n for n in sl_graph if str(n.kind) == 'NodeKind.Port']
+        output_ports = [n for n in port_nodes if n.direction.name == 'Out']
+        input_ports = [n for n in port_nodes if n.direction.name == 'In']
         
-        # 对 body 中每个信号调用 BFS 建边
-        body = inst.body
-        for sym in body:
-            kn = getattr(sym, 'kind', None)
-            kn = kn.name if hasattr(kn, 'name') else str(kn) if kn else ''
-            if kn not in ('Variable', 'Port', 'State', 'Net'):
-                continue
-            
-            signal_name = getattr(sym, 'name', None)
-            if not signal_name:
-                continue
-            
-            signal_path = sym.hierarchicalPath
-            drivers = get_ultimate_drivers(signal_name)
-            
-            for driver in drivers:
-                driver_path = f'{module_name}.{driver}'
-                if driver_path == signal_path:
+        # 对每个 Output Port，查找所有 Input Port 到它的路径
+        for out_node in output_ports:
+            for in_node in input_ports:
+                path = finder.find(in_node, out_node)
+                if path.empty():
                     continue
                 
-                # 确保 driver 节点存在
-                if driver_path not in self.graph.nodes():
-                    self.graph.add_node(driver_path,
-                        name=driver,
+                src_path = f'{module_name}.{in_node.name}'
+                dst_path = f'{module_name}.{out_node.name}'
+                
+                if src_path == dst_path:
+                    continue
+                
+                # 确保节点存在
+                if src_path not in self.graph.nodes():
+                    self.graph.add_node(src_path,
+                        name=in_node.name,
+                        module=module_name,
+                        bit_width=(0, 0),
+                        tags=set(),
+                        meta={})
+                if dst_path not in self.graph.nodes():
+                    self.graph.add_node(dst_path,
+                        name=out_node.name,
                         module=module_name,
                         bit_width=(0, 0),
                         tags=set(),
                         meta={})
                 
-                # 添加边（source='netlist_graph' 标记来源）
-                if not self.graph.has_edge(driver_path, signal_path):
-                    self.graph.add_edge(driver_path, signal_path,
+                # 添加边
+                if not self.graph.has_edge(src_path, dst_path):
+                    self.graph.add_edge(src_path, dst_path,
                         relation='drives',
                         timing='unknown',
                         qualifier=None,
                         bounds=None,
                         source_location=None,
-                        source='netlist_graph',
+                        source='pathfinder',
                         is_partial=False,
                         confidence='high',
                         meta={})
