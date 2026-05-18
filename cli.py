@@ -10,7 +10,7 @@ navisv CLI - 面向 AI Agent 的 SystemVerilog 语义导航工具
     navisv impact <signal>           # 影响范围分析
     navisv relate <a> <b>           # 两个信号的关系
     navisv find [description]        # 查找信号
-    navisv sample <signal>          # 采样条件（占位）
+    navisv sample <signal>          # 采样条件查询
     navisv --json ...               # 输出 JSON 格式
 
 环境：
@@ -41,6 +41,7 @@ from navisv.apps import (
     RelationshipApp,
     FsmDetectApp,
     ProtocolInferApp,
+    SampleSignalApp,
 )
 
 
@@ -97,6 +98,15 @@ def run_protocol(args, query):
     """ProtocolInferApp"""
     app = ProtocolInferApp(query)
     r = app.run(signals=args.signals or None, pattern=args.pattern or '')
+    return r
+
+
+def run_sample(args, query):
+    """SampleSignalApp"""
+    app = SampleSignalApp(query)
+    signal = args.signal or None
+    module = args.module or ''
+    r = app.run(signal=signal, module=module)
     return r
 
 
@@ -172,9 +182,10 @@ def main():
     p.add_argument('description', nargs='?', default='', help='描述或模式')
     p.add_argument('--pattern', '-p', default='', help='名称正则')
 
-    # navisv sample <signal>
-    p = sub.add_parser('sample', help='采样条件（待实现）')
-    p.add_argument('signal', help='信号路径')
+    # navisv sample
+    p = sub.add_parser('sample', help='采样条件查询')
+    p.add_argument('--signal', '-s', default='', help='信号路径')
+    p.add_argument('--module', '-m', default='', help='模块名（列出所有 State）')
 
     # navisv fsm
     p = sub.add_parser('fsm', help='FSM 检测（实验性）')
@@ -211,8 +222,7 @@ def main():
         elif args.command == 'find':
             r = run_find(args, query)
         elif args.command == 'sample':
-            print("错误：sample 命令尚未实现（Phase 5）", file=sys.stderr)
-            sys.exit(1)
+            r = run_sample(args, query)
         elif args.command == 'fsm':
             r = run_fsm(args, query)
         elif args.command == 'protocol':

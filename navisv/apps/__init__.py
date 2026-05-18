@@ -6,6 +6,7 @@ from .find_signals import FindSignalsApp
 from .relationship import RelationshipApp
 from .fsm_detect import FsmDetectApp
 from .protocol_infer import ProtocolInferApp
+from .sample_signal import SampleSignalApp
 
 __all__ = [
     'BaseApp', 'AppResponse',
@@ -15,4 +16,5 @@ __all__ = [
     'RelationshipApp',
     'FsmDetectApp',
     'ProtocolInferApp',
+    'SampleSignalApp',
 ]
