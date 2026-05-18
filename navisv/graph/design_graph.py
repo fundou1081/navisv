@@ -200,7 +200,7 @@ class DesignGraph:
         root = self._comp.getRoot()
         visited = set()
 
-        def add_instance(path, name, definition, is_instantiated) -> None:
+        def add_instance(path, name, definition, is_instantiated, parameters=None) -> None:
             """添加一个 Instance 节点"""
             if path in visited:
                 return
@@ -217,6 +217,7 @@ class DesignGraph:
                 tags=tags,
                 node_kind='Instance',
                 definition=definition,
+                parameters=parameters or {},
                 meta={})
 
         def traverse_scope(scope, prefix='') -> None:
@@ -233,7 +234,15 @@ class DesignGraph:
                     if hasattr(inst, 'body') and hasattr(inst.body, 'definition'):
                         defn_name = getattr(inst.body.definition, 'name', '')
 
-                    add_instance(path, inst_name, defn_name, is_instantiated=True)
+                    # 提取参数值
+                    params = {}
+                    if hasattr(inst, 'body') and hasattr(inst.body, 'parameters'):
+                        for p in inst.body.parameters:
+                            p_name = getattr(p, 'name', '')
+                            p_value = str(getattr(p, 'value', ''))
+                            params[p_name] = p_value
+
+                    add_instance(path, inst_name, defn_name, is_instantiated=True, parameters=params)
 
                     # 递归遍历 body 中的子 instances
                     if hasattr(inst, 'body'):
