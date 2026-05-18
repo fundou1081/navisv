@@ -115,6 +115,9 @@ class DesignGraph:
         # 8. 从 slang-netlist 添加节点
         self._add_nodes_from_slang(pyslang_netlist)
 
+        # 8.5 从 compilation 添加 Instance 节点（slang-netlist 不提供 Instance 节点）
+        self._add_instances_from_comp()
+
         # 9. graph.get_drivers() 创建边（拓扑权威）
         self._add_edges_from_slang_get_drivers()
 
@@ -174,6 +177,59 @@ class DesignGraph:
                 tags=tags,
                 node_kind=kind_name,
                 meta={})
+
+    def _add_instances_from_comp(self) -> None:
+        """
+        从 compilation 的 Instance hierarchy 中添加 Instance 节点。
+
+        slang-netlist 只提供 Port/State/Assignment 等信号节点，
+        不包含 Instance（模块实例）节点。需要从 pyslang Compilation 中提取。
+
+        节点属性：
+        - kind: 'Instance'
+        - tags: {'instance'}
+        - definition: 模块定义名
+        """
+        if not self._comp:
+            return
+
+        root = self._comp.getRoot()
+        visited = set()
+
+        def traverse_scope(scope, prefix='') -> None:
+            """递归遍历 scope 中的所有 Instance"""
+            for sym in scope:
+                kind_str = str(sym.kind)
+                if kind_str == 'SymbolKind.Instance':
+                    inst = sym
+                    inst_name = getattr(inst, 'name', '')
+                    path = f'{prefix}.{inst_name}' if prefix else inst_name
+
+                    # 避免重复
+                    if path in visited:
+                        continue
+                    visited.add(path)
+
+                    # 获取定义名
+                    defn_name = ''
+                    if hasattr(inst, 'body') and hasattr(inst.body, 'definition'):
+                        defn_name = getattr(inst.body.definition, 'name', '')
+
+                    # 添加 Instance 节点
+                    self.graph.add_node(path,
+                        name=inst_name,
+                        module=path.rsplit('.', 1)[0] if '.' in path else path,
+                        bit_width=(0, 0),
+                        tags={'instance'},
+                        node_kind='Instance',
+                        definition=defn_name,
+                        meta={})
+
+                    # 递归遍历 body 中的子 instances
+                    if hasattr(inst, 'body'):
+                        traverse_scope(inst.body, path)
+
+        traverse_scope(root)
 
     def _add_edges_from_slang_get_drivers(self) -> None:
         """
