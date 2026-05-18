@@ -118,6 +118,9 @@ class DesignGraph:
         # 8.5 从 compilation 添加 Instance 节点（slang-netlist 不提供 Instance 节点）
         self._add_instances_from_comp()
 
+        # 8.6 从 compilation 添加 Net/Variable 节点（slang-netlist 不包含内部 nets）
+        self._add_nets_from_comp()
+
         # 9. graph.get_drivers() 创建边（拓扑权威）
         self._add_edges_from_slang_get_drivers()
 
@@ -259,6 +262,72 @@ class DesignGraph:
                         defn_name = getattr(sym.definition, 'name', '')
 
                     add_instance(path, def_name, defn_name, is_instantiated=False)
+
+        traverse_scope(root)
+
+    def _add_nets_from_comp(self) -> None:
+        """
+        从 compilation 的 Instance body 中添加内部 Net/Variable 节点。
+
+        slang-netlist 只提供 Port/State/Assignment 节点，不包含内部 wire 信号。
+        需要从 pyslang Compilation 的 body scope 中提取 SymbolKind.Net/Variable。
+
+        处理的类型：
+        - SymbolKind.Net: wire 等
+        - SymbolKind.Variable: reg 等
+
+        节点属性：
+        - node_kind: 'Net'
+        - tags: {'net'} 或 {'variable'}
+        - net_type: wire, wor, wand 等
+        """
+        if not self._comp:
+            return
+
+        root = self._comp.getRoot()
+
+        def traverse_scope(scope, prefix='') -> None:
+            """递归遍历 scope 中的所有 Net/Variable"""
+            for sym in scope:
+                kind_str = str(sym.kind)
+
+                # 处理 Net 和 Variable
+                if kind_str in ('SymbolKind.Net', 'SymbolKind.Variable'):
+                    net_name = getattr(sym, 'name', '')
+                    path = f'{prefix}.{net_name}' if prefix else net_name
+
+                    # 跳过空名称（如匿名符号）
+                    if not net_name:
+                        continue
+
+                    # 获取 net_type (wire, wor, wand 等)
+                    net_type = 'wire'
+                    if hasattr(sym, 'netType'):
+                        nt = sym.netType
+                        if hasattr(nt, 'name'):
+                            net_type = nt.name
+
+                    # 标签
+                    tags = {'net'}
+                    if kind_str == 'SymbolKind.Variable':
+                        tags = {'variable'}
+
+                    # 添加 Net 节点
+                    if path not in self.graph.nodes():
+                        self.graph.add_node(path,
+                            name=net_name,
+                            module=prefix or 'top',
+                            bit_width=(0, 0),
+                            tags=tags,
+                            node_kind='Net',
+                            net_type=net_type,
+                            meta={})
+
+                # 递归遍历 body
+                if hasattr(sym, 'body') and sym.body:
+                    inst_path = f'{prefix}.{getattr(sym, "name", "")}' if prefix else getattr(sym, 'name', '')
+                    if str(sym.kind) == 'SymbolKind.Instance':
+                        traverse_scope(sym.body, inst_path)
 
         traverse_scope(root)
 
