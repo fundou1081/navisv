@@ -1,5 +1,5 @@
 # graph/design_graph.py - 核心图存储
-# navisv 架构 v0.8 - Graph Layer
+# navisv 架构 v0.9 - Graph Layer
 
 """
 DesignGraph: 持有 networkx DiGraph，是 navisv 的唯一数据存储。
@@ -9,14 +9,17 @@ DesignGraph: 持有 networkx DiGraph，是 navisv 的唯一数据存储。
 - [铁律3] slang 是拓扑权威，Python 只做属性补充
 - [铁律14] DesignGraph 禁止暴露内部 DiGraph
 
-构建流程：
+构建流程（v0.9 基于用户指南的重构）：
 1. 从 slang-netlist 添加节点
-2. 调用 slang AnalysisManager.getDrivers() 创建所有边
+2. 调用 graph.get_drivers() 创建边（slang 拓扑权威）
 3. StatementExplorer 补充边属性（不创建新边）
 4. ClassExplorer 补充 class 内 method 调用边（唯一在 Python 创建边的场景）
+
+参考: docs/SLANG_NETLIST_USER_GUIDE.md
 """
 
 from typing import List, Tuple, Optional, Any, Iterator
+import os
 
 import networkx as nx
 
@@ -35,20 +38,20 @@ def _get_slang_modules():
     import sys
     sys.path.insert(0, '/Users/fundou/my_dv_proj/slang-netlist/install')
     sys.path.insert(0, '/Users/fundou/my_dv_proj/slang-netlist/install/lib')
-    import pyslang_netlist as nl
-    from pyslang import driver as sl_driver
-    return nl, sl_driver
+    import pyslang
+    import pyslang_netlist
+    return pyslang, pyslang_netlist
 
 
 class DesignGraph:
     """
     持有 networkx DiGraph，是 navisv 的唯一数据存储。
     
-    构建流程：
+    构建流程（v0.9 重构）：
     1. 从 slang-netlist 添加节点（SignalNode 属性）
-    2. 调用 slang AnalysisManager.getDrivers() 创建所有边（source="slang"）
+    2. 调用 graph.get_drivers() 创建边（拓扑权威）
     3. StatementExplorer 补充边属性（不创建新边）
-    4. ClassExplorer 补充 class 内 method 调用边
+    4. ClassExplorer 补充 method 边
     """
 
     def __init__(self, sv_files: List[str], enable_annotators: bool = True):
@@ -59,167 +62,279 @@ class DesignGraph:
         self._comp = None
         self._mgr = None
         self._slang_graph = None  # slang NetlistGraph
+        self._module_name = None
         self._build()
 
     def _build(self) -> None:
-        """主构建流程"""
-        nl, sl_driver = _get_slang_modules()
+        """主构建流程（v0.9 基于用户指南重构）"""
+        pyslang, pyslang_netlist = _get_slang_modules()
 
-        # 1. 从 slang-netlist 添加节点
-        self._add_nodes_from_slang(nl, sl_driver)
-
-        # 2. slang getDrivers() 创建边（拓扑权威）
-        self._add_edges_from_slang(nl)
-
-        # 3. StatementExplorer 注释边属性
-        self._annotate_edges_from_statements()
-
-        # 4. ClassExplorer 补充 method 边
-        self._add_method_edges()
-
-    def _add_nodes_from_slang(self, nl, sl_driver) -> None:
-        """从 slang-netlist 遍历设计，添加所有信号节点"""
-        d = sl_driver.Driver()
-        d.addStandardArgs()
+        # 1. 解析语法树
+        trees = []
         for f in self._sv_files:
-            d.sourceLoader.addFiles(f)
-        ok = d.parseAllSources()
-        if not ok:
-            raise RuntimeError(f"Failed to parse: {self._sv_files}")
+            if not os.path.exists(f):
+                raise FileNotFoundError(f"File not found: {f}")
+            tree = pyslang.syntax.SyntaxTree.fromFile(f)
+            trees.append(tree)
 
-        self._comp = d.createCompilation()
-        self._mgr = d.runAnalysis(self._comp)
-        self._slang_graph = nl.NetlistGraph()
+        # 2. 编译（语义分析）
+        self._comp = pyslang.ast.Compilation()
+        for tree in trees:
+            self._comp.addSyntaxTree(tree)
+
+        # 检查编译错误
+        diagnostics = self._comp.getAllDiagnostics()
+        if len(diagnostics) > 0:
+            print("Compilation errors:")
+            for d in diagnostics:
+                print(f"  {d}")
+
+        # 3. 激发 elaboration（新版 slang 必须调用，否则无法分析）
+        self._comp.getSemanticDiagnostics()
+
+        # 4. 强制冻结 AST (为多线程安全)
+        pyslang_netlist.VisitAll().run(self._comp)
+
+        # 5. 冻结编译，运行数据流分析
+        self._comp.freeze()
+        self._mgr = pyslang.analysis.AnalysisManager()
+        self._mgr.analyze(self._comp)
+
+        # 6. 解冻 (netlist builder 需要继续 elaborate AST)
+        self._comp.unfreeze()
+
+        # 7. 构建 netlist 图
+        self._slang_graph = pyslang_netlist.NetlistGraph()
         self._slang_graph.build(self._comp, self._mgr)
 
+        # 获取模块名
         root = self._comp.getRoot()
-        inst = list(root)[1]
-        body = inst.body
+        inst = list(root)[1] if len(list(root)) > 1 else None
+        self._module_name = inst.name if inst else 'top'
 
-        # InstanceBodySymbol 有 __iter__，过滤信号类型
-        for sym in body:
-            kind_name = getattr(sym, 'kind', None)
-            kind_name = kind_name.name if hasattr(kind_name, 'name') else str(kind_name) if kind_name else ''
-            if kind_name not in ('Variable', 'Port', 'State', 'Net'):
+        # 8. 从 slang-netlist 添加节点
+        self._add_nodes_from_slang(pyslang_netlist)
+
+        # 9. graph.get_drivers() 创建边（拓扑权威）
+        self._add_edges_from_slang_get_drivers()
+
+        # 10. 使用 PathFinder 补充遗漏的边
+        self._add_edges_from_pathfinder()
+
+        # 11. StatementExplorer 注释边属性
+        if self._enable_annotators:
+            self._annotate_edges_from_statements()
+
+        # 12. ClassExplorer 补充 method 边
+        if self._enable_annotators:
+            self._add_method_edges()
+
+    def _add_nodes_from_slang(self, nl) -> None:
+        """从 slang-netlist 遍历设计，添加所有信号节点（Named Nodes: Port + State）"""
+        sl_graph = self._slang_graph
+        module_name = self._module_name
+
+        # Named nodes: Port 和 State 可通过 lookup 查询
+        # 组合逻辑中间信号（wire/assign）是透明节点，无法 lookup
+        for node in sl_graph:
+            kind_name = str(node.kind).replace('NodeKind.', '')
+
+            if kind_name not in ('Port', 'State'):
                 continue
-            path = sym.hierarchicalPath
+
+            # 获取路径
+            path = getattr(node, 'path', None) or getattr(node, 'hierarchicalPath', None)
+            if not path:
+                continue
+
+            # Port 节点有 direction，可以判断是否为 clock
+            name = getattr(node, 'name', '') or path.rsplit('.', 1)[-1]
+            is_port = kind_name == 'Port'
+
+            # 自动标记 clk/rst 信号
+            tags = set()
+            if is_port:
+                direction = getattr(node, 'direction', None)
+                if direction:
+                    if 'In' in direction.name or direction.name == 'In':
+                        if 'clk' in name.lower() or 'clock' in name.lower():
+                            tags.add('clock')
+                        elif 'rst' in name.lower() or 'reset' in name.lower():
+                            tags.add('reset')
+                    if 'Out' in direction.name or direction.name == 'Out':
+                        tags.add('output')
+                    else:
+                        tags.add('input')
+
+            # 添加节点
             self.graph.add_node(path,
-                name=getattr(sym, 'name', '') or '',
-                module=path.rsplit('.', 1)[0] if '.' in path else '',
-                bit_width=(0, 0),
-                tags=set(),
+                name=name,
+                module=path.rsplit('.', 1)[0] if '.' in path else module_name,
+                bit_width=bit_width_from_bounds(getattr(node, 'bounds', None)),
+                tags=tags,
+                node_kind=kind_name,
                 meta={})
 
-    def _add_edges_from_slang(self, nl) -> None:
-        """从 slang AnalysisManager.getDrivers() 添加边（拓扑权威）"""
-        root = self._comp.getRoot()
-        inst = list(root)[1]
-        body = inst.body
-
-        for node_id in list(self.graph.nodes()):
-            sym = body.find(node_id.rsplit('.', 1)[-1] if '.' in node_id else node_id)
-            if not sym:
-                continue
-            drivers = list(self._mgr.getDrivers(sym))
-            for drv in drivers:
-                # driver 的 path.rootSymbol 包含源信号的完整路径
-                src_path = drv.path.rootSymbol.hierarchicalPath if hasattr(drv, 'path') and drv.path else None
-                if not src_path:
-                    continue
-                # self-loop 表示该信号有 slang driver 信息（即使是 self-loop）
-                # 但查询时通常不需要 self-loop，所以仍跳过它
-                if src_path == node_id:
-                    continue
-                # 确保 src 节点存在
-                if src_path not in self.graph.nodes():
-                    # 添加未在节点列表中的隐式节点
-                    self.graph.add_node(src_path,
-                        name=src_path.rsplit('.', 1)[-1],
-                        module=src_path.rsplit('.', 1)[0],
-                        bit_width=(0, 0),
-                        tags=set(),
-                        meta={})
-                self.graph.add_edge(src_path, node_id,
-                    relation='drives',
-                    timing='unknown',
-                    qualifier=None,
-                    bounds=bit_width_from_bounds(drv.bounds) if hasattr(drv, 'bounds') else None,
-                    source_location=None,
-                    source='slang',
-                    is_partial=False,
-                    confidence='high',
-                    meta={})
-
-        # Fallback: 如果 getDrivers() 没有产生任何边，使用 NetlistGraph BFS
-        if self.graph.number_of_edges() == 0:
-            self._add_edges_from_netlist_graph_bfs(nl)
-
-    def _add_edges_from_netlist_graph_bfs(self, nl) -> None:
+    def _add_edges_from_slang_get_drivers(self) -> None:
         """
-        使用 PathFinder 查找所有输入->输出路径。
+        从 slang graph.get_drivers() 添加边（拓扑权威）。
         
-        原理：对每个 Output Port，使用 PathFinder.find() 查找所有 Input Port 到它的路径。
-        如果路径非空，说明该 Input Port 驱动该 Output Port。
-        
-        优点：
-        - 比手动 BFS 更准确，能正确追踪通过 State 节点的路径
-        - 使用 slang-netlist 图算法，自动处理中间节点
-        - 比 BFS 找到更多边（如 i_en -> o_rd 而非只在 i_en -> cmp_r 停止）
+        graph.get_drivers(name, lower, upper) 返回直接驱动该信号的节点列表。
+        如果 driver 是 Assignment 节点（没有 path），追踪其 fan_in 链找到 Named Nodes。
         """
         sl_graph = self._slang_graph
-        finder = nl.PathFinder()
-        
-        root = self._comp.getRoot()
-        inst = list(root)[1]
-        module_name = inst.name  # e.g. 'serv_alu'
-        
-        # 获取所有端口
-        port_nodes = [n for n in sl_graph if str(n.kind) == 'NodeKind.Port']
-        output_ports = [n for n in port_nodes if n.direction.name == 'Out']
-        input_ports = [n for n in port_nodes if n.direction.name == 'In']
-        
-        # 对每个 Output Port，查找所有 Input Port 到它的路径
-        for out_node in output_ports:
-            for in_node in input_ports:
-                path = finder.find(in_node, out_node)
-                if path.empty():
+        module_name = self._module_name
+
+        for node_id in list(self.graph.nodes()):
+            bounds = self.graph.nodes[node_id].get('bit_width', (0, 0))
+
+            # 使用 get_drivers() 查找驱动节点
+            drivers = sl_graph.get_drivers(node_id, bounds[0], bounds[1])
+
+
+            for drv in drivers:
+                drv_path = self._resolve_driver_path(drv)
+                if not drv_path:
                     continue
-                
-                src_path = f'{module_name}.{in_node.name}'
-                dst_path = f'{module_name}.{out_node.name}'
-                
-                if src_path == dst_path:
+
+                # 跳过 self-loop
+                if drv_path == node_id:
                     continue
-                
-                # 确保节点存在
-                if src_path not in self.graph.nodes():
-                    self.graph.add_node(src_path,
-                        name=in_node.name,
-                        module=module_name,
+
+                # 确保驱动节点存在
+                if drv_path not in self.graph.nodes():
+                    self.graph.add_node(drv_path,
+                        name=drv_path.rsplit('.', 1)[-1],
+                        module=drv_path.rsplit('.', 1)[0] if '.' in drv_path else module_name,
                         bit_width=(0, 0),
                         tags=set(),
+                        node_kind=str(getattr(drv, 'kind', 'Unknown')).replace('NodeKind.', ''),
                         meta={})
-                if dst_path not in self.graph.nodes():
-                    self.graph.add_node(dst_path,
-                        name=out_node.name,
-                        module=module_name,
-                        bit_width=(0, 0),
-                        tags=set(),
-                        meta={})
-                
+
                 # 添加边
-                if not self.graph.has_edge(src_path, dst_path):
-                    self.graph.add_edge(src_path, dst_path,
+                if not self.graph.has_edge(drv_path, node_id):
+                    self.graph.add_edge(drv_path, node_id,
                         relation='drives',
                         timing='unknown',
                         qualifier=None,
-                        bounds=None,
+                        bounds=bounds,
                         source_location=None,
-                        source='pathfinder',
+                        source='slang_get_drivers',
                         is_partial=False,
                         confidence='high',
                         meta={})
 
+    def _resolve_driver_path(self, drv) -> Optional[str]:
+        """
+        从 driver 节点解析路径。
+        
+        如果 driver 是 Named Node（Port/State），直接返回 path。
+        如果 driver 是 Assignment 节点，追踪 fan_in 链找到 Named Nodes。
+        """
+        # 直接有 path 的节点
+        path = getattr(drv, 'path', None) or getattr(drv, 'hierarchicalPath', None)
+        if path:
+            return path
+
+        # Assignment 节点：追踪 fan_in 链
+        if str(getattr(drv, 'kind', '')) == 'NodeKind.Assignment':
+            named_sources = self._trace_assignment_fan_in(drv)
+            # 返回第一个 Named Node
+            return named_sources[0] if named_sources else None
+
+        return None
+
+    def _trace_assignment_fan_in(self, assign_node, max_depth=10) -> List[str]:
+        """
+        追踪 Assignment 节点的 fan_in 链，找到所有 Named Nodes。
+        
+        当 Assignment 节点驱动一个信号时，它的 fan_in 包含其他 Assignment 或 Named Nodes。
+        递归追踪直到找到 Port 或 State 节点。
+        """
+        sl_graph = self._slang_graph
+        visited = set()
+        result = []
+        stack = [assign_node]
+
+        while stack and len(visited) < max_depth:
+            node = stack.pop()
+            node_id = id(node)
+            if node_id in visited:
+                continue
+            visited.add(node_id)
+
+            # 获取 fan_in
+            fan_in = list(sl_graph.get_comb_fan_in(node))
+
+            for n in fan_in:
+                # 检查是否是 Named Node
+                n_path = getattr(n, 'path', None)
+                if n_path and n_path != getattr(assign_node, 'path', None):
+                    result.append(n_path)
+                    continue
+
+                # 如果是 Assignment，继续追踪
+                if str(getattr(n, 'kind', '')) == 'NodeKind.Assignment':
+                    if id(n) not in visited:
+                        stack.append(n)
+
+        return result
+
+    def _add_edges_from_pathfinder(self) -> None:
+        """
+        使用 PathFinder 补充 get_drivers() 遗漏的边。
+        
+        原理：对每对 Input Port -> Output Port，使用 PathFinder.find() 查找路径。
+        如果路径非空，说明该 Input Port 驱动该 Output Port。
+        
+        适用场景：
+        - 一个信号在多个 always block 中赋值（导致 get_drivers 链断裂）
+        - 复杂的数据流需要 PathFinder 才能正确追踪
+        """
+        sl_graph = self._slang_graph
+        finder = _get_slang_modules()[1].PathFinder()
+        module_name = self._module_name
+
+        # 获取所有端口
+        port_nodes = [n for n in sl_graph if str(n.kind) == 'NodeKind.Port']
+        output_ports = [n for n in port_nodes if n.direction.name == 'Out']
+        input_ports = [n for n in port_nodes if n.direction.name == 'In']
+
+        # 对每个 Output Port，查找所有 Input Port 到它的路径
+        for out_node in output_ports:
+            dst_path = f'{module_name}.{out_node.name}'
+            if dst_path not in self.graph.nodes():
+                continue
+
+            for in_node in input_ports:
+                src_path = f'{module_name}.{in_node.name}'
+                if src_path not in self.graph.nodes():
+                    continue
+
+                # 跳过 self-loop
+                if src_path == dst_path:
+                    continue
+
+                # 跳过已存在的边
+                if self.graph.has_edge(src_path, dst_path):
+                    continue
+
+                # 使用 PathFinder 查找路径
+                path = finder.find(in_node, out_node)
+                if path.empty():
+                    continue
+
+                # 添加边
+                self.graph.add_edge(src_path, dst_path,
+                    relation='drives',
+                    timing='unknown',
+                    qualifier=None,
+                    bounds=None,
+                    source_location=None,
+                    source='pathfinder',
+                    is_partial=False,
+                    confidence='high',
+                    meta={})
 
     def _annotate_edges_from_statements(self) -> None:
         """StatementExplorer 补充边属性"""
@@ -278,6 +393,39 @@ class DesignGraph:
     def has_edge(self, src: str, dst: str) -> bool:
         """检查边是否存在"""
         return self.graph.has_edge(src, dst)
+
+    def get_node_kind(self, node_id: str) -> Optional[str]:
+        """返回节点的种类（Port/State/Variable）"""
+        try:
+            return self.graph.nodes[node_id].get('node_kind')
+        except KeyError:
+            return None
+
+    def find_nodes(self, pattern: str) -> List[str]:
+        """
+        通配符搜索节点。
+        
+        Args:
+            pattern: 通配符模式，如 "module.*" 或 "*.clk"
+            
+        Returns:
+            匹配的节点 ID 列表
+        """
+        import fnmatch
+        return [n for n in self.graph.nodes() if fnmatch.fnmatch(n, pattern)]
+
+    def find_nodes_regex(self, pattern: str) -> List[str]:
+        """
+        正则表达式搜索节点。
+        
+        Args:
+            pattern: 正则表达式，如 r"top\.s[0-9]+_.*"
+            
+        Returns:
+            匹配的节点 ID 列表
+        """
+        import re
+        return [n for n in self.graph.nodes() if re.match(pattern, n)]
 
     def __repr__(self) -> str:
         return f"DesignGraph({len(self.graph.nodes())} nodes, {len(self.graph.edges())} edges)"
