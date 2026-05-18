@@ -69,26 +69,31 @@ class DesignGraph:
         """主构建流程（v0.9 基于用户指南重构）"""
         pyslang, pyslang_netlist = _get_slang_modules()
 
-        # 1. 解析语法树
-        trees = []
-        for f in self._sv_files:
-            if not os.path.exists(f):
-                raise FileNotFoundError(f"File not found: {f}")
-            tree = pyslang.syntax.SyntaxTree.fromFile(f)
-            trees.append(tree)
+        # 1. 解析语法树（使用 SourceManager 支持 include 路径）
+        sm = pyslang.SourceManager()
+
+        # 添加默认 include 目录（如果存在）
+        include_dirs = self._find_include_dirs()
+        for d in include_dirs:
+            if os.path.isdir(d):
+                sm.addUserDirectories(d)
+
+        # 使用 fromFiles 一次性加载所有文件（支持跨文件 include 查找）
+        valid_files = [f for f in self._sv_files if os.path.exists(f)]
+        if len(valid_files) < len(self._sv_files):
+            missing = set(self._sv_files) - set(valid_files)
+            print(f"Warning: {len(missing)} files not found")
+        tree = pyslang.syntax.SyntaxTree.fromFiles(valid_files, sm)
 
         # 2. 编译（语义分析）
         self._comp = pyslang.ast.Compilation()
-        for tree in trees:
-            self._comp.addSyntaxTree(tree)
+        self._comp.addSyntaxTree(tree)
 
-        # 检查编译错误（只显示 Error 级别，减少噪音）
+        # 2.5 诊断噪声检查（diagnose noise）
+        # 如果有编译错误，分析并输出提示信息
         diagnostics = self._comp.getAllDiagnostics()
-        if len(diagnostics) > 0:
-            error_count = sum(1 for i in range(len(diagnostics)) if diagnostics[i].isError())
-            if error_count > 0:
-                print(f"Compilation: {error_count} errors, {len(diagnostics) - error_count} warnings")
-            # 不打印详细 diagnostics，减少输出噪音
+        if diagnostics:
+            self._diag_noise(diagnostics)
 
         # 3. 激发 elaboration（新版 slang 必须调用，否则无法分析）
         self._comp.getSemanticDiagnostics()
@@ -105,8 +110,9 @@ class DesignGraph:
         self._comp.unfreeze()
 
         # 7. 构建 netlist 图
+        # 注意：resolve_assign_bits=False 避免 picorv32 等大型设计 SIGSEGV
         self._slang_graph = pyslang_netlist.NetlistGraph()
-        self._slang_graph.build(self._comp, self._mgr)
+        self._slang_graph.build(self._comp, self._mgr, resolve_assign_bits=False)
 
         # 获取模块名
         root = self._comp.getRoot()
@@ -135,6 +141,79 @@ class DesignGraph:
         # 12. ClassExplorer 补充 method 边
         if self._enable_annotators:
             self._add_method_edges()
+
+    def _find_include_dirs(self) -> List[str]:
+        """从 _sv_files 推断可能的 include 目录"""
+        include_dirs = []
+        for f in self._sv_files:
+            # 向上查找可能的 include 目录
+            parent = os.path.dirname(f)
+            for _ in range(3):  # 向上最多3层
+                include = os.path.join(parent, 'include')
+                if os.path.isdir(include) and include not in include_dirs:
+                    include_dirs.append(include)
+                vendor = os.path.join(parent, 'vendor')
+                if os.path.isdir(vendor):
+                    # 添加 vendor 下的所有 include
+                    for root, dirs, files in os.walk(vendor):
+                        inc = os.path.join(root, 'include')
+                        if os.path.isdir(inc) and inc not in include_dirs:
+                            include_dirs.append(inc)
+                parent = os.path.dirname(parent)
+        return include_dirs
+
+    def _diag_noise(self, diagnostics) -> None:
+        """分析编译诊断信息，输出有用的提示"""
+        # 统计错误类型
+        error_codes = {}
+        missing_includes = []
+        for i in range(len(diagnostics)):
+            d = diagnostics[i]
+            if d.isError():
+                code = str(d.code)
+                error_codes[code] = error_codes.get(code, 0) + 1
+                # 记录缺失的 include 文件
+                if 'CouldNotOpenIncludeFile' in code:
+                    args = getattr(d, 'args', None)
+                    if args:
+                        missing_includes.append(args[0])
+
+        error_count = sum(1 for i in range(len(diagnostics)) if diagnostics[i].isError())
+        warning_count = len(diagnostics) - error_count
+
+        # 输出概要
+        if error_count > 0:
+            print(f"Compilation: {error_count} errors, {warning_count} warnings")
+
+            # 输出主要错误类型
+            if error_codes:
+                top_errors = sorted(error_codes.items(), key=lambda x: -x[1])[:5]
+                print("Top errors:")
+                for code, count in top_errors:
+                    # 简化错误代码名称
+                    simple_name = code.replace('DiagCode(', '').replace(')', '')
+                    print(f"  [{count}x] {simple_name}")
+
+            # 输出缺失的 include 文件
+            if missing_includes:
+                unique_includes = list(set(missing_includes))
+                print(f"Missing include files: {', '.join(unique_includes[:5])}")
+                if len(unique_includes) > 5:
+                    print(f"  ... and {len(unique_includes) - 5} more")
+
+            # 输出 AGENT 提示
+            print("\n[AGENT] Suggestion:")
+            if missing_includes:
+                print("  - Check if include directories are in the search path")
+            if 'UnknownModule' in str(error_codes):
+                print("  - Verify all module dependencies are included")
+            if 'UnknownClassOrPackage' in str(error_codes):
+                print("  - Check if package/class definitions are available")
+            if 'InvalidMemberAccess' in str(error_codes):
+                print("  - Types may be undefined due to missing header files")
+        else:
+            if warning_count > 50:
+                print(f"Compilation: {warning_count} warnings (no errors)")
 
     def _add_nodes_from_slang(self, nl) -> None:
         """从 slang-netlist 遍历设计，添加所有信号节点（Named Nodes: Port + State）"""
