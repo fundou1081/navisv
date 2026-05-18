@@ -5,7 +5,7 @@
 | 项目 | 模块 | 状态 |
 |------|------|------|
 | serv | serv_alu | ✅ 已完成 |
-| serv | serv_decode | 🔄 待分析 |
+| serv | serv_decode | ✅ 已完成 |
 | serv | serv_top | ⏳ 待分析 |
 | clacc | bs_mult | ⏳ 待分析 |
 | darkriscv | darkriscv | ⏳ 待分析 |
