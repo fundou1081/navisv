@@ -140,3 +140,24 @@ Issue-N 的根因可能是：
 | Issue-M | PathFinder 只追踪组合逻辑，不追踪时序逻辑 | ✅ 已理解 |
 | Issue-N | 顶层模块 + PathFinder 限制 | 🔍 待进一步调查 |
 | Issue-O | slang-netlist 在特定文件上崩溃 | 🔍 待定位 |
+## 2026-05-19 更新
+
+### Issue-O: picorv32 SIGSEGV
+- **原因**: slang-netlist 的 `NetlistGraph.build()` 在解析 picorv32.v 时崩溃
+- **触发步骤**: Step 8 (Build graph) 时 SIGSEGV
+- **文件大小**: 3049 lines, 94KB
+- **状态**: 外部依赖问题，slang-netlist 内部问题
+
+### Issue-L: cva6 边数为 0
+- **原因**: slang-netlist 的 sl_graph 只包含 Assignment 和 Constant，不包含 Port/State
+- **对比**:
+  - serv_alu: sl_graph 有 Port(13), State(2) → navisv 有边
+  - cva6: sl_graph 只有 Assignment(43), Constant(5) → navisv 无边
+- **根本原因**: cva6 的 SystemVerilog 模块接口可能不符合 slang 的 Port/State 定义规则
+- **状态**: 外部依赖问题，slang-netlist 行为差异
+
+### Issue-N: darkriscv 边数为 0
+- **重新验证**: 使用完整文件集后，darkriscv 有 105 条边
+- **结论**: 之前边数为 0 是因为没有使用完整文件集
+- **状态**: ✅ 已解决
+
