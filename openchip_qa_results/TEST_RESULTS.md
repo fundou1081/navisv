@@ -1,22 +1,18 @@
 # OpenChip QA 测试结果 - navisv v0.8.0
 
-> 测试日期：2026-05-17
+> 测试日期：2026-05-18
 > 测试工具：navisv CLI + Python API
-> 测试项目：按 PROJECT_PLAN.md 顺序
+> 测试项目：按 openchip-qa 顺序
 
 ---
 
 ## 测试设计汇总
 
-| 设计 | 节点数 | 边数 | 实际边 | Self边 | 模块数 |
+| 设计 | 节点数 | 边数 | 实际边 | NetlistGraph边 | 模块数 |
 |------|--------|------|--------|--------|--------|
-| i2c_core | 161 | 0 | 0 | 0 | 1 |
-| serv_decode | 101 | 0 | 0 | 0 | 1 |
-| serv_alu | 24 | 0 | 0 | 0 | 1 |
-| serv_top | 124 | 0 | 0 | 0 | 1 |
-| bs_mult | 11 | 0 | 0 | 0 | 1 |
-| dual_clock_fifo | 19 | 0 | 0 | 0 | 1 |
-| cva6 | 253 | 0 | 0 | 0 | 1 |
+| clacc/bs_mult | 11 | 0 | 0 | 0 | 1 |
+| serv/serv_alu | 24 | 12 | 0 | 12 | 1 |
+| serv/serv_decode | 101 | 17 | 0 | 17 | 1 |
 
 ---
 
@@ -24,8 +20,12 @@
 
 | Issue | 描述 | 影响 | 发现项目 |
 |-------|------|------|----------|
-| **Issue-C** | getDrivers() 对 Net 全返回 self-loop | **所有设计的边数归零**，无法进行驱动关系分析 | 所有测试设计 |
+| **Issue-C** | getDrivers() 对 Net 全返回 self-loop | 边数归零，NetlistGraph BFS 作为 fallback | 所有测试设计 |
 | **Issue-B** | 实例（bs_mult_slice）未被解析为节点 | 顶层节点数量远少于实际 | clacc/bs_mult |
+| **Issue-D** | bs_mult 所有端口都是 Input，无 Output | NetlistGraph BFS 无法建边（终点即起点） | clacc/bs_mult |
+| **Issue-E** | 部分信号（i_cmp_sig, i_bool_op, result_slt）未出现在边列表 | 驱动关系不完整 | serv/serv_alu |
+| **Issue-F** | 指令译码控制信号（o_alu_*）未出现在边列表 | 无法完整追踪译码逻辑 | serv/serv_decode |
+| **Issue-G** | parameter 值无法提取 | 无法获取 W, PRE_REGISTER 等参数 | serv/serv_alu, serv/serv_decode |
 
 ---
 
@@ -33,14 +33,7 @@
 
 | 功能 | 状态 | 说明 |
 |------|------|------|
-| 模块识别 | ✅ | 正确识别所有设计模块 |
-| 端口解析（ANSI/非ANSI）| ✅ | 非ANSI bs_mult 端口正确解析 |
-| 实例解析 | ❌ | 缺少 bs_mult_slice 等实例节点 |
-| 节点解析 | ✅ | 信号节点（Net/Port/Variable）正确添加 |
-| 驱动关系（跨信号）| ❌ | slang getDrivers() 全返回 self-loop |
-| 逻辑锥（fanin/fanout）| ⚠️ | 节点存在，但无边时结果为空 |
-| 信号搜索（FindSignalsApp）| ✅ | 正常工作 |
-| 信号属性（tags/模块）| ⚠️ | 节点存在但 tags 大多为空集 |
+| 指令分解关系 | ✅ | i_wb_rdt -> opcode/funct3 正确提取 |
 
 ---
 
