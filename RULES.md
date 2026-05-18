@@ -1,7 +1,7 @@
 # navisv 项目纪律（铁律）
 
 **适用项目**：navisv（构建在 slang-netlist 之上的语义导航中间件）
-**版本**：v0.6
+**版本**：v0.7
 **日期**：2026-05-17
 **关联文档**：`ARCHITECTURE.md`（架构设计）、`DEVELOPMENT.md`（开发指南）
 
@@ -68,12 +68,12 @@ def test_no_custom_indexes():
 
 ---
 
-### 铁律 3：slang 是拓扑权威，Python 只做属性补充 [A]
+### 铁律 3：slang 是拓扑权威，Python 可用 PathFinder 创建边 [A]
 
 **必须**：
-- `source="slang"` 的边是最权威的拓扑关系
-- Python 层（StatementExplorer、ClassExplorer）只补充属性，不覆盖 slang 的拓扑
-- 如果 `source="slang"` 的边已存在，Python 不能改变 `relation`、`timing` 等核心属性
+- `source="slang"` 的边是最权威的拓扑关系，Python 层不能覆盖其核心属性（relation、timing）
+- Python 层可以使用 PathFinder 结果创建边（`source="pathfinder"`），confidence 为 'high'
+- 如果 `source="slang"` 的边已存在，Python 不能改变其 relation、timing 等核心属性
 
 **合并逻辑**：
 ```python
@@ -580,6 +580,67 @@ def test_apps_composable():
 
 ---
 
-*RULES.md 版本：v0.6*
-*修改：2026-05-17*
+## 十一、slang-netlist 限制声明（新增）
+
+
+### 铁律 26：PathFinder 时序追踪限制 [M]
+
+**描述**：当同一信号在两个 always block 中赋值时，PathFinder 可能无法追踪到该路径。
+
+**原因**：这是 slang-netlist 的设计限制，不是实现 bug。
+
+**示例**：
+```verilog
+always @(posedge clk)
+    b = a;           // combinational style =
+always_ff @(posedge clk)
+    b <= a;          // sequential style <=
+// PathFinder 报告 a -> b 不可达，但时序路径确实存在
+```
+
+**处理方式**：
+- 在设计阶段避免一个信号在多个 always block 中赋值
+- 向用户说明此限制
+
+---
+
+### 铁律 27：组合逻辑中间信号透明性 [M]
+
+**描述**：组合逻辑中间信号（wire/assign）在图中是"透明"的。
+
+
+**表现**：
+- Path 会穿过它们
+- 它们不是 Named Node（无法 `graph.lookup("mod.wire_name")`）
+- 只能作为路径中间节点，不能直接查询 driver
+
+**示例**：
+```verilog
+wire w = a & b;
+assign out = w | c;
+// w 是透明节点，a -> out 路径存在，但无法单独查询 w 的 driver
+```
+
+---
+
+
+### 铁律 28：Python 绑定限制 [M]
+
+**描述**：部分 slang-netlist C++ API 未暴露到 Python 绑定。
+
+**受限 API**：
+- `PathFinder.find_comb()` — 纯组合路径查找（遇 State 停止）
+- `graph.getSensitivity()` — 获取 State 的 clock/reset 信号
+- `graph.get_comb_fan_in/out()` — 组合扇入/扇出
+
+
+**处理方式**：
+- 使用 networkx BFS 作为 fallback
+- 或扩展 Python 绑定直接调用 C++
+
+
+---
+
+*RULES.md 版本：v0.7*
+*修改：2026-05-18*
 *下次审查：2026-07-01*
