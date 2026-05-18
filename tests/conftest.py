@@ -14,8 +14,10 @@ import os
 
 # slang-netlist 路径
 SLANG_PATH = '/Users/fundou/my_dv_proj/slang-netlist/install'
-sys.path.insert(0, SLANG_PATH)
-sys.path.insert(0, os.path.join(SLANG_PATH, 'lib'))
+# 添加 lib 目录到 sys.path（Python 3.9 和 3.11 都用这个路径）
+lib_path = os.path.join(SLANG_PATH, 'lib')
+if lib_path not in sys.path:
+    sys.path.insert(0, lib_path)
 
 
 @pytest.fixture(scope="session")
