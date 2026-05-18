@@ -133,7 +133,16 @@ class QueryService:
                     pf = self._get_pathfinder()
                     path = pf.find(src_node, dst_node)
                     if path and not path.empty():
-                        return [n.path if hasattr(n, 'path') else str(n) for n in path]
+                        result = []
+                        for n in path:
+                            p = getattr(n, 'path', None)
+                            if p:
+                                result.append(p)
+                            elif hasattr(n, 'ID'):
+                                result.append(f'Assignment:{n.ID}')
+                            else:
+                                result.append(str(n))
+                        return result
         except Exception:
             pass
 
