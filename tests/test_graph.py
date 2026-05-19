@@ -111,9 +111,9 @@ class TestDesignGraphEdges:
         for src, dst in simple_graph.edges():
             edge = simple_graph.edge_attr(src, dst)
             if edge.get("relation") == "drives":
-                # source 可以是 'slang' (getDrivers)、'slang_get_drivers'、'netlist_graph' (旧BFS) 或 'pathfinder' (新PathFinder)
-                assert edge.get("source") in ('slang', 'slang_get_drivers', 'netlist_graph', 'pathfinder'), \
-                    f"边 ({src} -> {dst}) source 应为 'slang'、'slang_get_drivers'、'netlist_graph' 或 'pathfinder'"
+                # source 可以是 'slang_direct' (新 fan_in), 'slang_traced' (追踪), 'slang' (getDrivers), 'slang_get_drivers', 'netlist_graph' (旧BFS) 或 'pathfinder' (新PathFinder)
+                assert edge.get("source") in ('slang_direct', 'slang_traced', 'slang', 'slang_get_drivers', 'netlist_graph', 'pathfinder'), \
+                    f"边 ({src} -> {dst}) source 应为 'slang_direct'、'slang_traced'、'slang'、'slang_get_drivers'、'netlist_graph' 或 'pathfinder'"
 
     def test_all_edges_have_required_attributes(self, simple_graph):
         """每条边都有 relation, timing, source, confidence 字段"""

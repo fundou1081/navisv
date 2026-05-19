@@ -129,7 +129,7 @@ class DesignGraph:
         self._add_nets_from_comp()
 
         # 9. graph.get_drivers() 创建边（拓扑权威）
-        self._add_edges_from_slang_get_drivers()
+        self._add_edges_from_slang()
 
         # 10. 使用 PathFinder 补充遗漏的边
         self._add_edges_from_pathfinder()
@@ -214,6 +214,317 @@ class DesignGraph:
         else:
             if warning_count > 50:
                 print(f"Compilation: {warning_count} warnings (no errors)")
+
+    def _trace_to_named(self, start_node, max_depth=10) -> List[str]:
+        """
+        从任意节点追踪到其所有的 Named fan-in 源。
+        
+        沿着 fan_in 方向向上追踪，找到所有有 path 的 Named Nodes。
+        如果遇到组合循环，会被 visited set 停止。
+        
+        这个函数替代了原来的 _trace_assignment_fan_in()，后者只追踪 Assignment。
+        现在追踪所有 unnamed 节点（Assignment/Conditional/Case/Merge）。
+        
+        Args:
+            start_node: 起始节点（可能是 Unnamed）
+            max_depth: 最大追踪深度
+        
+        Returns:
+            List[str]: 所有 Named fan-in 源路径列表（去重）
+        """
+        sl_graph = self._slang_graph
+        visited = set()
+        queue = [(start_node, 0)]
+        named_sources = []
+        
+        while queue:
+            node, depth = queue.pop(0)
+            
+            if depth > max_depth:
+                continue
+            
+            node_id = id(node)
+            if node_id in visited:
+                continue
+            visited.add(node_id)
+            
+            node_path = getattr(node, 'path', None) or getattr(node, 'hierarchicalPath', None)
+            if node_path:
+                named_sources.append(node_path)
+                continue
+            
+            # 无 path，继续追踪 fan_in
+            for src in sl_graph.get_comb_fan_in(node):
+                if id(src) not in visited:
+                    queue.append((src, depth + 1))
+        
+        return list(set(named_sources))
+
+    def _trace_from_named(self, start_node, max_depth=10) -> List[str]:
+        """
+        从任意节点追踪到其所有的 Named fan-out 目标。
+        
+        沿着 fan_out 方向向下追踪，找到所有有 path 的 Named Nodes。
+        
+        Args:
+            start_node: 起始节点
+            max_depth: 最大追踪深度
+        
+        Returns:
+            List[str]: 所有 Named fan-out 目标路径列表（去重）
+        """
+        sl_graph = self._slang_graph
+        visited = set()
+        queue = [(start_node, 0)]
+        named_targets = []
+        
+        while queue:
+            node, depth = queue.pop(0)
+            
+            if depth > max_depth:
+                continue
+            
+            node_id = id(node)
+            if node_id in visited:
+                continue
+            visited.add(node_id)
+            
+            node_path = getattr(node, 'path', None) or getattr(node, 'hierarchicalPath', None)
+            if node_path:
+                named_targets.append(node_path)
+                continue
+            
+            # 无 path，继续追踪 fan_out
+            for tgt in sl_graph.get_comb_fan_out(node):
+                if id(tgt) not in visited:
+                    queue.append((tgt, depth + 1))
+        
+        return list(set(named_targets))
+
+    def _classify_timing(self, src_kind: str, dst_kind: str) -> str:
+        """
+        分类两个节点之间的时序关系。
+        
+        为 pipeline 和 delay 分析做准备：
+        - combinational: 纯组合逻辑路径（无寄存器）
+        - sequential: 包含寄存器的时序路径
+        - registered: 路径终点是 State（寄存器输入）
+        
+        Args:
+            src_kind: 源节点 kind 字符串
+            dst_kind: 目标节点 kind 字符串
+        
+        Returns:
+            str: 'combinational', 'sequential_input', 'sequential_output', 'sequential'
+        """
+        # State → State: 时序路径（经过寄存器链）
+        if 'State' in src_kind and 'State' in dst_kind:
+            return 'sequential'
+        
+        # State → 其他: 寄存器输出路径
+        if 'State' in src_kind:
+            return 'sequential_output'
+        
+        # 其他 → State: 寄存器输入路径
+        if 'State' in dst_kind:
+            return 'sequential_input'
+        
+        # Port → Port 或其他: 组合逻辑
+        return 'combinational'
+
+    def _add_edges_from_slang(self) -> None:
+        """
+        从 slang-netlist 的 fan_in 关系统一建边。
+        
+        方案 B 重构：用 get_comb_fan_in() 替代 get_drivers() + trace。
+        
+        建边策略：
+        1. 直接 Named 边：fan_in 返回的 Named Sources
+        2. 追踪边：fan_in 返回的 Unnamed Sources 追踪到 Named
+        
+        边属性（为 pipeline/delay 分析准备）：
+        - relation: 'drives' | 'feeds' | 'fans_to'
+        - timing: 'combinational' | 'sequential_input' | 'sequential_output' | 'sequential'
+        - source: 'slang_direct' | 'slang_traced'
+        - confidence: 'high' | 'medium' | 'low'
+        - trace_depth: 追踪深度（用于分析路径复杂度）
+        - path_type: 'port_to_port' | 'port_to_reg' | 'reg_to_port' | 'reg_to_reg'
+        
+        验证标准：
+        - len(g.edges()) 应该接近 sl_graph.num_edges()
+        """
+        sl_graph = self._slang_graph
+        
+        for node in sl_graph:
+            node_path = getattr(node, 'path', None) or getattr(node, 'hierarchicalPath', None)
+            if not node_path:
+                continue
+            
+            node_kind = str(node.kind).replace('NodeKind.', '')
+            
+            # 确保节点存在
+            if node_path not in self.graph.nodes():
+                self.graph.add_node(node_path,
+                    name=node_path.rsplit('.', 1)[-1],
+                    module=node_path.rsplit('.', 1)[0] if '.' in node_path else self._module_name,
+                    bit_width=self._get_bit_width(node),
+                    tags=self._get_tags(node),
+                    node_kind=node_kind,
+                    meta={})
+            
+            # 获取 fan_in
+            fan_in = list(sl_graph.get_comb_fan_in(node))
+            
+            for src in fan_in:
+                src_path = getattr(src, 'path', None) or getattr(src, 'hierarchicalPath', None)
+                src_kind = str(src.kind).replace('NodeKind.', '')
+                
+                if src_path:
+                    # Case 1: 直接 Named 边
+                    if src_path != node_path:  # 跳过 self-loop
+                        self._add_slang_edge(src_path, node_path, src_kind, node_kind, 'direct')
+                else:
+                    # Case 2: Unnamed → 追踪到 Named
+                    traced_paths = self._trace_to_named(src)
+                    for traced_path in traced_paths:
+                        if traced_path != node_path:
+                            self._add_slang_edge(traced_path, node_path, 'Traced', node_kind, 'traced')
+
+    def _add_slang_edge(self, src_path: str, dst_path: str, src_kind: str, dst_kind: str, edge_type: str) -> None:
+        """
+        添加来自 slang 的边，带完整属性。
+        
+        为 pipeline/delay 分析准备以下属性：
+        - relation: 驱动关系
+        - timing: 时序类型
+        - source: 边来源
+        - confidence: 可信度
+        - trace_depth: 追踪深度
+        - path_type: 路径类型
+        - pipeline_stage: 流水级（如果能确定）
+        - combinational_depth: 组合逻辑深度
+        """
+        if self.graph.has_edge(src_path, dst_path):
+            return
+        
+        # 判断时序类型
+        timing = self._classify_timing(src_kind, dst_kind)
+        
+        # 判断路径类型
+        path_type = self._classify_path_type(src_kind, dst_kind)
+        
+        self.graph.add_edge(src_path, dst_path,
+            relation='drives',
+            timing=timing,
+            source=f'slang_{edge_type}',
+            confidence='high',
+            path_type=path_type,
+            trace_depth=0,  # 后续可以更新
+            pipeline_stage=None,  # 后续分析
+            combinational_depth=0,  # 后续分析
+            meta={})
+
+
+    def _classify_path_type(self, src_kind: str, dst_kind: str) -> str:
+        """
+        分类路径类型。
+        
+        Args:
+            src_kind: 源节点 kind（如 'Port', 'State', 'Traced'）
+            dst_kind: 目标节点 kind
+        
+        Returns:
+            str: 'port_to_port' | 'port_to_reg' | 'reg_to_port' | 'reg_to_reg' | 'other'
+        """
+        src_is_port = 'Port' in src_kind
+        src_is_reg = 'State' in src_kind
+        dst_is_port = 'Port' in dst_kind
+        dst_is_reg = 'State' in dst_kind
+        
+        if src_is_port and dst_is_port:
+            return 'port_to_port'
+        elif src_is_port and dst_is_reg:
+            return 'port_to_reg'
+        elif src_is_reg and dst_is_port:
+            return 'reg_to_port'
+        elif src_is_reg and dst_is_reg:
+            return 'reg_to_reg'
+        else:
+            return 'other'
+
+    def _get_bit_width(self, node) -> Tuple[int, int]:
+        """获取节点的 bit width"""
+        bounds = getattr(node, 'bounds', None)
+        if bounds:
+            return bit_width_from_bounds(bounds)
+        return (0, 0)
+
+    def _get_tags(self, node) -> set:
+        """获取节点的标签"""
+        kind = str(node.kind).replace('NodeKind.', '')
+        tags = set()
+        
+        if kind == 'Port':
+            direction = getattr(node, 'direction', None)
+            if direction:
+                dir_name = str(direction).split('.')[-1]  # 'ArgumentDirection.In' → 'In'
+                tags.add(dir_name.lower())
+        elif kind == 'State':
+            tags.add('register')
+        
+        return tags
+
+    def _verify_edge_completeness(self) -> None:
+        """
+        验证边是否完整。
+        
+        打印覆盖率信息，用于调试。
+        
+        注意：slang.num_edges() 可能包含 unnamed 边，
+        因此覆盖率计算基于 slang 的 named→named 边。
+        """
+        slang_total_edges = self._slang_graph.num_edges()
+        
+        # 计算 slang 的 named→named 唯一边数
+        slang_named_edges = set()
+        for node in self._slang_graph:
+            node_path = getattr(node, 'path', None) or getattr(node, 'hierarchicalPath', None)
+            if not node_path:
+                continue
+            for src in self._slang_graph.get_comb_fan_in(node):
+                src_path = getattr(src, 'path', None) or getattr(src, 'hierarchicalPath', None)
+                if src_path and src_path != node_path:
+                    slang_named_edges.add((src_path, node_path))
+        
+        slang_named_count = len(slang_named_edges)
+        navisv_edges = len(self.graph.edges())
+        
+        # 统计边类型
+        edge_types = {}
+        for _, _, d in self.graph.edges(data=True):
+            src = d.get('source', 'unknown')
+            edge_types[src] = edge_types.get(src, 0) + 1
+        
+        # 统计时序类型
+        timing_stats = {}
+        for _, _, d in self.graph.edges(data=True):
+            t = d.get('timing', 'unknown')
+            timing_stats[t] = timing_stats.get(t, 0) + 1
+        
+        print(f"Edge verification:")
+        print(f"  slang num_edges (internal): {slang_total_edges}")
+        print(f"  slang named→named edges: {slang_named_count}")
+        print(f"  navisv edges: {navisv_edges}")
+        if slang_named_count > 0:
+            coverage = min(navisv_edges / slang_named_count, 1.0)
+            print(f"  coverage: {coverage:.1%}")
+        
+        print(f"  by source: {edge_types}")
+        print(f"  by timing: {timing_stats}")
+        
+        if slang_named_count > 0 and navisv_edges < slang_named_count:
+            missing = slang_named_count - navisv_edges
+            print(f"  WARNING: {missing} edges missing from navisv")
 
     def _add_nodes_from_slang(self, nl) -> None:
         """从 slang-netlist 遍历设计，添加所有信号节点（Named Nodes: Port + State）"""
@@ -413,108 +724,25 @@ class DesignGraph:
 
     def _add_edges_from_slang_get_drivers(self) -> None:
         """
-        从 slang graph.get_drivers() 添加边（拓扑权威）。
+        DEPRECATED: Use _add_edges_from_slang() instead.
         
-        graph.get_drivers(name, lower, upper) 返回直接驱动该信号的节点列表。
-        如果 driver 是 Assignment 节点（没有 path），追踪其 fan_in 链找到 Named Nodes。
+        这个函数保留用于向后兼容，但已经被 _add_edges_from_slang() 替代。
+        问题：只追踪 Assignment，跳过了 Conditional/Case/Merge。
         """
-        sl_graph = self._slang_graph
-        module_name = self._module_name
-
-        for node_id in list(self.graph.nodes()):
-            bounds = self.graph.nodes[node_id].get('bit_width', (0, 0))
-
-            # 使用 get_drivers() 查找驱动节点
-            drivers = sl_graph.get_drivers(node_id, bounds[0], bounds[1])
-
-
-            for drv in drivers:
-                drv_path = self._resolve_driver_path(drv)
-                if not drv_path:
-                    continue
-
-                # 跳过 self-loop
-                if drv_path == node_id:
-                    continue
-
-                # 确保驱动节点存在
-                if drv_path not in self.graph.nodes():
-                    self.graph.add_node(drv_path,
-                        name=drv_path.rsplit('.', 1)[-1],
-                        module=drv_path.rsplit('.', 1)[0] if '.' in drv_path else module_name,
-                        bit_width=(0, 0),
-                        tags=set(),
-                        node_kind=str(getattr(drv, 'kind', 'Unknown')).replace('NodeKind.', ''),
-                        meta={})
-
-                # 添加边
-                if not self.graph.has_edge(drv_path, node_id):
-                    self.graph.add_edge(drv_path, node_id,
-                        relation='drives',
-                        timing='unknown',
-                        qualifier=None,
-                        bounds=bounds,
-                        source_location=None,
-                        source='slang_get_drivers',
-                        is_partial=False,
-                        confidence='high',
-                        meta={})
+        # 新建边逻辑已经移到 _add_edges_from_slang()
+        pass
 
     def _resolve_driver_path(self, drv) -> Optional[str]:
         """
-        从 driver 节点解析路径。
-        
-        如果 driver 是 Named Node（Port/State），直接返回 path。
-        如果 driver 是 Assignment 节点，追踪 fan_in 链找到 Named Nodes。
+        DEPRECATED: Use _trace_to_named() instead.
         """
-        # 直接有 path 的节点
-        path = getattr(drv, 'path', None) or getattr(drv, 'hierarchicalPath', None)
-        if path:
-            return path
-
-        # Assignment 节点：追踪 fan_in 链
-        if str(getattr(drv, 'kind', '')) == 'NodeKind.Assignment':
-            named_sources = self._trace_assignment_fan_in(drv)
-            # 返回第一个 Named Node
-            return named_sources[0] if named_sources else None
-
-        return None
+        return getattr(drv, 'path', None) or getattr(drv, 'hierarchicalPath', None)
 
     def _trace_assignment_fan_in(self, assign_node, max_depth=10) -> List[str]:
         """
-        追踪 Assignment 节点的 fan_in 链，找到所有 Named Nodes。
-        
-        当 Assignment 节点驱动一个信号时，它的 fan_in 包含其他 Assignment 或 Named Nodes。
-        递归追踪直到找到 Port 或 State 节点。
+        DEPRECATED: Use _trace_to_named() instead.
         """
-        sl_graph = self._slang_graph
-        visited = set()
-        result = []
-        stack = [assign_node]
-
-        while stack and len(visited) < max_depth:
-            node = stack.pop()
-            node_id = id(node)
-            if node_id in visited:
-                continue
-            visited.add(node_id)
-
-            # 获取 fan_in
-            fan_in = list(sl_graph.get_comb_fan_in(node))
-
-            for n in fan_in:
-                # 检查是否是 Named Node
-                n_path = getattr(n, 'path', None)
-                if n_path and n_path != getattr(assign_node, 'path', None):
-                    result.append(n_path)
-                    continue
-
-                # 如果是 Assignment，继续追踪
-                if str(getattr(n, 'kind', '')) == 'NodeKind.Assignment':
-                    if id(n) not in visited:
-                        stack.append(n)
-
-        return result
+        return self._trace_to_named(assign_node, max_depth)
 
     def _add_edges_from_pathfinder(self) -> None:
         """
@@ -560,16 +788,24 @@ class DesignGraph:
                 if path.empty():
                     continue
 
-                # 添加边
+                # 添加边（带时序分类）
+                src_kind = 'Port'
+                dst_kind = 'Port'
+                timing = self._classify_timing(src_kind, dst_kind)
+                path_type = self._classify_path_type(src_kind, dst_kind)
+                
                 self.graph.add_edge(src_path, dst_path,
                     relation='drives',
-                    timing='unknown',
+                    timing=timing,
                     qualifier=None,
                     bounds=None,
                     source_location=None,
                     source='pathfinder',
                     is_partial=False,
                     confidence='high',
+                    path_type=path_type,
+                    pipeline_stage=None,
+                    combinational_depth=0,
                     meta={})
 
     def _annotate_edges_from_statements(self) -> None:
