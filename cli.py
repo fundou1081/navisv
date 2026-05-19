@@ -1,132 +1,138 @@
 #!/usr/bin/env python3
 # cli.py - navisv 命令行工具
-# navisv 架构 v0.8 - Phase 4
+# navisv 架构 v0.9 (JSON-based)
 
 """
 navisv CLI - 面向 AI Agent 的 SystemVerilog 语义导航工具
 
 用法：
-    navisv profile <signal>           # 信号身份证
-    navisv impact <signal>           # 影响范围分析
-    navisv relate <a> <b>           # 两个信号的关系
-    navisv find [description]        # 查找信号
-    navisv sample <signal>          # 采样条件查询
-    navisv --json ...               # 输出 JSON 格式
+    navisv analyze <file>              # 分析设计
+    navisv registers <file>           # 报告寄存器
+    navisv fanin <file> <signal>     # 扇入分析
+    navisv fanout <file> <signal>    # 扇出分析
+    navisv find <file> <pattern>     # 查找节点
+    navisv dot <file> [output.dot]   # 导出 DOT 图
 
 环境：
-    必须使用 /usr/bin/python3（Python 3.9，slang-netlist）
+    必须使用 /usr/bin/python3（Python 3.9）
 """
 
 import argparse
 import json
 import sys
-import os
 
-# ---- 解决 slang ast.py 与 stdlib ast 的冲突 ----
-# 在添加 slang 路径前，先让 networkx 缓存 stdlib ast
-import networkx as _nx  # noqa: F401
-
-# ---- slang-netlist 路径（必须在导入 navisv 前添加）----
-SLANG_PATH = '/Users/fundou/my_dv_proj/slang-netlist/install'
-sys.path.insert(0, SLANG_PATH)
-sys.path.insert(0, os.path.join(SLANG_PATH, 'lib'))
-
-# ---- 延迟导入（避免 ast 冲突）----
-from navisv.graph import DesignGraph
-from navisv.query import QueryService
-from navisv.apps import (
-    SignalProfileApp,
-    ImpactAnalysisApp,
-    FindSignalsApp,
-    RelationshipApp,
-    FsmDetectApp,
-    ProtocolInferApp,
-    SampleSignalApp,
-)
+from navisv.drivers import SlangDriver, NetlistDriver
 
 
-DEFAULT_DESIGN = '/Users/fundou/my_dv_proj/opentitan/hw/ip/i2c/rtl/i2c_core.sv'
-
-
-def build_graph(design_files):
-    """构建 DesignGraph"""
-    return DesignGraph(design_files)
-
-
-def run_profile(args, query):
-    """SignalProfileApp"""
-    app = SignalProfileApp(query)
-    r = app.run(args.signal, max_depth=args.depth)
-    return r
-
-
-def run_impact(args, query):
-    """ImpactAnalysisApp"""
-    app = ImpactAnalysisApp(query)
-    r = app.run(args.signal, max_depth=args.depth)
-    return r
-
-
-def run_relate(args, query):
-    """RelationshipApp"""
-    app = RelationshipApp(query)
-    r = app.run(args.signal_a, args.signal_b)
-    return r
-
-
-def run_find(args, query):
-    """FindSignalsApp"""
-    app = FindSignalsApp(query)
-    r = app.run(
-        description=args.description or "",
-        name_pattern=args.pattern or "",
-        tags=[],
-        module=args.module or "",
-        limit=args.limit,
+def run_analyze(args):
+    """分析设计并生成 JSON"""
+    driver = NetlistDriver(
+        args.files,
+        include_dirs=args.include or [],
+        top=args.top,
     )
-    return r
-
-
-def run_fsm(args, query):
-    """FsmDetectApp"""
-    app = FsmDetectApp(query)
-    r = app.run(signal=args.signal or None, module=args.module or '')
-    return r
-
-
-def run_protocol(args, query):
-    """ProtocolInferApp"""
-    app = ProtocolInferApp(query)
-    r = app.run(signals=args.signals or None, pattern=args.pattern or '')
-    return r
-
-
-def run_sample(args, query):
-    """SampleSignalApp"""
-    app = SampleSignalApp(query)
-    signal = args.signal or None
-    module = args.module or ''
-    r = app.run(signal=signal, module=module)
-    return r
-
-
-def print_response(r, as_json=False):
-    """打印 AppResponse"""
-    if as_json:
-        print(json.dumps({
-            'structured': r.structured,
-            'summary': r.summary,
-            'confidence': r.confidence,
-            'experimental': r.experimental,
-        }, indent=2, ensure_ascii=False))
+    result = driver.run()
+    
+    if args.json:
+        print(json.dumps(result, indent=2))
     else:
-        print("=" * 60)
-        print(r.summary)
-        print("-" * 60)
-        print(f"置信度：{r.confidence}")
-        if r.experimental:
-            print("[实验性功能]")
-        print()
+        if result['success']:
+            print(f"✓ 分析成功: {result['netlist_json']}")
+            print(f"  JSON 大小: {result['json_size']} bytes")
+        else:
+            print(f"✗ 分析失败")
+            print(result['stderr'])
+    
+    return result
+
+
+def run_registers(args):
+    """报告寄存器"""
+    driver = NetlistDriver(args.files, top=args.top)
+    result = driver.run_report_registers()
+    
+    if result['success']:
+        print(f"找到 {len(result['registers'])} 个寄存器：")
+        for reg in result['registers']:
+            print(f"  {reg['name']}")
+    
+    return result
+
+
+def run_fanin(args):
+    """扇入分析"""
+    driver = NetlistDriver(args.files, top=args.top)
+    result = driver.run_fan_in(args.signal)
+    
+    if result['success']:
+        print(f"信号 {args.signal} 的扇入：")
+        for sig in result['fan_in']:
+            print(f"  {sig}")
+    
+    return result
+
+
+def run_fanout(args):
+    """扇出分析"""
+    driver = NetlistDriver(args.files, top=args.top)
+    result = driver.run_fan_out(args.signal)
+    
+    if result['success']:
+        print(f"信号 {args.signal} 的扇出：")
+        for sig in result['fan_out']:
+            print(f"  {sig}")
+    
+    return result
+
+
+def run_find(args):
+    """查找节点"""
+    driver = NetlistDriver(args.files, top=args.top)
+    result = driver.run_find(args.pattern)
+    
+    if result['success']:
+        print(f"找到 {result['count']} 个节点：")
+        for node in result['nodes']:
+            print(f"  {node}")
+    
+    return result
+
+
+def run_dot(args):
+    """导出 DOT"""
+    driver = NetlistDriver(args.files, top=args.top)
+    result = driver.run_dot(args.output or None)
+    
+    if result['success']:
+        print(f"✓ DOT 已导出: {result['dot_file']}")
+    
+    return result
+
+
+def run_ast(args):
+    """生成 AST JSON"""
+    driver = SlangDriver(
+        args.files,
+        include_dirs=args.include or [],
+        top=args.top,
+        source_info=True,
+    )
+    result = driver.run(scope=args.scope)
+    
+    if args.json:
+        print(json.dumps(result, indent=2))
+    else:
+        if result['success']:
+            print(f"✓ AST 生成成功: {result['ast_json']}")
+            print(f"  JSON 大小: {result['json_size']} bytes")
+            if args.scope:
+                print(f"  Scope: {args.scope}")
+            print(f"  错误: {result['error_count']}, 警告: {result['warning_count']}")
+        else:
+            print(f"✗ AST 生成失败")
+            print(result['stderr'])
+    
+    return result
 
 
 def main():
@@ -134,112 +140,66 @@ def main():
         prog='navisv',
         description='navisv - SystemVerilog 语义导航中间件',
     )
-    parser.add_argument(
-        '--design', '-d',
-        default=DEFAULT_DESIGN,
-        help=f'设计文件（默认：{DEFAULT_DESIGN}）',
-    )
-    parser.add_argument(
-        '--json', '-j',
-        action='store_true',
-        help='输出 JSON 格式',
-    )
-    parser.add_argument(
-        '--depth',
-        type=int,
-        default=5,
-        help='fanin/fanout 追踪深度（默认：5）',
-    )
-    parser.add_argument(
-        '--limit',
-        type=int,
-        default=20,
-        help='find 命令最大返回数量（默认：20）',
-    )
-    parser.add_argument(
-        '--module', '-m',
-        default='',
-        help='按模块过滤',
-    )
-
+    parser.add_argument('--json', '-j', action='store_true', help='输出 JSON 格式')
+    parser.add_argument('--top', '-t', help='顶层模块')
+    parser.add_argument('--include', '-I', action='append', help='include 目录')
+    
     sub = parser.add_subparsers(dest='command', required=True)
 
-    # navisv profile <signal>
-    p = sub.add_parser('profile', help='信号身份证')
+    # navisv analyze <files...>
+    p = sub.add_parser('analyze', help='分析设计')
+    p.add_argument('files', nargs='+', help='设计文件')
+
+    # navisv registers <files...>
+    p = sub.add_parser('registers', help='报告寄存器')
+    p.add_argument('files', nargs='+', help='设计文件')
+
+    # navisv fanin <files...> <signal>
+    p = sub.add_parser('fanin', help='扇入分析')
+    p.add_argument('files', nargs='+', help='设计文件')
     p.add_argument('signal', help='信号路径')
 
-    # navisv impact <signal>
-    p = sub.add_parser('impact', help='影响范围分析')
+    # navisv fanout <files...> <signal>
+    p = sub.add_parser('fanout', help='扇出分析')
+    p.add_argument('files', nargs='+', help='设计文件')
     p.add_argument('signal', help='信号路径')
 
-    # navisv relate <a> <b>
-    p = sub.add_parser('relate', help='信号关系分析')
-    p.add_argument('signal_a', help='信号 A')
-    p.add_argument('signal_b', help='信号 B')
+    # navisv find <files...> <pattern>
+    p = sub.add_parser('find', help='查找节点')
+    p.add_argument('files', nargs='+', help='设计文件')
+    p.add_argument('pattern', help='通配符模式 (*, ?)')
 
-    # navisv find [description]
-    p = sub.add_parser('find', help='信号查找')
-    p.add_argument('description', nargs='?', default='', help='描述或模式')
-    p.add_argument('--pattern', '-p', default='', help='名称正则')
+    # navisv dot <files...> [output.dot]
+    p = sub.add_parser('dot', help='导出 DOT')
+    p.add_argument('files', nargs='+', help='设计文件')
+    p.add_argument('output', nargs='?', help='输出文件')
 
-    # navisv sample
-    p = sub.add_parser('sample', help='采样条件查询')
-    p.add_argument('--signal', '-s', default='', help='信号路径')
-    p.add_argument('--module', '-m', default='', help='模块名（列出所有 State）')
-
-    # navisv fsm
-    p = sub.add_parser('fsm', help='FSM 检测（实验性）')
-    p.add_argument('--signal', '-s', default='', help='限定起始信号')
-    p.add_argument('--module', '-m', default='', help='限定模块')
-
-    # navisv protocol
-    p = sub.add_parser('protocol', help='协议推断（实验性）')
-    p.add_argument('--pattern', '-p', default='', help='协议模式（如 valid/ready）')
-    p.add_argument('signals', nargs='*', default=[], help='信号列表（可选）')
+    # navisv ast <files...>
+    p = sub.add_parser('ast', help='生成 AST JSON')
+    p.add_argument('files', nargs='+', help='设计文件')
+    p.add_argument('--scope', '-s', help='限定 AST 范围')
 
     args = parser.parse_args()
 
-    # 构建图
-    design_files = [args.design]
-    if not os.path.exists(args.design):
-        print(f"错误：设计文件不存在：{args.design}", file=sys.stderr)
-        sys.exit(1)
-
-    print(f"正在构建图：{args.design} ...", file=sys.stderr)
-    graph = build_graph(design_files)
-    query = QueryService(graph)
-    print(f"图已构建：{graph}", file=sys.stderr)
-    print(file=sys.stderr)
-
-    # 执行命令
     try:
-        if args.command == 'profile':
-            r = run_profile(args, query)
-        elif args.command == 'impact':
-            r = run_impact(args, query)
-        elif args.command == 'relate':
-            r = run_relate(args, query)
+        if args.command == 'analyze':
+            run_analyze(args)
+        elif args.command == 'registers':
+            run_registers(args)
+        elif args.command == 'fanin':
+            run_fanin(args)
+        elif args.command == 'fanout':
+            run_fanout(args)
         elif args.command == 'find':
-            r = run_find(args, query)
-        elif args.command == 'sample':
-            r = run_sample(args, query)
-        elif args.command == 'fsm':
-            r = run_fsm(args, query)
-        elif args.command == 'protocol':
-            r = run_protocol(args, query)
-        else:
-            print(f"未知命令：{args.command}", file=sys.stderr)
-            sys.exit(1)
-
-        print_response(r, as_json=args.json)
-
+            run_find(args)
+        elif args.command == 'dot':
+            run_dot(args)
+        elif args.command == 'ast':
+            run_ast(args)
     except Exception as e:
-        print(f"错误：{e}", file=sys.stderr)
+        print(f"错误: {e}", file=sys.stderr)
         if args.json:
-            print(json.dumps({'error': str(e)}), file=sys.stderr)
-        sys.exit(1)
-        if args.json:
-            print(json.dumps({'error': str(e)}), file=sys.stderr)
+            print(json.dumps({'error': str(e)}))
         sys.exit(1)
 
 
