@@ -4,25 +4,39 @@
 """
 navisv: 基于 slang + slang-netlist JSON 输出的语义导航中间件
 
-层次：
-- Drivers Layer: SlangDriver, NetlistDriver（调用原生工具）
-- Parsers Layer: ASTParser, NetlistParser（解析 JSON）
-- Graph Layer: DesignGraph（networkx DiGraph 唯一存储）
+三层架构：
+1. Drivers: SlangDriver, NetlistDriver (调用原生工具)
+2. Parsers: ASTParser, NetlistParser (解析 JSON)
+3. Graph: GraphBuilder, DesignGraph (构建图)
 
 使用示例：
     #!/usr/bin/env python3
     
-    from navisv.drivers import SlangDriver, NetlistDriver
-
-    # 驱动 slang 生成 AST
-    slang = SlangDriver(['design.sv'])
-    ast_result = slang.run()
+    from navisv import DesignDriver
     
-    # 驱动 slang-netlist 生成 netlist
-    netlist_driver = NetlistDriver(['design.sv'])
-    netlist_result = netlist_driver.run()
+    # 方式1: 直接构建
+    driver = DesignDriver(['design.sv'])
+    driver.build()
+    dg = driver.design_graph
+    
+    # 方式2: 便捷函数
+    from navisv import from_files
+    dg = from_files(['design.sv'])
+    
+    # 查询
+    print(dg.get_registers())
+    print(dg.get_fanin_cone('top.cpu.alu.result'))
 """
 
 __version__ = "0.9.0"
 
-__all__ = []
+from navisv.drivers import SlangDriver, NetlistDriver, DesignDriver, from_files
+from navisv.graph import DesignGraph
+
+__all__ = [
+    'SlangDriver',
+    'NetlistDriver',
+    'DesignDriver',
+    'from_files',
+    'DesignGraph',
+]
