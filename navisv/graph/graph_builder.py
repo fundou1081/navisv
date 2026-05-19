@@ -316,11 +316,22 @@ class GraphBuilder:
         if default_stmt:
             self._extract_assignments_from_stmt(case_var, 'case', default_stmt)
     
-    def _analyze_conditional(self, cond_node):
+    def _analyze_conditional(self, cond_node_or_dict):
         """
-        分析条件运算符 (?:)
+        分析 if/else 语句
         
-        Conditional 结构:
+        cond_node_or_dict 可以是 ASTNode 或 dict (递归调用时传入 dict)
+        
+        if/else 结构:
+        {
+            "kind": "Conditional",
+            "conditions": [{"expr": {...}}],
+            "check": "None",
+            "ifTrue": {...},
+            "ifFalse": {...}
+        }
+        
+        三元运算符结构:
         {
             "kind": "Conditional",
             "condition": {...},
@@ -328,18 +339,48 @@ class GraphBuilder:
             "falseExpression": {...}
         }
         """
-        condition = self._extract_expr_path(cond_node.attributes.get('condition', {}))
+        # 统一获取 attributes
+        if hasattr(cond_node_or_dict, 'attributes'):
+            attrs = cond_node_or_dict.attributes
+        else:
+            attrs = cond_node_or_dict
         
-        if not condition:
-            return
+        # 处理 if/else 结构 (conditions, ifTrue, ifFalse)
+        conditions = attrs.get('conditions', [])
+        if conditions:
+            # 这是 if/else 结构
+            for i, cond_item in enumerate(conditions):
+                cond_expr = cond_item.get('expr', {})
+                condition = self._extract_expr_path(cond_expr)
+                
+                if not condition:
+                    continue
+                
+                if_true = attrs.get('ifTrue')
+                if if_true:
+                    self._extract_assignments_from_stmt(f"{condition}", 'if', if_true)
+            
+            if_false = attrs.get('ifFalse')
+            if if_false and isinstance(if_false, dict):
+                if if_false.get('kind') == 'Conditional':
+                    self._analyze_conditional(if_false)
+                else:
+                    if conditions:
+                        last_cond_expr = conditions[-1].get('expr', {})
+                        last_cond = self._extract_expr_path(last_cond_expr)
+                        if last_cond:
+                            self._extract_assignments_from_stmt(f"!{last_cond}", 'if', if_false)
+                        else:
+                            self._extract_assignments_from_stmt('', 'else', if_false)
         
-        # true branch
-        true_expr = cond_node.attributes.get('trueExpression', {})
-        self._extract_assignments_from_expr(f"{condition}", 'ternary', true_expr)
-        
-        # false branch
-        false_expr = cond_node.attributes.get('falseExpression', {})
-        self._extract_assignments_from_expr(f"!{condition}", 'ternary', false_expr)
+        # 处理三元运算符结构 (condition, trueExpression, falseExpression)
+        condition = self._extract_expr_path(attrs.get('condition', {}))
+        if condition:
+            true_expr = attrs.get('trueExpression', {})
+            self._extract_assignments_from_expr(f"{condition}", 'ternary', true_expr)
+            
+            false_expr = attrs.get('falseExpression', {})
+            self._extract_assignments_from_expr(f"!{condition}", 'ternary', false_expr)
     
     def _extract_case_value(self, item: Dict) -> str:
         """从 case item 提取 case 值"""
