@@ -82,16 +82,79 @@ class ASTParser:
             location=obj.get('sourceLocation') or obj.get('location')
         )
         
-        # 递归处理 body/members
+        # 递归处理 body
         if 'body' in obj:
             body = obj['body']
             if isinstance(body, dict):
                 node.children.append(self._parse_node(body, path, depth + 1))
+            elif isinstance(body, list):
+                for item in body:
+                    if isinstance(item, dict):
+                        node.children.append(self._parse_node(item, path, depth + 1))
         
+        # 递归处理 members
         if 'members' in obj:
             for member in obj['members']:
                 if isinstance(member, dict):
                     node.children.append(self._parse_node(member, path, depth + 1))
+        
+        # 递归处理 stmt (Timed 节点中的语句)
+        if 'stmt' in obj:
+            stmt = obj['stmt']
+            if isinstance(stmt, dict):
+                node.children.append(self._parse_node(stmt, path, depth + 1))
+        
+        # 递归处理 expr (ExpressionStatement, Conditional 等的表达式)
+        if 'expr' in obj and isinstance(obj['expr'], dict):
+            node.children.append(self._parse_node(obj['expr'], path, depth + 1))
+        
+        # 递归处理 case items
+        if 'items' in obj and isinstance(obj['items'], list):
+            for item in obj['items']:
+                if isinstance(item, dict):
+                    node.children.append(self._parse_node(item, path, depth + 1))
+        
+        # 递归处理 defaultCase
+        if 'defaultCase' in obj and isinstance(obj['defaultCase'], dict):
+            node.children.append(self._parse_node(obj['defaultCase'], path, depth + 1))
+        
+        # 递归处理 Conditional (?:) 的 true/false expression
+        if 'trueExpression' in obj and isinstance(obj['trueExpression'], dict):
+            node.children.append(self._parse_node(obj['trueExpression'], path, depth + 1))
+        if 'falseExpression' in obj and isinstance(obj['falseExpression'], dict):
+            node.children.append(self._parse_node(obj['falseExpression'], path, depth + 1))
+        
+        # 递归处理 expressions (case item 的条件表达式)
+        if 'expressions' in obj and isinstance(obj['expressions'], list):
+            for expr in obj['expressions']:
+                if isinstance(expr, dict):
+                    node.children.append(self._parse_node(expr, path, depth + 1))
+        
+        # 递归处理 Assignment 的 left/right (赋值的两边)
+        if 'left' in obj and isinstance(obj['left'], dict):
+            node.children.append(self._parse_node(obj['left'], path, depth + 1))
+        if 'right' in obj and isinstance(obj['right'], dict):
+            node.children.append(self._parse_node(obj['right'], path, depth + 1))
+        
+        # 递归处理 operand (一元操作符的操作数)
+        if 'operand' in obj and isinstance(obj['operand'], dict):
+            node.children.append(self._parse_node(obj['operand'], path, depth + 1))
+        
+        # 递归处理 condition (if/conditional 的条件)
+        if 'condition' in obj and isinstance(obj['condition'], dict):
+            node.children.append(self._parse_node(obj['condition'], path, depth + 1))
+        
+        # 递归处理 ifTrue/ifFalse (Conditional 的分支)
+        if 'ifTrue' in obj and isinstance(obj['ifTrue'], dict):
+            node.children.append(self._parse_node(obj['ifTrue'], path, depth + 1))
+        if 'ifFalse' in obj and isinstance(obj['ifFalse'], dict):
+            node.children.append(self._parse_node(obj['ifFalse'], path, depth + 1))
+        
+        # 递归处理 true_branch/false_branch (if 语句的分支)
+        if 'true_branch' in obj and isinstance(obj['true_branch'], dict):
+            node.children.append(self._parse_node(obj['true_branch'], path, depth + 1))
+        if 'false_branch' in obj and isinstance(obj['false_branch'], dict):
+            node.children.append(self._parse_node(obj['false_branch'], path, depth + 1))
         
         return node
     

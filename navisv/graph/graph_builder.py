@@ -45,6 +45,8 @@ class NodeAttr:
             'direction': self.direction,
             'timing': self.timing,
             'module': self.module,
+            'location': self.location,
+            'attributes': self.attributes,
         }
 
 
@@ -54,8 +56,8 @@ class EdgeAttr:
     relation: str = 'drives'
     
     # 时序
-    timing: str = 'unknown'  # combinational, sequential_input, sequential_output
-    edge_kind: str = 'None'  # None, PosEdge, NegEdge
+    timing: str = 'unknown'
+    edge_kind: str = 'None'
     
     # 位精确
     bounds: Tuple[int, int] = (0, 0)
@@ -63,7 +65,8 @@ class EdgeAttr:
     
     # 条件
     condition: str = ''
-    condition_path: str = ''
+    condition_kind: str = ''  # 'if', 'case', 'ternary'
+    condition_signals: List[str] = field(default_factory=list)  # 控制信号列表
     
     # 位置
     location: Optional[Dict[str, Any]] = None
@@ -79,7 +82,8 @@ class EdgeAttr:
             'bounds': self.bounds,
             'bit_mapping': self.bit_mapping,
             'condition': self.condition,
-            'condition_path': self.condition_path,
+            'condition_kind': self.condition_kind,
+            'condition_signals': self.condition_signals,
             'location': self.location,
             'path_count': self.path_count,
         }
@@ -100,35 +104,81 @@ class GraphBuilder:
         
         # 缓存
         self._node_attrs: Dict[str, NodeAttr] = {}
-        self._edge_attrs: Dict[Tuple[int, int, str], EdgeAttr] = {}  # (src, dst, key)
+        self._edge_attrs: Dict[Tuple[str, str, Any], EdgeAttr] = {}
+        
+        # 符号映射: symbol_id -> (name, ast_path)
+        self._symbol_to_path: Dict[str, Tuple[str, str]] = {}
+        # 符号映射: netlist addr -> path
+        self._symbol_to_netlist_path: Dict[str, str] = {}
+        
+        # AST 分析结果: result_path -> [conditions]
+        self._signal_conditions: Dict[str, List[Dict]] = {}  # signal -> [{condition, kind, location}]
+        
+        self._build_symbol_map()
+    
+    def _build_symbol_map(self):
+        """构建符号映射表
+        
+        从 AST NamedValue: symbol="id name" 提取 name
+        从 Netlist 建立 name -> path 映射
+        """
+        self._symbol_to_path = {}  # sym_id -> (name, ast_path)
+        self._name_to_path = {}    # signal_name -> full_path
+        
+        if not self.ast or not self.ast.root:
+            return
+        
+        # 从 AST 收集 symbol_id -> (name, module_path)
+        def traverse(node):
+            if node.kind == 'NamedValue':
+                sym = node.attributes.get('symbol', '')
+                if sym and ' ' in sym:
+                    sym_id, name = sym.split(' ', 1)
+                    if sym_id not in self._symbol_to_path:
+                        self._symbol_to_path[sym_id] = (name, node.path)
+            for child in node.children:
+                traverse(child)
+        
+        traverse(self.ast.root)
+        
+        # 从 Netlist 的 named nodes 建立 name -> path 映射
+        for node in self.netlist.nodes:
+            if node.path:
+                # 使用完整路径作为 key
+                self._name_to_path[node.path] = node.path
+                # 也用简化的 name 作为 key（如果有重复会用第一个）
+                name = node.name
+                if name and name not in self._name_to_path:
+                    self._name_to_path[name] = node.path
+    
+    
     
     def build(self) -> nx.MultiDiGraph:
         """构建完整的 MultiDiGraph"""
         self.graph = nx.MultiDiGraph()
         
-        # 1. 添加 Named Nodes (Port + State)
+        # 1. 添加 Named Nodes (Port + State) - 必须先添加，因为条件分析依赖 node paths
         self._add_named_nodes()
         
-        # 2. 从 Netlist 添加边
+        # 2. 分析 AST 获取条件信息
+        self._analyze_ast_conditions()
+        
+        # 3. 从 Netlist 添加边
         self._add_edges()
         
-        # 3. 从 AST 提取条件信息
+        # 4. 丰富边的条件属性
         self._enrich_edges_with_conditions()
         
-        # 4. 推断时序分类
+        # 5. 推断时序分类
         self._classify_timing()
         
-        # 5. 计算 bit_mapping
+        # 6. 计算 bit_mapping
         self._calculate_bit_mapping()
         
         return self.graph
     
     def _add_named_nodes(self):
-        """添加 Named Nodes (Port + State)
-        
-        注意：同一个路径可能同时有 Port 和 State 表示（如 register 输出）。
-        State 节点的语义更丰富，应该优先添加。
-        """
+        """添加 Named Nodes (Port + State)"""
         # 先添加 State 节点（更高优先级）
         for state in self.netlist.get_registers():
             attr = NodeAttr(
@@ -144,7 +194,6 @@ class GraphBuilder:
         
         # 再添加 Port 节点（如果不存在同名节点）
         for port in self.netlist.get_ports():
-            # 跳过已经是 State 的节点
             if port.path in self._node_attrs:
                 continue
             
@@ -181,25 +230,22 @@ class GraphBuilder:
             if not src_node.path or not tgt_node.path:
                 continue
             
-            # 跳过 self-loop（寄存器反馈边）
+            # 跳过 self-loop
             if src_node.path == tgt_node.path:
                 continue
             
-            # 获取或创建边属性
             attr = EdgeAttr(
                 edge_kind=edge.edge_kind,
                 bounds=edge.bounds,
                 location=edge.symbol.get('location') if edge.symbol else None,
             )
             
-            # 添加边（MultiDiGraph 支持多边）
             key = self.graph.add_edge(
                 src_node.path, 
                 tgt_node.path,
                 **attr.to_dict()
             )
             
-            # 记录边属性（用于后续丰富）
             self._edge_attrs[(src_node.path, tgt_node.path, key)] = attr
     
     def _extract_module(self, path: str) -> str:
@@ -207,134 +253,254 @@ class GraphBuilder:
         parts = path.rsplit('.', 1)
         return parts[0] if len(parts) > 1 else 'top'
     
-    def _enrich_edges_with_conditions(self):
+    def _analyze_ast_conditions(self):
         """
-        从 AST 提取条件信息，丰富边属性
+        分析 AST，提取所有信号的条件赋值信息
         
-        遍历 AST 中的 if/case/always 块，
-        找到对应的边并添加 condition 信息。
+        建立映射: signal_path -> [{condition, kind, location}]
         """
-        # 查找所有条件语句
-        for node in self.ast._traverse(self.ast.root):
-            if node.kind == 'IfStatement':
-                self._process_if_statement(node)
-            elif node.kind == 'CaseStatement':
-                self._process_case_statement(node)
-            elif node.kind == 'ProceduralBlock':
-                self._process_procedural_block(node)
-    
-    def _process_if_statement(self, if_node):
-        """处理 if 语句"""
-        # 提取条件表达式
-        condition_expr = self._extract_condition(if_node.attributes.get('condition'))
+        self._signal_conditions = {}
         
-        # 处理 true branch 和 false branch
-        for branch_name, branch in [('true', if_node.attributes.get('true_branch')),
-                                   ('false', if_node.attributes.get('false_branch'))]:
-            if branch:
-                self._apply_condition_to_branch(condition_expr, branch, branch_name)
-    
-    def _process_case_statement(self, case_node):
-        """处理 case 语句"""
-        # 提取 case 表达式
-        case_expr = self._extract_condition(case_node.attributes.get('condition'))
+        if not self.ast or not self.ast.root:
+            return
         
-        # 处理每个 case item
+        # 遍历所有模块
+        for module in self.ast.get_modules():
+            self._analyze_module_conditions(module)
+    
+    def _analyze_module_conditions(self, module_node):
+        """分析模块内的条件语句"""
+        for node in self._traverse_ast(module_node):
+            if node.kind == 'Case':
+                self._analyze_case(node)
+            elif node.kind == 'Conditional':
+                self._analyze_conditional(node)
+    
+    def _analyze_case(self, case_node):
+        """
+        分析 case 语句，建立 目标信号 -> 条件 的映射
+        
+        Case 结构:
+        {
+            "kind": "Case",
+            "expr": {symbol: "id name"},  # 选择变量
+            "items": [
+                {
+                    "expressions": [{constant: "3'b0"}],  # case 值
+                    "stmt": {kind: "ExpressionStatement", expr: {Assignment}}
+                },
+                ...
+            ]
+        }
+        """
+        # 提取 case 选择变量
+        case_var = self._extract_expr_path(case_node.attributes.get('expr', {}))
+        
+        if not case_var:
+            return
+        
+        # 遍历每个 case item
         for item in case_node.attributes.get('items', []):
-            item_expr = self._extract_condition(item.get('condition'))
-            full_condition = f"{case_expr} == {item_expr}" if item_expr else case_expr
+            # 提取 case 值
+            case_value = self._extract_case_value(item)
             
-            if item.get('body'):
-                self._apply_condition_to_branch(full_condition, item['body'], 'case')
+            # 构建完整条件
+            condition = f"{case_var} == {case_value}" if case_value else case_var
+            
+            # 分析 item 内的赋值
+            stmt = item.get('stmt', {})
+            self._extract_assignments_from_stmt(condition, 'case', stmt)
+        
+        # 处理 default case
+        default_stmt = case_node.attributes.get('defaultCase', {})
+        if default_stmt:
+            self._extract_assignments_from_stmt(case_var, 'case', default_stmt)
     
-    def _process_procedural_block(self, block_node):
-        """处理过程块 (always_ff, always_comb 等)"""
-        # 遍历块内的赋值语句
-        for stmt in block_node.children:
-            if stmt.kind == 'Assignment':
-                self._process_assignment(stmt)
+    def _analyze_conditional(self, cond_node):
+        """
+        分析条件运算符 (?:)
+        
+        Conditional 结构:
+        {
+            "kind": "Conditional",
+            "condition": {...},
+            "trueExpression": {...},
+            "falseExpression": {...}
+        }
+        """
+        condition = self._extract_expr_path(cond_node.attributes.get('condition', {}))
+        
+        if not condition:
+            return
+        
+        # true branch
+        true_expr = cond_node.attributes.get('trueExpression', {})
+        self._extract_assignments_from_expr(f"{condition}", 'ternary', true_expr)
+        
+        # false branch
+        false_expr = cond_node.attributes.get('falseExpression', {})
+        self._extract_assignments_from_expr(f"!{condition}", 'ternary', false_expr)
     
-    def _extract_condition(self, condition_obj) -> str:
-        """从条件对象提取条件字符串"""
-        if not condition_obj:
+    def _extract_case_value(self, item: Dict) -> str:
+        """从 case item 提取 case 值"""
+        expressions = item.get('expressions', [])
+        for expr in expressions:
+            if isinstance(expr, dict):
+                # 直接返回 constant 值
+                constant = expr.get('constant', '')
+                if constant:
+                    return constant
+        return ''
+    
+    def _extract_expr_path(self, expr: Dict) -> str:
+        """
+        从表达式中提取路径
+        
+        支持 NamedValue: symbol="id name"
+        匹配到 _node_attrs 中的路径
+        """
+        if not isinstance(expr, dict):
             return ''
         
-        # 简化处理：直接返回 kind 作为占位符
-        # 完整实现需要遍历条件树
-        if isinstance(condition_obj, dict):
-            return condition_obj.get('kind', '')
-        return str(condition_obj)
+        kind = expr.get('kind', '')
+        
+        if kind == 'NamedValue':
+            sym = expr.get('symbol', '')
+            if ' ' in sym:
+                sym_id, name = sym.split(' ', 1)
+                
+                # 先从 _symbol_to_path 获取 AST path
+                if sym_id in self._symbol_to_path:
+                    stored_name, ast_path = self._symbol_to_path[sym_id]
+                    
+                    # 直接匹配 _node_attrs 中的路径
+                    for node_path in self._node_attrs:
+                        if node_path.endswith(f'.{stored_name}'):
+                            return node_path
+                    
+                    # 如果找不到精确匹配，返回 name
+                    return stored_name
+                return name
+            return sym
+        
+        # 递归处理
+        for key in ('left', 'right', 'operand', 'operand1', 'operand2', 'expr'):
+            if key in expr:
+                result = self._extract_expr_path(expr[key])
+                if result:
+                    return result
+        
+        return ''
     
-    def _apply_condition_to_branch(self, condition: str, body, branch_type: str):
-        """应用条件到分支"""
-        # 简化：只在有明确赋值目标时添加条件
-        pass
+    def _extract_assignments_from_stmt(self, condition: str, cond_kind: str, stmt: Dict):
+        """从语句中提取赋值目标"""
+        if not isinstance(stmt, dict):
+            return
+        
+        if stmt.get('kind') == 'ExpressionStatement':
+            expr = stmt.get('expr', {})
+            self._extract_assignments_from_expr(condition, cond_kind, expr)
+        elif stmt.get('kind') == 'Block':
+            for item in stmt.get('items', []):
+                self._extract_assignments_from_stmt(condition, cond_kind, item)
     
-    def _process_assignment(self, assign_node):
-        """处理赋值语句"""
-        # 简化：边已经通过 Netlist 添加
-        pass
+    def _extract_assignments_from_expr(self, condition: str, cond_kind: str, expr: Dict):
+        """从表达式中提取赋值并建立条件映射"""
+        if not isinstance(expr, dict):
+            return
+        
+        kind = expr.get('kind', '')
+        
+        if kind == 'Assignment':
+            left = expr.get('left', {})
+            target_path = self._extract_expr_path(left)
+            
+            if target_path and target_path in self._node_attrs:
+                if target_path not in self._signal_conditions:
+                    self._signal_conditions[target_path] = []
+                self._signal_conditions[target_path].append({
+                    'condition': condition,
+                    'kind': cond_kind,
+                    'source': 'ast'
+                })
+        
+        elif kind == 'Block':
+            for item in expr.get('items', []):
+                self._extract_assignments_from_expr(condition, cond_kind, item)
+    
+    def _traverse_ast(self, node) -> List:
+        """遍历 AST 节点"""
+        results = [node]
+        for child in node.children:
+            results.extend(self._traverse_ast(child))
+        return results
+    
+    def _enrich_edges_with_conditions(self):
+        """
+        丰富边的条件属性
+        
+        对于每个目标信号，检查是否有 AST 分析的条件信息，
+        并更新对应的边。
+        """
+        for target_path, conditions in self._signal_conditions.items():
+            if not conditions:
+                continue
+            
+            # 查找所有以 target_path 为目标的边
+            for (src, dst, key), attr in self._edge_attrs.items():
+                if dst == target_path and not attr.condition:
+                    # 使用第一个条件（可以扩展为多条件）
+                    cond_info = conditions[0]
+                    attr.condition = cond_info['condition']
+                    attr.condition_kind = cond_info['kind']
+                    attr.condition_signals = [c['condition'] for c in conditions]
+                    
+                    # 更新图中边的属性
+                    if self.graph.has_edge(src, dst, key):
+                        self.graph[src][dst][key]['condition'] = attr.condition
+                        self.graph[src][dst][key]['condition_kind'] = attr.condition_kind
+                        self.graph[src][dst][key]['condition_signals'] = attr.condition_signals
     
     def _classify_timing(self):
         """
         推断时序分类
-        
-        规则:
-        - combinational: 所有 fan_in 边的 edge_kind 都是 None
-        - sequential_input: 有 PosEdge/NegEdge 边指向 State
-        - sequential_output: State 节点的输出
         """
-        for node_id in self.graph.nodes():
-            node_attr = self._node_attrs.get(node_id)
-            if not node_attr:
-                continue
-            
-            # 获取所有入边
-            in_edges = list(self.graph.in_edges(node_id, data=True))
-            
-            if not in_edges:
-                continue
-            
-            # 检查是否有时钟边
-            has_clock = any(d.get('edge_kind') in ('PosEdge', 'NegEdge') 
-                          for _, _, d in in_edges)
-            
-            if node_attr.kind == 'State':
-                # State 节点是 sequential
+        # 标记 State 节点
+        for node_path in self.graph.nodes():
+            node_attr = self._node_attrs.get(node_path)
+            if node_attr and node_attr.kind == 'State':
                 node_attr.timing = 'sequential'
-            elif has_clock:
-                # 有时钟边的是 sequential_input
-                node_attr.timing = 'sequential_input'
-            else:
-                # 纯组合逻辑
-                node_attr.timing = 'combinational'
-            
-            # 更新图中的属性
-            self.graph.nodes[node_id]['timing'] = node_attr.timing
+                self.graph.nodes[node_path]['timing'] = 'sequential'
         
-        # 更新边属性
+        # 分类边
         for src, dst, data in self.graph.edges(data=True):
-            edge_key = self.graph[src][dst]
-            # 时序逻辑输出给后续节点提供时钟
-            src_timing = self._node_attrs.get(src, NodeAttr('', '', '')).timing
-            if src_timing == 'sequential':
-                data['timing'] = 'combinational'  # 寄存器输出是组合延迟
-            elif data.get('edge_kind') in ('PosEdge', 'NegEdge'):
+            src_attr = self._node_attrs.get(src)
+            dst_attr = self._node_attrs.get(dst)
+            
+            if not src_attr or not dst_attr:
+                data['timing'] = 'combinational'
+                continue
+            
+            if data.get('edge_kind') in ('PosEdge', 'NegEdge'):
+                data['timing'] = 'sequential_input'
+            elif src_attr.kind == 'State' and dst_attr.kind != 'State':
+                data['timing'] = 'sequential_output'
+            elif dst_attr.kind == 'State' and data.get('edge_kind') == 'None':
                 data['timing'] = 'sequential_input'
             else:
                 data['timing'] = 'combinational'
     
     def _calculate_bit_mapping(self):
-        """
-        计算 bit_mapping
-        
-        规则:
-        - 如果 bounds 相同，bit 是一一对应
-        - 如果不同，需要分析位选择操作
-        """
+        """计算 bit_mapping"""
         for src, dst, data in self.graph.edges(data=True):
             bounds = data.get('bounds', (0, 0))
-            bit_mapping = {i: i for i in range(bounds[0], bounds[1] + 1)}
+            msb, lsb = bounds
+            
+            if msb >= lsb:
+                bit_mapping = {i: i for i in range(lsb, msb + 1)}
+            else:
+                bit_mapping = {}
+            
             data['bit_mapping'] = bit_mapping
     
     def summary(self) -> Dict[str, Any]:
@@ -342,20 +508,23 @@ class GraphBuilder:
         if not self.graph:
             return {}
         
-        # 节点统计
         node_kinds = {}
+        timing_stats = {}
         for n in self.graph.nodes():
             kind = self.graph.nodes[n].get('kind', 'unknown')
             node_kinds[kind] = node_kinds.get(kind, 0) + 1
+            t = self.graph.nodes[n].get('timing', 'unknown')
+            timing_stats[t] = timing_stats.get(t, 0) + 1
         
-        # 边统计
         edge_kinds = {}
-        timing_stats = {}
+        cond_stats = {'with_condition': 0, 'without_condition': 0}
         for u, v, d in self.graph.edges(data=True):
             ek = d.get('edge_kind', 'None')
             edge_kinds[ek] = edge_kinds.get(ek, 0) + 1
-            t = d.get('timing', 'unknown')
-            timing_stats[t] = timing_stats.get(t, 0) + 1
+            if d.get('condition'):
+                cond_stats['with_condition'] += 1
+            else:
+                cond_stats['without_condition'] += 1
         
         return {
             'nodes': self.graph.number_of_nodes(),
@@ -363,13 +532,13 @@ class GraphBuilder:
             'node_kinds': node_kinds,
             'edge_kinds': edge_kinds,
             'timing_stats': timing_stats,
+            'condition_stats': cond_stats,
         }
 
 
 if __name__ == '__main__':
     from navisv.parsers import ASTParser, NetlistParser
     
-    # 测试
     ast = ASTParser('/tmp/navisv_slang/ast.json').parse()
     netlist = NetlistParser('/tmp/navisv_netlist/netlist.json').parse()
     
@@ -378,8 +547,17 @@ if __name__ == '__main__':
     
     print("=== GraphBuilder 测试 ===")
     print(f"Summary: {builder.summary()}")
-    print(f"\nNodes: {graph.number_of_nodes()}")
-    print(f"Edges: {graph.number_of_edges()}")
-    print("\nEdges with attributes:")
-    for u, v, d in list(graph.edges(data=True))[:5]:
-        print(f"  {u} -> {v}: timing={d.get('timing')}, edge_kind={d.get('edge_kind')}")
+    
+    print(f"\n=== Signal conditions ===")
+    print(f"Signals with conditions: {list(builder._signal_conditions.keys())}")
+    for sig, conds in builder._signal_conditions.items():
+        print(f"  {sig}: {conds}")
+    
+    print(f"\n=== Edges with conditions ===")
+    for u, v, d in graph.edges(data=True):
+        if d.get('condition'):
+            print(f"  {u} -> {v}: condition='{d.get('condition')}'")
+    
+    print(f"\n=== All edges ===")
+    for u, v, d in graph.edges(data=True):
+        print(f"  {u} -> {v}: timing={d.get('timing')}, condition='{d.get('condition', '')}'")
