@@ -436,6 +436,82 @@ class DesignGraph:
             loc = parts[1]
             return path, loc
         return item.strip(), ''
+    
+    def trace_path(self, from_signal: str, to_signal: str, enrich: bool = True) -> Dict[str, Any]:
+        """
+        追踪两点间的路径（带完整信息）
+        
+        Args:
+            from_signal: 起始信号
+            to_signal: 目标信号
+            enrich: 是否用 AST 条件信息增强路径节点
+        
+        Returns:
+            {
+                'from': from_signal,
+                'to': to_signal,
+                'path': [{path, location, condition?, statement?}],
+                'success': bool
+            }
+        """
+        if not hasattr(self, '_netlist_driver') or not self._netlist_driver:
+            return {'from': from_signal, 'to': to_signal, 'path': [], 'success': False}
+        
+        result = self._netlist_driver.run_path_trace(from_signal, to_signal)
+        
+        # 解析路径
+        path_nodes = self._parse_path_trace(result['stdout'])
+        
+        # 用 AST conditions 增强
+        if enrich:
+            for node in path_nodes:
+                # 查找这个节点相关的 condition
+                self._enrich_node_with_conditions(node)
+        
+        return {
+            'from': from_signal,
+            'to': to_signal,
+            'path': path_nodes,
+            'success': result['success']
+        }
+    
+    def _parse_path_trace(self, stdout: str) -> List[Dict[str, str]]:
+        """解析 path_trace 输出，提取路径节点"""
+        import re
+        ansi_pattern = re.compile(r'\[[0-9;]*m')
+        clean = ansi_pattern.sub('', stdout)
+        
+        nodes = []
+        current_loc = ''
+        for line in clean.splitlines():
+            loc_match = re.search(r'^(\S+:)(\d+):(\d+):', line)
+            if loc_match:
+                loc_path = loc_match.group(1).replace('../chipsonar/slang_test/', '')
+                current_loc = f"{loc_path}{loc_match.group(2)}:{loc_match.group(3)}"
+            
+            match = re.search(r'value\s+(\S+)\[', line)
+            if match:
+                path = match.group(1)
+                nodes.append({'path': path, 'location': current_loc})
+                current_loc = ''
+        
+        return nodes
+    
+    def _enrich_node_with_conditions(self, node: Dict):
+        """用 AST conditions 增强单个路径节点"""
+        path = node.get('path', '')
+        signal_name = path.split('.')[-1] if '.' in path else path
+        
+        # 查找这个信号相关的 condition
+        for sig, conds in self._signal_conditions.items():
+            for c in conds:
+                cond = c.get('condition', '')
+                # 简单匹配：condition 中包含信号名
+                if signal_name in cond:
+                    node['condition'] = c.get('condition')
+                    node['statement'] = c.get('statement', '')
+                    node['condition_kind'] = c.get('kind')
+                    return
 
 
 if __name__ == '__main__':
