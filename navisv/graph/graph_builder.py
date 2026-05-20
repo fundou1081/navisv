@@ -835,12 +835,14 @@ class GraphBuilder:
                 if target_path not in self._signal_conditions:
                     self._signal_conditions[target_path] = []
                 
-                # 查找关联的 timing 信息
+                # 查找关联的 timing 信息 (找最近的在当前 line 之前的 timing)
                 timing_info = None
-                for line, info in self._procedural_timing.items():
-                    if location['line'] >= line and location['line'] < line + 20:
-                        timing_info = info
-                        break
+                best_line = None
+                for line, info in sorted(self._procedural_timing.items()):
+                    if line <= location['line']:
+                        if best_line is None or line > best_line:
+                            best_line = line
+                            timing_info = info
                 
                 condition_entry = {
                     'condition': condition,
