@@ -317,21 +317,58 @@ class GraphBuilder:
             self._analyze_module_conditions(module)
     
     def _analyze_module_conditions(self, module_node):
-        """分析模块内的条件语句 (使用递归遍历而非扁平遍历)"""
-        # 使用 ASTParser 的 find_enclosing 来获取 enclosing ProceduralBlock
-        for node in self._traverse_ast(module_node):
-            if node.kind == 'Case':
-                self._analyze_case(node)
-            elif node.kind == 'Conditional':
-                self._analyze_conditional(node)
-            elif node.kind == 'ContinuousAssign':
-                self._analyze_continuous_assign_ternary(node)
-            elif node.kind == 'Net' and node.attributes.get('initializer'):
-                self._analyze_net_initializer_ternary(node)
-            elif node.kind == 'ProceduralBlock':
-                self._extract_timing_info(node)
+        """分析模块内的条件语句 (语义化递归遍历，携带 timing context)"""
+        self._traverse_with_timing(module_node, timing_ctx=None)
     
-    def _analyze_case(self, case_node):
+    def _traverse_with_timing(self, node, timing_ctx):
+        """递归遍历 AST，timing context 随遍历传递
+        
+        Args:
+            node: AST node
+            timing_ctx: timing context from enclosing ProceduralBlock, or None
+        """
+        kind = node.kind
+        
+        if kind == 'ProceduralBlock':
+            # 提取这个 ProceduralBlock 的 timing 作为新的 context
+            new_timing = self._extract_timing_from_block(node)
+            for child in node.children:
+                self._traverse_with_timing(child, timing_ctx=new_timing)
+            return  # children 已处理，不需要继续
+        
+        elif kind == 'Case':
+            # Case 语句内部是纯组合逻辑，但仍传递 timing context
+            # 以便嵌套的赋值语句知道它们是否在 ProceduralBlock 内
+            self._analyze_case(node, timing_ctx)
+            # 继续遍历处理 case items
+            for child in node.children:
+                self._traverse_with_timing(child, timing_ctx)
+            return
+        
+        elif kind == 'Conditional':
+            # Conditional 可能被 Case 或 ProceduralBlock 包含
+            # 如果在 ProceduralBlock 内，有 timing context
+            self._analyze_conditional(node, timing_ctx)
+            # 继续遍历 children，传递 timing context
+            for child in node.children:
+                self._traverse_with_timing(child, timing_ctx)
+            return
+        
+        elif kind == 'ContinuousAssign':
+            # ContinuousAssign 是纯组合逻辑
+            self._analyze_continuous_assign_ternary(node)
+            return
+        
+        elif kind == 'Net' and node.attributes.get('initializer'):
+            self._analyze_net_initializer_ternary(node)
+            return
+        
+        else:
+            # 其他节点，继续递归
+            for child in node.children:
+                self._traverse_with_timing(child, timing_ctx)
+    
+    def _analyze_case(self, case_node, timing_ctx=None):
         """
         分析 case 语句，建立 目标信号 -> 条件 的映射
         
@@ -364,14 +401,14 @@ class GraphBuilder:
             
             # 分析 item 内的赋值
             stmt = item.get('stmt', {})
-            self._extract_assignments_from_stmt(condition, 'case', stmt)
+            self._extract_assignments_from_stmt(condition, 'case', stmt, timing_ctx)
         
         # 处理 default case
         default_stmt = case_node.attributes.get('defaultCase', {})
         if default_stmt:
-            self._extract_assignments_from_stmt(case_var, 'case', default_stmt)
+            self._extract_assignments_from_stmt(case_var, 'case', default_stmt, timing_ctx)
     
-    def _analyze_conditional_op(self, cond_node_or_dict):
+    def _analyze_conditional_op(self, cond_node_or_dict, timing_ctx=None):
         """分析三元运算符 ConditionalOp"""
         self._analyze_conditional(cond_node_or_dict)
     
@@ -420,21 +457,14 @@ class GraphBuilder:
         # 提取条件
         self._extract_ternary_conditions(target_path, initializer)
     
-    def _extract_timing_info(self, procedural_block):
-        """从 ProceduralBlock 提取时钟和复位信息
+    def _extract_timing_from_block(self, procedural_block):
+        """从 ProceduralBlock 提取时钟和复位信息，返回 dict
         
-        AST 结构:
-        ProceduralBlock {
-            procedureKind: "Always",
-            body: Timed {
-                timing: EventList { events: [SignalEvent, ...] }
-            }
-        }
-        
-        SignalEvent {
-            expr: NamedValue (信号),
-            edge: "PosEdge" | "NegEdge"
-        }
+        Returns:
+            dict: {'clock': [{'signal': path, 'edge': 'PosEdge'}], 
+                   'reset': [{'signal': path, 'edge': 'NegEdge'}],
+                   'is_register': True}
+            如果没有 timing 信息，返回 None
         """
         # 从 children 中找到 Timed 节点
         timed_node = None
@@ -444,20 +474,30 @@ class GraphBuilder:
                 break
         
         if not timed_node:
-            return
+            return None
         
-        # 从 Timed 获取 timing 信息 (EventList.events)
+        # 从 Timed 获取 timing 信息
+        # timing 可能是:
+        # 1. EventList with events array: {'kind': 'EventList', 'events': [...]}
+        # 2. Single SignalEvent: {'kind': 'SignalEvent', 'expr': {...}, 'edge': 'PosEdge'}
         timing_attr = timed_node.attributes.get('timing', {})
-        if isinstance(timing_attr, dict) and timing_attr.get('kind') == 'EventList':
-            events = timing_attr.get('events', [])
+        
+        clock_events = []
+        reset_events = []
+        
+        if isinstance(timing_attr, dict):
+            if timing_attr.get('kind') == 'EventList':
+                # Normal EventList with events array
+                events = timing_attr.get('events', [])
+            elif timing_attr.get('kind') == 'SignalEvent':
+                # Single SignalEvent directly
+                events = [timing_attr]
+            else:
+                events = []
         elif isinstance(timing_attr, list):
             events = timing_attr
         else:
             events = []
-        
-        # 提取时钟和复位事件
-        clock_events = []
-        reset_events = []
         
         for event in events:
             if not isinstance(event, dict):
@@ -468,7 +508,6 @@ class GraphBuilder:
                 signal_path = self._extract_expr_path(expr)
                 
                 if edge == 'NegEdge':
-                    # NegEdge 通常是异步复位
                     reset_events.append({
                         'signal': signal_path,
                         'edge': edge
@@ -479,16 +518,20 @@ class GraphBuilder:
                         'edge': edge
                     })
         
-        # 获取 line 号 (从 Timed 的 attributes)
-        line = timed_node.attributes.get('source_line_start', 0)
-        
         if clock_events or reset_events:
-            self._procedural_timing[line] = {
+            return {
                 'clock': clock_events if clock_events else None,
                 'reset': reset_events if reset_events else None,
                 'is_register': True,
                 'procedureKind': procedural_block.attributes.get('procedureKind', 'Always')
             }
+        
+        return None
+    
+    def _extract_timing_info(self, procedural_block):
+        """从 ProceduralBlock 提取时钟和复位信息 (旧接口，保留用于兼容)"""
+        # 调用新方法，但不存储到 dict
+        self._extract_timing_from_block(procedural_block)
     
     def _extract_ternary_conditions(self, target_path: str, cond_op: Dict):
         """从 ConditionalOp 提取条件并建立到目标信号的映射"""
@@ -610,7 +653,7 @@ class GraphBuilder:
         if right.get('kind') == 'ConditionalOp':
             self._extract_ternary_conditions(target_path, right)
     
-    def _analyze_conditional(self, cond_node_or_dict):
+    def _analyze_conditional(self, cond_node_or_dict, timing_ctx=None):
         """
         分析 if/else 语句
         
@@ -652,12 +695,12 @@ class GraphBuilder:
                 
                 if_true = attrs.get('ifTrue')
                 if if_true:
-                    self._extract_assignments_from_stmt(f"{condition}", 'if', if_true)
+                    self._extract_assignments_from_stmt(f"{condition}", 'if', if_true, timing_ctx)
             
             if_false = attrs.get('ifFalse')
             if if_false and isinstance(if_false, dict):
                 if if_false.get('kind') == 'Conditional':
-                    self._analyze_conditional(if_false)
+                    self._analyze_conditional(if_false, timing_ctx)
                 elif if_false.get('kind') == 'ConditionalOp':
                     self._analyze_conditional_op(if_false)
                 else:
@@ -665,9 +708,9 @@ class GraphBuilder:
                         last_cond_expr = conditions[-1].get('expr', {})
                         last_cond = self._extract_expr_path(last_cond_expr)
                         if last_cond:
-                            self._extract_assignments_from_stmt(f"!{last_cond}", 'if', if_false)
+                            self._extract_assignments_from_stmt(f"!{last_cond}", 'if', if_false, timing_ctx)
                         else:
-                            self._extract_assignments_from_stmt('', 'else', if_false)
+                            self._extract_assignments_from_stmt('', 'else', if_false, timing_ctx)
         
         # 处理三元运算符结构 (condition, trueExpression, falseExpression)
         # ConditionalOp 使用 conditions/left/right 而非 condition/trueExpression/falseExpression
@@ -684,7 +727,7 @@ class GraphBuilder:
             # 真分支: trueExpression 或 left
             true_expr = attrs.get('trueExpression', {}) or attrs.get('left', {})
             if true_expr:
-                self._extract_assignments_from_expr(f"{condition}", 'ternary', true_expr)
+                self._extract_assignments_from_expr(f"{condition}", 'ternary', true_expr, timing_ctx)
             
             # 假分支: falseExpression 或 right
             false_expr = attrs.get('falseExpression', {}) or attrs.get('right', {})
@@ -692,9 +735,9 @@ class GraphBuilder:
                 # 嵌套三元: right 可能是另一个 ConditionalOp
                 if isinstance(false_expr, dict) and false_expr.get('kind') == 'ConditionalOp':
                     # 递归处理嵌套三元
-                    self._analyze_conditional_op(false_expr)
+                    self._analyze_conditional_op(false_expr, timing_ctx)
                 else:
-                    self._extract_assignments_from_expr(f"!{condition}", 'ternary', false_expr)
+                    self._extract_assignments_from_expr(f"!{condition}", 'ternary', false_expr, timing_ctx)
     
     def _extract_case_value(self, item: Dict) -> str:
         """从 case item 提取 case 值"""
@@ -747,19 +790,19 @@ class GraphBuilder:
         
         return ''
     
-    def _extract_assignments_from_stmt(self, condition: str, cond_kind: str, stmt: Dict):
+    def _extract_assignments_from_stmt(self, condition: str, cond_kind: str, stmt: Dict, timing_ctx=None):
         """从语句中提取赋值目标"""
         if not isinstance(stmt, dict):
             return
         
         if stmt.get('kind') == 'ExpressionStatement':
             expr = stmt.get('expr', {})
-            self._extract_assignments_from_expr(condition, cond_kind, expr)
+            self._extract_assignments_from_expr(condition, cond_kind, expr, timing_ctx)
         elif stmt.get('kind') == 'Block':
             for item in stmt.get('items', []):
-                self._extract_assignments_from_stmt(condition, cond_kind, item)
+                self._extract_assignments_from_stmt(condition, cond_kind, item, timing_ctx)
     
-    def _extract_assignments_from_expr(self, condition: str, cond_kind: str, expr: Dict):
+    def _extract_assignments_from_expr(self, condition: str, cond_kind: str, expr: Dict, timing_ctx=None):
         """从表达式中提取赋值并建立条件映射"""
         if not isinstance(expr, dict):
             return
@@ -777,7 +820,7 @@ class GraphBuilder:
                 
                 # 处理右侧表达式 (可能是 ConditionalOp)
                 right = assignment.get('right', {})
-                self._extract_assignments_from_expr(condition, cond_kind, right)
+                self._extract_assignments_from_expr(condition, cond_kind, right, timing_ctx)
             return
         
         # 处理 ConditionalOp (三元运算符)
@@ -833,15 +876,6 @@ class GraphBuilder:
                 if target_path not in self._signal_conditions:
                     self._signal_conditions[target_path] = []
                 
-                # 查找关联的 timing 信息 (找最近的在当前 line 之前的 timing)
-                timing_info = None
-                best_line = None
-                for line, info in sorted(self._procedural_timing.items()):
-                    if line <= location['line']:
-                        if best_line is None or line > best_line:
-                            best_line = line
-                            timing_info = info
-                
                 condition_entry = {
                     'condition': condition,
                     'kind': cond_kind,
@@ -851,12 +885,13 @@ class GraphBuilder:
                     'if_expression': if_expression
                 }
                 
-                if timing_info:
+                # 使用传入的 timing context (语义化地从祖先 ProceduralBlock 获取)
+                if timing_ctx:
                     condition_entry['target_kind'] = 'register_output'
-                    condition_entry['clock_domain'] = timing_info['clock'][0]['signal'] if timing_info['clock'] else None
-                    condition_entry['edge_type'] = timing_info['clock'][0]['edge'] if timing_info['clock'] else None
-                    if timing_info['reset']:
-                        condition_entry['reset_signal'] = timing_info['reset'][0]['signal']
+                    condition_entry['clock_domain'] = timing_ctx['clock'][0]['signal'] if timing_ctx['clock'] else None
+                    condition_entry['edge_type'] = timing_ctx['clock'][0]['edge'] if timing_ctx['clock'] else None
+                    if timing_ctx['reset']:
+                        condition_entry['reset_signal'] = timing_ctx['reset'][0]['signal']
                         condition_entry['reset_kind'] = 'async'
                 else:
                     condition_entry['target_kind'] = 'combinational'
@@ -865,7 +900,7 @@ class GraphBuilder:
         
         elif kind == 'Block':
             for item in expr.get('items', []):
-                self._extract_assignments_from_expr(condition, cond_kind, item)
+                self._extract_assignments_from_expr(condition, cond_kind, item, timing_ctx)
     
     def _traverse_ast(self, node) -> List:
         """遍历 AST 节点"""
