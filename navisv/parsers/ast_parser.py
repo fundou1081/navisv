@@ -247,6 +247,15 @@ class ASTParser:
         for child in node.children:
             yield from self._traverse(child)
     
+    def find_enclosing(self, node: ASTNode, kind: str) -> Optional[ASTNode]:
+        """查找最近封闭的指定类型父节点"""
+        current = getattr(node, 'parent', None)
+        while current:
+            if current.kind == kind:
+                return current
+            current = getattr(current, 'parent', None)
+        return None
+    
     def summary(self) -> Dict[str, Any]:
         """返回摘要"""
         kind_counts = {}

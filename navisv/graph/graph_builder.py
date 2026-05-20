@@ -317,20 +317,18 @@ class GraphBuilder:
             self._analyze_module_conditions(module)
     
     def _analyze_module_conditions(self, module_node):
-        """分析模块内的条件语句"""
+        """分析模块内的条件语句 (使用递归遍历而非扁平遍历)"""
+        # 使用 ASTParser 的 find_enclosing 来获取 enclosing ProceduralBlock
         for node in self._traverse_ast(module_node):
             if node.kind == 'Case':
                 self._analyze_case(node)
             elif node.kind == 'Conditional':
                 self._analyze_conditional(node)
             elif node.kind == 'ContinuousAssign':
-                # 处理连续赋值中的 ternary (a = b ? c : d)
                 self._analyze_continuous_assign_ternary(node)
             elif node.kind == 'Net' and node.attributes.get('initializer'):
-                # 处理 wire x = y ? a : b 形式的 Net 初始化
                 self._analyze_net_initializer_ternary(node)
             elif node.kind == 'ProceduralBlock':
-                # 提取 ProceduralBlock 的 timing 信息 (时钟/复位)
                 self._extract_timing_info(node)
     
     def _analyze_case(self, case_node):
