@@ -363,6 +363,16 @@ class GraphBuilder:
             self._analyze_net_initializer_ternary(node)
             return
         
+        elif kind == 'Assignment':
+            # 直接在 always 块中的赋值 (无 if 包装，如 no_reset_reg <= data_in)
+            # node.attributes 缺少 kind 字段，需要从 node.kind 获取
+            if timing_ctx and timing_ctx.get('clock'):
+                # 创建带 kind 的 expr dict
+                expr_dict = dict(node.attributes)
+                expr_dict['kind'] = 'Assignment'
+                self._extract_assignments_from_expr('', 'plain', expr_dict, timing_ctx)
+            return
+        
         else:
             # 其他节点，继续递归
             for child in node.children:
