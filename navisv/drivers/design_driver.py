@@ -63,6 +63,7 @@ class DesignDriver:
         # 结果缓存
         self._slang_driver: Optional[SlangDriver] = None
         self._netlist_driver: Optional[NetlistDriver] = None
+        self._netlist_result: Optional[Dict] = None  # NetlistDriver.run() 结果
         self._ast_parser: Optional[ASTParser] = None
         self._netlist_parser: Optional[NetlistParser] = None
         self._graph_builder: Optional[GraphBuilder] = None
@@ -164,7 +165,7 @@ class DesignDriver:
         self._graph_builder = GraphBuilder(self._ast_parser, self._netlist_parser, 
                                                self._ast_json_path, self._source_files)
         graph = self._graph_builder.build()
-        self._design_graph = DesignGraph(graph, self._graph_builder._signal_conditions)
+        self._design_graph = DesignGraph(graph, self._graph_builder._signal_conditions, self._netlist_driver)
     
     @property
     def design_graph(self) -> DesignGraph:

@@ -15,14 +15,18 @@ class DesignGraph:
     封装 MultiDiGraph，提供语义查询接口。
     """
     
-    def __init__(self, graph: nx.MultiDiGraph, signal_conditions: Optional[Dict[str, List[Dict]]] = None):
+    def __init__(self, graph: nx.MultiDiGraph, 
+                 signal_conditions: Optional[Dict[str, List[Dict]]] = None,
+                 netlist_driver=None):
         """
         Args:
             graph: 由 GraphBuilder 构建的 MultiDiGraph
             signal_conditions: {signal_path: [{condition, kind, source, location}]}
+            netlist_driver: NetlistDriver 实例（用于 fan-in/fan-out 查询）
         """
         self.graph = graph
         self._signal_conditions = signal_conditions or {}
+        self._netlist_driver = netlist_driver
     
     def __repr__(self) -> str:
         return f"DesignGraph(nodes={self.graph.number_of_nodes()}, edges={self.graph.number_of_edges()})"
@@ -353,6 +357,85 @@ class DesignGraph:
             'edge_kinds': edge_kinds,
             'timing_stats': timing_stats,
         }
+
+
+    def get_signal_info(self, signal: str, source: str = 'both') -> Dict[str, Any]:
+        """
+        获取信号的完整信息（data flow + conditions）
+        
+        Args:
+            signal: 信号路径
+            source: 数据源
+                - 'netlist': 只用 slang-netlist fan-in/fan-out
+                - 'ast': 只用 AST 条件分析
+                - 'both': 合并两者，用 AST 条件增强 netlist 数据
+        
+        Returns:
+            {
+                'signal': 信号路径,
+                'drivers': [..netlist fan-in..],
+                'loads': [..netlist fan-out..],
+                'conditions': [..AST condition分析..],
+            }
+        """
+        result = {
+            'signal': signal,
+            'drivers': [],
+            'loads': [],
+            'conditions': []
+        }
+        
+        # 处理 netlist fan-in/fan-out
+        if source in ('netlist', 'both'):
+            if hasattr(self, '_netlist_driver') and self._netlist_driver:
+                fan_in = self._netlist_driver.run_fan_in(signal)
+                fan_out = self._netlist_driver.run_fan_out(signal)
+                
+                # 解析 fan-in 结果
+                for item in fan_in.get('fan_in', []):
+                    path, loc = self._parse_fan_item(item)
+                    result['drivers'].append({
+                        'path': path,
+                        'location': loc
+                    })
+                
+                # 解析 fan-out 结果
+                for item in fan_out.get('fan_out', []):
+                    path, loc = self._parse_fan_item(item)
+                    result['loads'].append({
+                        'path': path,
+                        'location': loc
+                    })
+        
+        # 处理 AST conditions
+        if source in ('ast', 'both'):
+            conds = self.get_all_conditions(signal)
+            result['conditions'] = conds
+        
+        # 用 conditions 增强 drivers
+        if source == 'both' and result['conditions']:
+            # 建立 path -> condition 映射
+            for d in result['drivers']:
+                # 查找这个 driver 相关的 condition
+                for c in result['conditions']:
+                    cond_sig = c.get('condition', '')
+                    if d['path'].split('.')[-1] in cond_sig:
+                        d['condition'] = c['condition']
+                        d['statement'] = c.get('statement', '')
+                        d['condition_kind'] = c['kind']
+                        break
+        
+        return result
+    
+    def _parse_fan_item(self, item: str) -> Tuple[str, str]:
+        """解析 fan-in/fan-out 输出的一行: 'path  location'"""
+        parts = item.strip().split()
+        if len(parts) >= 2:
+            # 最后两部分是 path 和 location
+            path = parts[0]
+            loc = parts[1]
+            return path, loc
+        return item.strip(), ''
 
 
 if __name__ == '__main__':
