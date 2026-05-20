@@ -337,14 +337,28 @@ class DesignGraph:
         
         results = []
         for cond_info in self._signal_conditions[condition_key]:
-            results.append({
+            result = {
                 'condition': cond_info['condition'],
                 'statement': cond_info.get('statement', ''),
                 'if_expression': cond_info.get('if_expression', ''),
                 'kind': cond_info['kind'],
                 'location': cond_info.get('location'),
                 'edges': edges if edges else None
-            })
+            }
+            
+            # 添加时序属性 (如果有)
+            if cond_info.get('target_kind'):
+                result['target_kind'] = cond_info['target_kind']
+            if cond_info.get('clock_domain'):
+                result['clock_domain'] = cond_info['clock_domain']
+            if cond_info.get('edge_type'):
+                result['edge_type'] = cond_info['edge_type']
+            if cond_info.get('reset_signal'):
+                result['reset_signal'] = cond_info['reset_signal']
+            if cond_info.get('reset_kind'):
+                result['reset_kind'] = cond_info['reset_kind']
+            
+            results.append(result)
         
         return results
     
