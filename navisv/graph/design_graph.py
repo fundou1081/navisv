@@ -620,6 +620,157 @@ class DesignGraph:
             'success': result['success']
         }
 
+    def trace_full_path(self, src: str, dst: str) -> Dict[str, Any]:
+        """
+        完整路径追踪 - 包含所有时序和条件信息
+
+        结合 slang-netlist 的 path trace 和 AST 的条件/时序信息，
+        返回两点间路径的完整视图。
+
+        Args:
+            src: 起始信号
+            dst: 目标信号
+
+        Returns:
+            {
+                'from': src,
+                'to': dst,
+                'success': bool,
+                'path': [
+                    {
+                        'signal': signal_name,
+                        'location': 'file:line:col',
+                        'timing': {
+                            'clock_domain': 'clk',
+                            'reset_kind': 'async',
+                            'target_kind': 'register_output'
+                        },
+                        'is_register': bool,
+                        'driving_condition': None,  # 驱动这个节点的条件
+                        'driving_kind': None,        # 条件类型 (if/case/ternary/plain)
+                        'edge': {
+                            'from': upstream_signal,
+                            'relation': 'drives',
+                            'timing': 'sequential_input',
+                            'edge_kind': 'PosEdge'
+                        }
+                    }
+                ],
+                'summary': {
+                    'reset_safe': bool,
+                    'cross_clock': bool,
+                    'register_count': int,
+                    'clocks': [list],
+                    'path_length': int
+                }
+            }
+        """
+        # 使用 networkx shortest_path 获取路径
+        try:
+            path = nx.shortest_path(self.graph, src, dst)
+        except (nx.NodeNotFound, nx.NetworkXNoPath):
+            return {
+                'from': src,
+                'to': dst,
+                'success': False,
+                'path': [],
+                'summary': {
+                    'reset_safe': False,
+                    'cross_clock': False,
+                    'register_count': 0,
+                    'clocks': [],
+                    'path_length': 0
+                }
+            }
+
+        path_info = []
+        clocks_seen = set()
+        register_count = 0
+
+        for i, signal in enumerate(path):
+            # 获取节点时序属性
+            timing = {'clock_domain': None, 'reset_kind': None, 'target_kind': None}
+            is_register = False
+
+            if signal in self._signal_conditions:
+                conds = self._signal_conditions[signal]
+                if conds:
+                    c = conds[0]
+                    timing['clock_domain'] = c.get('clock_domain')
+                    timing['reset_kind'] = c.get('reset_kind')
+                    timing['target_kind'] = c.get('target_kind')
+                    if c.get('target_kind') == 'register_output':
+                        is_register = True
+                        register_count += 1
+                    if c.get('clock_domain'):
+                        clocks_seen.add(c['clock_domain'])
+
+            # 获取位置信息
+            location = ''
+            if signal in self._signal_conditions and self._signal_conditions[signal]:
+                loc = self._signal_conditions[signal][0].get('location', {})
+                if loc:
+                    file_name = loc.get('file', '')
+                    if '/' in file_name:
+                        file_name = file_name.split('/')[-1]
+                    line = loc.get('line', 0)
+                    col = loc.get('column', 0)
+                    if line:
+                        location = f"{file_name}:{line}:{col}"
+
+            # 获取边的信息 (从上一个节点到这个节点)
+            edge_info = {'from': None, 'relation': None, 'timing': None, 'edge_kind': None}
+            driving_condition = None
+            driving_kind = None
+
+            if i > 0:
+                prev_signal = path[i - 1]
+                if self.graph.has_edge(prev_signal, signal):
+                    edge_data = self.graph.get_edge_data(prev_signal, signal)
+                    # 获取第一条边的属性 (MultiDiGraph 可能有多个边)
+                    if edge_data:
+                        first_key = next(iter(edge_data))
+                        edge_attrs = edge_data[first_key]
+                        edge_info = {
+                            'from': prev_signal,
+                            'relation': edge_attrs.get('relation'),
+                            'timing': edge_attrs.get('timing'),
+                            'edge_kind': edge_attrs.get('edge_kind')
+                        }
+                        driving_condition = edge_attrs.get('condition')
+                        driving_kind = edge_attrs.get('condition_kind')
+
+            path_info.append({
+                'signal': signal,
+                'location': location,
+                'timing': timing,
+                'is_register': is_register,
+                'driving_condition': driving_condition,
+                'driving_kind': driving_kind,
+                'edge': edge_info
+            })
+
+        # 判断路径安全性
+        cross_clock = len(clocks_seen) > 1
+        reset_safe = all(
+            node.get('timing', {}).get('reset_kind') in (None, 'sync', 'none')
+            for node in path_info
+        )
+
+        return {
+            'from': src,
+            'to': dst,
+            'success': True,
+            'path': path_info,
+            'summary': {
+                'reset_safe': reset_safe,
+                'cross_clock': cross_clock,
+                'register_count': register_count,
+                'clocks': list(clocks_seen),
+                'path_length': len(path_info)
+            }
+        }
+
     def _parse_path_trace(self, stdout: str) -> List[Dict[str, str]]:
         """解析 path_trace 输出,提取路径节点"""
         import re
