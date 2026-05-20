@@ -880,7 +880,21 @@ class GraphBuilder:
             if target_path and target_path in self._node_attrs:
                 if target_path not in self._signal_conditions:
                     self._signal_conditions[target_path] = []
-                
+            
+            # 去重: 同一 target_path + condition + statement 只保留一个
+            dedup_key = (condition, assignment_stmt)
+            for i, existing in enumerate(self._signal_conditions[target_path]):
+                if existing.get('condition') == condition and existing.get('statement') == assignment_stmt:
+                    # 更新已有条目的 timing 信息
+                    if timing_ctx and not existing.get('clock_domain'):
+                        existing['target_kind'] = 'register_output'
+                        existing['clock_domain'] = timing_ctx['clock'][0]['signal'] if timing_ctx['clock'] else None
+                        existing['edge_type'] = timing_ctx['clock'][0]['edge'] if timing_ctx['clock'] else None
+                        if timing_ctx['reset']:
+                            existing['reset_signal'] = timing_ctx['reset'][0]['signal']
+                            existing['reset_kind'] = timing_ctx['reset'][0].get('kind', 'async')
+                    break
+            else:
                 condition_entry = {
                     'condition': condition,
                     'kind': cond_kind,
@@ -890,14 +904,13 @@ class GraphBuilder:
                     'if_expression': if_expression
                 }
                 
-                # 使用传入的 timing context (语义化地从祖先 ProceduralBlock 获取)
                 if timing_ctx:
                     condition_entry['target_kind'] = 'register_output'
                     condition_entry['clock_domain'] = timing_ctx['clock'][0]['signal'] if timing_ctx['clock'] else None
                     condition_entry['edge_type'] = timing_ctx['clock'][0]['edge'] if timing_ctx['clock'] else None
                     if timing_ctx['reset']:
                         condition_entry['reset_signal'] = timing_ctx['reset'][0]['signal']
-                        condition_entry['reset_kind'] = 'async'
+                        condition_entry['reset_kind'] = timing_ctx['reset'][0].get('kind', 'async')
                 else:
                     condition_entry['target_kind'] = 'combinational'
                 
