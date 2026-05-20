@@ -139,6 +139,12 @@ class DesignDriver:
             self._ast_parser = ASTParser(ast_json).parse()
         else:
             self._ast_parser = None
+            ast_json = None
+        
+        # 保存 ast_json 路径供 GraphBuilder 使用
+        self._ast_json_path = ast_json if os.path.exists(ast_json) else None
+        # 源文件列表（用于读取源码）
+        self._source_files = self.files
         
         # Netlist
         netlist_json = os.path.join(self.output_dir, 'netlist.json')
@@ -155,7 +161,8 @@ class DesignDriver:
             self._design_graph = DesignGraph(nx.MultiDiGraph())
             return
         
-        self._graph_builder = GraphBuilder(self._ast_parser, self._netlist_parser)
+        self._graph_builder = GraphBuilder(self._ast_parser, self._netlist_parser, 
+                                               self._ast_json_path, self._source_files)
         graph = self._graph_builder.build()
         self._design_graph = DesignGraph(graph, self._graph_builder._signal_conditions)
     

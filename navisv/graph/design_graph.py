@@ -280,9 +280,12 @@ class DesignGraph:
             line = loc.get('line', 0)
             column = loc.get('column', 0)
             
+            # 优先使用从源码提取的 statement，否则用 location
+            statement = cond_info.get('statement') or f"{file_name}:{line}:{column}"
+            
             results.append({
                 'condition': cond_info['condition'],
-                'statement': f"{file_name}:{line}:{column}",
+                'statement': statement,
                 'kind': cond_info['kind'],
                 'location': f"{file_name}:{line}:{column}"
             })

@@ -1,3 +1,4 @@
+import os
 """
 GraphBuilder - 构建 enriched MultiDiGraph
 
@@ -97,9 +98,12 @@ class GraphBuilder:
     推断时序分类，提取条件信息。
     """
     
-    def __init__(self, ast_parser: ASTParser, netlist_parser: NetlistParser):
+    def __init__(self, ast_parser: ASTParser, netlist_parser: NetlistParser,
+                 ast_json_path: str = None, source_files: list = None):
         self.ast = ast_parser
         self.netlist = netlist_parser
+        self.ast_json_path = ast_json_path
+        self.source_files = source_files or []
         self.graph: nx.MultiDiGraph = None
         
         # 缓存
@@ -117,6 +121,48 @@ class GraphBuilder:
         
         self._build_symbol_map()
     
+    def _read_source_line(self, file: str, line: int, col_start: int, col_end: int) -> str:
+        """从源文件读取指定范围的文本"""
+        if not file or line <= 0:
+            return ''
+        
+        # 优先从 source_files 中查找（传入的是绝对路径）
+        if self.source_files:
+            for src in self.source_files:
+                if os.path.isabs(src) and os.path.exists(src):
+                    if file in src or src.endswith(file):
+                        return self._extract_from_file(src, line, col_start, col_end)
+        
+        # 尝试从 ast_json_path 构建路径
+        if self.ast_json_path:
+            ast_dir = os.path.dirname(self.ast_json_path)
+            for rel in ['', '..', '../..']:
+                path = os.path.join(ast_dir, rel, file)
+                if os.path.exists(path):
+                    return self._extract_from_file(path, line, col_start, col_end)
+        
+        # 尝试当前工作目录
+        if os.path.exists(file):
+            return self._extract_from_file(file, line, col_start, col_end)
+        return ''
+    
+    def _extract_from_file(self, filepath: str, line: int, col_start: int, col_end: int) -> str:
+        """从文件提取指定行和列范围的文本（AST column 是 1-indexed）"""
+        try:
+            with open(filepath) as f:
+                lines = f.readlines()
+            if 0 < line <= len(lines):
+                src_line = lines[line - 1]
+                col_start = max(0, col_start - 1)  # 1-indexed → 0-indexed
+                col_end = max(0, col_end - 1)
+                if col_end > len(src_line):
+                    col_end = len(src_line)
+                if col_start < len(src_line):
+                    return src_line[col_start:col_end].strip()
+        except Exception:
+            pass
+        return ''
+
     def _build_symbol_map(self):
         """构建符号映射表
         
@@ -464,6 +510,12 @@ class GraphBuilder:
                 'column': expr.get('source_column_start', 0),
             }
             
+            # 提取语句文本
+            statement = self._read_source_line(
+                location['file'], location['line'],
+                expr.get('source_column_start', 0), expr.get('source_column_end', 0)
+            )
+            
             if target_path and target_path in self._node_attrs:
                 if target_path not in self._signal_conditions:
                     self._signal_conditions[target_path] = []
@@ -471,7 +523,8 @@ class GraphBuilder:
                     'condition': condition,
                     'kind': cond_kind,
                     'source': 'ast',
-                    'location': location
+                    'location': location,
+                    'statement': statement
                 })
         
         elif kind == 'Block':
