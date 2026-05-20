@@ -466,7 +466,12 @@ class GraphBuilder:
             statement = f"{condition} ? {true_val} : ..."
             
             # 构建完整表达式
-            if_expression = f"{condition} ? {statement}"
+            # 对于嵌套 ternary，statement 已经是 "condition ? true_val : ..."
+            # 直接使用
+            if statement.startswith(condition):
+                if_expression = statement
+            else:
+                if_expression = f"{condition} ? {statement}"
             
             # 确保目标路径有效 (即使不在 netlist 图中也要添加条件)
             if not target_path:
