@@ -96,7 +96,23 @@ class ASTParser:
         if 'members' in obj:
             for member in obj['members']:
                 if isinstance(member, dict):
+                    # ContinuousAssign has 'assignment' instead of recursively visiting
+                    if member.get('kind') == 'ContinuousAssign' and 'assignment' in member:
+                        member_with_assignment = dict(member)
+                        member_with_assignment['assignment'] = member['assignment']
                     node.children.append(self._parse_node(member, path, depth + 1))
+        
+        # 递归处理 ContinuousAssign 的 assignment 字段
+        if obj.get('kind') == 'ContinuousAssign' and 'assignment' in obj:
+            assignment = obj['assignment']
+            if isinstance(assignment, dict):
+                node.children.append(self._parse_node(assignment, path, depth + 1))
+        
+        # 递归处理 Net 的 initializer 字段 (wire 赋值，如 ternary)
+        if obj.get('kind') == 'Net' and 'initializer' in obj:
+            initializer = obj['initializer']
+            if isinstance(initializer, dict):
+                node.children.append(self._parse_node(initializer, path, depth + 1))
         
         # 递归处理 stmt (Timed 节点中的语句)
         if 'stmt' in obj:
@@ -123,6 +139,19 @@ class ASTParser:
             node.children.append(self._parse_node(obj['trueExpression'], path, depth + 1))
         if 'falseExpression' in obj and isinstance(obj['falseExpression'], dict):
             node.children.append(self._parse_node(obj['falseExpression'], path, depth + 1))
+        
+        # 递归处理 ConditionalOp (链式三元运算符) 的 conditions/left/right
+        if kind == 'ConditionalOp':
+            # conditions
+            if 'conditions' in obj and isinstance(obj['conditions'], list):
+                for cond_item in obj['conditions']:
+                    if isinstance(cond_item, dict) and 'expr' in cond_item:
+                        node.children.append(self._parse_node(cond_item['expr'], path, depth + 1))
+            # left/right (ternary true/false branches)
+            if 'left' in obj and isinstance(obj['left'], dict):
+                node.children.append(self._parse_node(obj['left'], path, depth + 1))
+            if 'right' in obj and isinstance(obj['right'], dict):
+                node.children.append(self._parse_node(obj['right'], path, depth + 1))
         
         # 递归处理 expressions (case item 的条件表达式)
         if 'expressions' in obj and isinstance(obj['expressions'], list):

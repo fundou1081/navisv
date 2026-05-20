@@ -322,6 +322,12 @@ class GraphBuilder:
                 self._analyze_case(node)
             elif node.kind == 'Conditional':
                 self._analyze_conditional(node)
+            elif node.kind == 'ContinuousAssign':
+                # 处理连续赋值中的 ternary (a = b ? c : d)
+                self._analyze_continuous_assign_ternary(node)
+            elif node.kind == 'Net' and node.attributes.get('initializer'):
+                # 处理 wire x = y ? a : b 形式的 Net 初始化
+                self._analyze_net_initializer_ternary(node)
     
     def _analyze_case(self, case_node):
         """
@@ -362,6 +368,170 @@ class GraphBuilder:
         default_stmt = case_node.attributes.get('defaultCase', {})
         if default_stmt:
             self._extract_assignments_from_stmt(case_var, 'case', default_stmt)
+    
+    def _analyze_conditional_op(self, cond_node_or_dict):
+        """分析三元运算符 ConditionalOp"""
+        self._analyze_conditional(cond_node_or_dict)
+    
+    def _analyze_net_initializer_ternary(self, net_node):
+        """处理 Net 的 initializer (如 wire [7:0] complex_result = enable ? a : b)"""
+        initializer = net_node.attributes.get('initializer')
+        if not isinstance(initializer, dict):
+            return
+        
+        if initializer.get('kind') != 'ConditionalOp':
+            return
+        
+        # 尝试多种可能的前缀来构建路径
+        possible_paths = [
+            net_node.name,  # complex_result
+            f"complex_test.{net_node.name}",  # complex_test.complex_result
+            f"$root.complex_test.complex_test.{net_node.name}",  # 完整路径
+        ]
+        
+        target_path = None
+        for path in possible_paths:
+            if self.graph.has_node(path):
+                target_path = path
+                break
+        
+        if not target_path:
+            # 节点不在 graph 中，但仍需处理条件信息
+            # 从 net_node.path 推断路径
+            # $root.complex_test.complex_test.complex_result -> complex_test.complex_result
+            full_path = net_node.path
+            if '$root.' in full_path:
+                # 去掉 $root. 前缀，保留后面的部分
+                clean_path = full_path.replace('$root.', '')
+                # 取最后两部分作为路径
+                parts = clean_path.split('.')
+                if len(parts) >= 2:
+                    target_path = f"{parts[-2]}.{net_node.name}"
+                    # 如果这个路径也不在 graph 中，只使用名称
+                    if not self.graph.has_node(target_path):
+                        target_path = net_node.name
+                else:
+                    target_path = net_node.name
+            else:
+                target_path = net_node.name
+        
+        # 提取条件
+        self._extract_ternary_conditions(target_path, initializer)
+    
+    def _extract_ternary_conditions(self, target_path: str, cond_op: Dict):
+        """从 ConditionalOp 提取条件并建立到目标信号的映射"""
+        conditions = cond_op.get('conditions', [])
+        if not conditions:
+            return
+        
+        for cond_item in conditions:
+            if not isinstance(cond_item, dict):
+                continue
+            
+            expr = cond_item.get('expr', {})
+            
+            # 对于 BinaryOp/UnaryOp 等复杂表达式，使用源码文本
+            if isinstance(expr, dict) and expr.get('kind') in ('BinaryOp', 'UnaryOp'):
+                # 从源码提取完整条件表达式
+                location = {
+                    'file': expr.get('source_file_start', ''),
+                    'line': expr.get('source_line_start', 0),
+                    'column': expr.get('source_column_start', 0),
+                }
+                condition = self._read_source_line(
+                    location['file'], location['line'],
+                    expr.get('source_column_start', 0), expr.get('source_column_end', 0)
+                )
+            else:
+                condition = self._extract_expr_path(expr)
+            
+            if not condition:
+                continue
+            
+            # 提取位置信息
+            location = {
+                'file': cond_op.get('source_file_start', ''),
+                'line': cond_op.get('source_line_start', 0),
+                'column': cond_op.get('source_column_start', 0),
+            }
+            
+            # 提取 true_val (left 分支)
+            left = cond_op.get('left', {})
+            true_val = self._read_source_line(
+                location['file'], location['line'],
+                left.get('source_column_start', 0), left.get('source_column_end', 0)
+            ) if isinstance(left, dict) else ''
+            
+            # 构造语句: "condition ? true_val : ..."
+            statement = f"{condition} ? {true_val} : ..."
+            
+            # 构建完整表达式
+            if_expression = f"{condition} ? {statement}"
+            
+            # 确保目标路径有效 (即使不在 netlist 图中也要添加条件)
+            if not target_path:
+                return
+            
+            # 如果目标不在 graph 中，添加到图中
+            if not self.graph.has_node(target_path):
+                # 尝试添加带模块前缀的路径
+                prefixed_path = f"complex_test.{target_path}"
+                if self.graph.has_node(prefixed_path):
+                    target_path = prefixed_path
+                else:
+                    self.graph.add_node(target_path, kind='Net', type='logic[7:0]')
+            
+            if target_path not in self._signal_conditions:
+                self._signal_conditions[target_path] = []
+            self._signal_conditions[target_path].append({
+                'condition': condition,
+                'kind': 'ternary',
+                'source': 'ast',
+                'location': location,
+                'statement': statement,
+                'if_expression': if_expression
+            })
+            
+            # 处理嵌套 ternary (right 分支可能是另一个 ConditionalOp)
+            right = cond_op.get('right', {})
+            if isinstance(right, dict) and right.get('kind') == 'ConditionalOp':
+                self._extract_ternary_conditions(target_path, right)
+    
+    def _analyze_continuous_assign_ternary(self, continuous_assign_node):
+        """处理 ContinuousAssign (如 assign x = y ? a : b)
+        
+        ContinuousAssign 结构:
+        {
+            "kind": "ContinuousAssign",
+            "assignment": {
+                "kind": "Assignment",
+                "left": {symbol: "id name"},  # 目标信号
+                "right": {kind: "ConditionalOp", conditions: [...], left: {...}, right: {...}}
+            }
+        }
+        """
+        assignment = continuous_assign_node.attributes.get('assignment', {})
+        if not isinstance(assignment, dict):
+            return
+        
+        # 提取目标信号路径
+        left = assignment.get('left', {})
+        target_path = self._extract_expr_path(left)
+        
+        if not target_path:
+            return
+        
+        # 确保目标在图中
+        if not self.graph.has_node(target_path):
+            return
+        
+        right = assignment.get('right', {})
+        if not isinstance(right, dict):
+            return
+        
+        # 如果右侧是 ConditionalOp，提取条件
+        if right.get('kind') == 'ConditionalOp':
+            self._extract_ternary_conditions(target_path, right)
     
     def _analyze_conditional(self, cond_node_or_dict):
         """
@@ -411,6 +581,8 @@ class GraphBuilder:
             if if_false and isinstance(if_false, dict):
                 if if_false.get('kind') == 'Conditional':
                     self._analyze_conditional(if_false)
+                elif if_false.get('kind') == 'ConditionalOp':
+                    self._analyze_conditional_op(if_false)
                 else:
                     if conditions:
                         last_cond_expr = conditions[-1].get('expr', {})
@@ -421,13 +593,31 @@ class GraphBuilder:
                             self._extract_assignments_from_stmt('', 'else', if_false)
         
         # 处理三元运算符结构 (condition, trueExpression, falseExpression)
+        # ConditionalOp 使用 conditions/left/right 而非 condition/trueExpression/falseExpression
         condition = self._extract_expr_path(attrs.get('condition', {}))
+        if not condition:
+            # 尝试 ConditionalOp 格式
+            conditions_list = attrs.get('conditions', [])
+            if conditions_list and isinstance(conditions_list, list):
+                cond_item = conditions_list[0]
+                if isinstance(cond_item, dict) and 'expr' in cond_item:
+                    condition = self._extract_expr_path(cond_item['expr'])
+        
         if condition:
-            true_expr = attrs.get('trueExpression', {})
-            self._extract_assignments_from_expr(f"{condition}", 'ternary', true_expr)
+            # 真分支: trueExpression 或 left
+            true_expr = attrs.get('trueExpression', {}) or attrs.get('left', {})
+            if true_expr:
+                self._extract_assignments_from_expr(f"{condition}", 'ternary', true_expr)
             
-            false_expr = attrs.get('falseExpression', {})
-            self._extract_assignments_from_expr(f"!{condition}", 'ternary', false_expr)
+            # 假分支: falseExpression 或 right
+            false_expr = attrs.get('falseExpression', {}) or attrs.get('right', {})
+            if false_expr:
+                # 嵌套三元: right 可能是另一个 ConditionalOp
+                if isinstance(false_expr, dict) and false_expr.get('kind') == 'ConditionalOp':
+                    # 递归处理嵌套三元
+                    self._analyze_conditional_op(false_expr)
+                else:
+                    self._extract_assignments_from_expr(f"!{condition}", 'ternary', false_expr)
     
     def _extract_case_value(self, item: Dict) -> str:
         """从 case item 提取 case 值"""
@@ -498,6 +688,41 @@ class GraphBuilder:
             return
         
         kind = expr.get('kind', '')
+        
+        # 处理 ContinuousAssign (continuous assignments like assign x = y ? a : b)
+        if kind == 'ContinuousAssign':
+            # ContinuousAssign has 'assignment' field
+            assignment = expr.get('assignment', {})
+            if isinstance(assignment, dict):
+                # 处理左侧目标
+                left = assignment.get('left', {})
+                target_path = self._extract_expr_path(left)
+                
+                # 处理右侧表达式 (可能是 ConditionalOp)
+                right = assignment.get('right', {})
+                self._extract_assignments_from_expr(condition, cond_kind, right)
+            return
+        
+        # 处理 ConditionalOp (三元运算符)
+        if kind == 'ConditionalOp':
+            conditions = expr.get('conditions', [])
+            if conditions and isinstance(conditions, list):
+                for cond_item in conditions:
+                    if isinstance(cond_item, dict) and 'expr' in cond_item:
+                        cond_expr = cond_item['expr']
+                        cond = self._extract_expr_path(cond_expr)
+                        if cond:
+                            # 真分支 (left)
+                            true_expr = expr.get('left', {})
+                            self._extract_assignments_from_expr(f"{cond}", 'ternary', true_expr)
+                            # 假分支 (right) - 可能是嵌套三元
+                            false_expr = expr.get('right', {})
+                            if isinstance(false_expr, dict):
+                                if false_expr.get('kind') == 'ConditionalOp':
+                                    self._extract_assignments_from_expr(f"!{cond}", 'ternary', false_expr)
+                                else:
+                                    self._extract_assignments_from_expr(f"!{cond}", 'ternary', false_expr)
+            return
         
         if kind == 'Assignment':
             left = expr.get('left', {})

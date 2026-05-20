@@ -298,6 +298,19 @@ class DesignGraph:
         
         return results
     
+    def _find_condition_key(self, signal: str) -> str:
+        """查找 signal 在 _signal_conditions 中的键"""
+        if signal in self._signal_conditions:
+            return signal
+        
+        # 尝试去掉前缀
+        if '.' in signal:
+            unprefixed = signal.split('.')[-1]
+            if unprefixed in self._signal_conditions:
+                return unprefixed
+        
+        return None
+    
     def get_all_conditions(self, signal: str) -> List[Dict[str, Any]]:
         """
         获取信号的所有条件（不带边）
@@ -308,20 +321,22 @@ class DesignGraph:
         Returns:
             [{condition, kind, location, edges}, ...]
         """
-        if signal not in self._signal_conditions:
+        condition_key = self._find_condition_key(signal)
+        if not condition_key:
             return []
         
-        # 获取该信号的边
+        # 获取该信号的边 (使用原始 signal 路径)
         edges = []
-        for src, dst, data in self.graph.in_edges(signal, data=True):
-            edges.append({
-                'from': src,
-                'edge_kind': data.get('edge_kind'),
-                'timing': data.get('timing'),
-            })
+        if self.graph.has_node(signal):
+            for src, dst, data in self.graph.in_edges(signal, data=True):
+                edges.append({
+                    'from': src,
+                    'edge_kind': data.get('edge_kind'),
+                    'timing': data.get('timing'),
+                })
         
         results = []
-        for cond_info in self._signal_conditions[signal]:
+        for cond_info in self._signal_conditions[condition_key]:
             results.append({
                 'condition': cond_info['condition'],
                 'statement': cond_info.get('statement', ''),
