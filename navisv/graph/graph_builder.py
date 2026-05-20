@@ -113,7 +113,7 @@ class GraphBuilder:
         
         # AST 分析结果: result_path -> [conditions]
         self._signal_conditions: Dict[str, List[Dict]] = {}  # signal -> [{condition, kind, location}]
-        self._condition_locations: Dict[str, Dict] = {}  # "{signal}|{condition}" -> {file, line, column}
+
         
         self._build_symbol_map()
     
@@ -470,11 +470,9 @@ class GraphBuilder:
                 self._signal_conditions[target_path].append({
                     'condition': condition,
                     'kind': cond_kind,
-                    'source': 'ast'
+                    'source': 'ast',
+                    'location': location
                 })
-                # 存储位置信息，key 为 (target_path, condition)
-                loc_key = f"{target_path}|{condition}"
-                self._condition_locations[loc_key] = location
         
         elif kind == 'Block':
             for item in expr.get('items', []):
