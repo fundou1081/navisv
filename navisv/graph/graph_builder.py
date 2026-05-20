@@ -609,7 +609,12 @@ class GraphBuilder:
                 'source': 'ast',
                 'location': location,
                 'statement': statement,
-                'if_expression': if_expression
+                'if_expression': if_expression,
+                'target_kind': 'combinational',  # ContinuousAssign is always combinational
+                'clock_domain': None,
+                'edge_type': None,
+                'reset_signal': None,
+                'reset_kind': None,
             })
             
             # 处理嵌套 ternary (right 分支可能是另一个 ConditionalOp)
