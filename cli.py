@@ -6,10 +6,9 @@ navisv CLI - SystemVerilog 语义导航工具
 
 用法：
     navisv info <file> <signal>     # 获取信号完整信息
-    navisv conditions <file> <signal>  # 获取信号条件列表
-    navisv registers <file>       # 报告所有寄存器
-    navisv ast <file>             # 生成 AST JSON
-    navisv analyze <file>         # 完整分析
+    navisv registers <file>         # 报告所有寄存器
+    navisv ast <file>               # 生成 AST JSON
+    navisv tools                    # 检查依赖工具
 
 环境变量：
     NAVISV_SLANG_BIN    slang 二进制路径
@@ -19,7 +18,8 @@ navisv CLI - SystemVerilog 语义导航工具
 示例：
     navisv info design.sv top.clk
     navisv registers design.sv
-    NAVISV_SLANG_BIN=/custom/slang navisv ast design.sv
+    navisv tools
+    navisv --json info design.sv top.clk
 """
 
 import argparse
@@ -32,13 +32,11 @@ from navisv import DesignDriver
 from navisv.config import check_tools
 
 
-def format_signal_info(info, json_output=False):
+def format_signal_info(info, verbose=False):
     """格式化信号信息"""
-    if json_output:
-        print(json.dumps(info, indent=2, default=str))
-        return
-    
     signal = info.get('signal', 'unknown')
+    
+    # 标题
     print(f"\n{'='*60}")
     print(f"信号: {signal}")
     print(f"{'='*60}")
@@ -61,13 +59,9 @@ def format_signal_info(info, json_output=False):
     if drivers:
         print(f"\n  驱动源 ({len(drivers)}):")
         for d in drivers[:5]:
-            loc = d.get('location', '')
-            cond = d.get('condition', '')
             print(f"    - {d.get('from', 'unknown')}")
-            if loc:
-                print(f"      位置: {loc}")
-            if cond:
-                print(f"      条件: {cond}")
+            if d.get('condition'):
+                print(f"      条件: {d['condition']}")
         if len(drivers) > 5:
             print(f"    ... 还有 {len(drivers) - 5} 个")
     
@@ -80,15 +74,17 @@ def format_signal_info(info, json_output=False):
         if len(loads) > 5:
             print(f"    ... 还有 {len(loads) - 5} 个")
     
-    # 条件
+    # 条件列表
     conditions = info.get('conditions', [])
     if conditions:
         print(f"\n  条件 ({len(conditions)}):")
         for c in conditions[:5]:
-            print(f"    - {c.get('condition', 'unknown')}")
             kind = c.get('kind', '')
-            if kind:
-                print(f"      类型: {kind}")
+            cond = c.get('condition', '')
+            stmt = c.get('statement', '')
+            if len(stmt) > 40:
+                stmt = stmt[:40] + '...'
+            print(f"    - [{kind}] {cond} → {stmt}")
         if len(conditions) > 5:
             print(f"    ... 还有 {len(conditions) - 5} 个")
 
@@ -103,7 +99,7 @@ def run_info(args):
     
     output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
     try:
-        dd = DesignDriver(args.files, output_dir=output_dir, include_dirs=args.include or [])
+        dd = DesignDriver([args.file], output_dir=output_dir, include_dirs=args.include or [])
         dd.build()
         dg = dd.design_graph
         
@@ -120,41 +116,6 @@ def run_info(args):
         shutil.rmtree(output_dir, ignore_errors=True)
 
 
-def run_conditions(args):
-    """获取信号的所有条件"""
-    errors = check_tools()
-    if errors:
-        for e in errors:
-            print(f"错误: {e}", file=sys.stderr)
-        return {'success': False}
-    
-    output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
-    try:
-        dd = DesignDriver(args.files, output_dir=output_dir, include_dirs=args.include or [])
-        dd.build()
-        dg = dd.design_graph
-        
-        conds = dg.get_all_conditions(args.signal)
-        
-        if args.json:
-            print(json.dumps(conds, indent=2, default=str))
-        else:
-            print(f"\n信号 {args.signal} 的条件 ({len(conds)} 个):\n")
-            for i, c in enumerate(conds, 1):
-                print(f"  {i}. {c.get('condition', 'unknown')}")
-                kind = c.get('kind', '')
-                if kind:
-                    print(f"     类型: {kind}")
-                edges = c.get('edges', [])
-                if edges:
-                    print(f"     边: {edges}")
-        
-        return {'success': True, 'conditions': conds}
-    finally:
-        import shutil
-        shutil.rmtree(output_dir, ignore_errors=True)
-
-
 def run_registers(args):
     """报告所有寄存器"""
     errors = check_tools()
@@ -165,7 +126,7 @@ def run_registers(args):
     
     output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
     try:
-        dd = DesignDriver(args.files, output_dir=output_dir, include_dirs=args.include or [])
+        dd = DesignDriver([args.file], output_dir=output_dir, include_dirs=args.include or [])
         dd.build()
         dg = dd.design_graph
         
@@ -177,7 +138,7 @@ def run_registers(args):
                 resets = set(c.get('reset_kind') for c in conds if c.get('reset_kind'))
                 registers.append({
                     'signal': sig,
-                    'clock': list(clocks)[0] if clocks else 'unknown',
+                    'clock': list(clocks)[0] if clocks else '-',
                     'reset': list(resets)[0] if resets else 'none',
                 })
         
@@ -185,10 +146,17 @@ def run_registers(args):
             print(json.dumps(registers, indent=2, default=str))
         else:
             print(f"\n寄存器列表 ({len(registers)} 个):\n")
-            print(f"  {'信号':<30} {'时钟':<10} {'Reset':<8}")
-            print(f"  {'-'*30} {'-'*10} {'-'*8}")
+            print(f"  {'信号':<35} {'时钟':<10} {'Reset':<8}")
+            print(f"  {'-'*35} {'-'*10} {'-'*8}")
             for r in sorted(registers, key=lambda x: x['signal']):
-                print(f"  {r['signal']:<30} {r['clock']:<10} {r['reset']:<8}")
+                short = r['signal'].split('.')[-1]
+                print(f"  {short:<35} {r['clock']:<10} {r['reset']:<8}")
+            
+            # 统计
+            async_cnt = sum(1 for r in registers if r['reset'] == 'async')
+            sync_cnt = sum(1 for r in registers if r['reset'] == 'sync')
+            none_cnt = sum(1 for r in registers if r['reset'] == 'none')
+            print(f"\n  统计: async={async_cnt}, sync={sync_cnt}, no_reset={none_cnt}")
         
         return {'success': True, 'registers': registers}
     finally:
@@ -206,17 +174,18 @@ def run_ast(args):
     
     output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
     try:
-        dd = DesignDriver(args.files, output_dir=output_dir, include_dirs=args.include or [])
+        dd = DesignDriver([args.file], output_dir=output_dir, include_dirs=args.include or [])
         dd.build()
         
-        # 输出 AST JSON 路径
         ast_json = os.path.join(output_dir, 'ast.json')
         
         if args.json:
             with open(ast_json) as f:
                 print(f.read())
         else:
+            size = os.path.getsize(ast_json)
             print(f"AST 已生成: {ast_json}")
+            print(f"大小: {size} bytes")
         
         return {'success': True, 'ast_json': ast_json}
     finally:
@@ -224,40 +193,23 @@ def run_ast(args):
         shutil.rmtree(output_dir, ignore_errors=True)
 
 
-def run_analyze(args):
-    """完整分析"""
+def run_tools(args):
+    """检查依赖工具"""
+    from navisv.config import SLANG_BIN, NETLIST_BIN
+    
+    print(f"\n工具路径:")
+    print(f"  SLANG_BIN: {SLANG_BIN}")
+    print(f"  NETLIST_BIN: {NETLIST_BIN}")
+    
     errors = check_tools()
     if errors:
+        print(f"\n状态: ❌")
         for e in errors:
-            print(f"错误: {e}", file=sys.stderr)
-        return {'success': False}
-    
-    output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
-    try:
-        dd = DesignDriver(args.files, output_dir=output_dir, include_dirs=args.include or [])
-        dd.build()
-        dg = dd.design_graph
-        
-        stats = {
-            'signals': len(dg._signal_conditions),
-            'registers': sum(1 for c in dg._signal_conditions.values() 
-                          if any('register_output' in str(cond.get('target_kind', '')) for cond in c)),
-            'combinational': sum(1 for c in dg._signal_conditions.values()
-                                if any('combinational' in str(cond.get('target_kind', '')) for cond in c)),
-        }
-        
-        if args.json:
-            print(json.dumps(stats, indent=2))
-        else:
-            print(f"\n分析结果:\n")
-            print(f"  信号总数: {stats['signals']}")
-            print(f"  寄存器: {stats['registers']}")
-            print(f"  组合逻辑: {stats['combinational']}")
-        
-        return {'success': True, 'stats': stats}
-    finally:
-        import shutil
-        shutil.rmtree(output_dir, ignore_errors=True)
+            print(f"  - {e}")
+        return {'success': False, 'errors': errors}
+    else:
+        print(f"\n状态: ✅ 所有工具可用")
+        return {'success': True}
 
 
 def main():
@@ -277,51 +229,28 @@ def main():
     p.add_argument('--source', '-s', choices=['ast', 'netlist', 'both'], 
                    default='both', help='数据源')
 
-    # navisv conditions <file> <signal>
-    p = sub.add_parser('conditions', help='获取信号的所有条件')
-    p.add_argument('file', help='设计文件')
-    p.add_argument('signal', help='信号路径')
-
-    # navisv registers <files...>
+    # navisv registers <file>
     p = sub.add_parser('registers', help='报告所有寄存器')
-    p.add_argument('files', nargs='+', help='设计文件')
+    p.add_argument('file', help='设计文件')
 
     # navisv ast <file>
     p = sub.add_parser('ast', help='生成 AST JSON')
     p.add_argument('file', help='设计文件')
 
-    # navisv analyze <files...>
-    p = sub.add_parser('analyze', help='完整分析')
-    p.add_argument('files', nargs='+', help='设计文件')
-
     # navisv tools
     p = sub.add_parser('tools', help='检查依赖工具')
-    p.add_argument('--check', '-c', action='store_true', help='检查工具状态')
 
     args = parser.parse_args()
 
     try:
         if args.command == 'info':
             run_info(args)
-        elif args.command == 'conditions':
-            run_conditions(args)
         elif args.command == 'registers':
             run_registers(args)
         elif args.command == 'ast':
             run_ast(args)
-        elif args.command == 'analyze':
-            run_analyze(args)
         elif args.command == 'tools':
-            from navisv.config import SLANG_BIN, NETLIST_BIN, check_tools
-            print(f"SLANG_BIN: {SLANG_BIN}")
-            print(f"NETLIST_BIN: {NETLIST_BIN}")
-            errors = check_tools()
-            if errors:
-                print("状态: ❌")
-                for e in errors:
-                    print(f"  - {e}")
-            else:
-                print("状态: ✅ 所有工具可用")
+            run_tools(args)
     except Exception as e:
         print(f"错误: {e}", file=sys.stderr)
         if args.json:
