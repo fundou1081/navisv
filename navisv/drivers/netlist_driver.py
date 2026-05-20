@@ -17,7 +17,7 @@ from typing import List, Optional, Dict, Any
 
 
 # slang-netlist 工具路径
-NETLIST_BIN = os.path.expanduser('~/my_dv_proj/slang-netlist/build/tools/driver/slang-netlist')
+from navisv.config import NETLIST_BIN
 
 
 class NetlistDriver:

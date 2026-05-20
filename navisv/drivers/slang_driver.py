@@ -16,7 +16,7 @@ from typing import List, Optional, Dict, Any
 
 
 # slang 工具路径
-SLANG_BIN = os.path.expanduser('~/my_dv_proj/slang/slang')
+from navisv.config import SLANG_BIN
 
 
 class SlangDriver:
