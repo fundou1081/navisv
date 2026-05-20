@@ -116,7 +116,8 @@ class GraphBuilder:
         self._symbol_to_netlist_path: Dict[str, str] = {}
         
         # AST 分析结果: result_path -> [conditions]
-        self._signal_conditions: Dict[str, List[Dict]] = {}  # signal -> [{condition, kind, location}]
+        self._signal_conditions: Dict[str, List[Dict]] = {}
+        self._procedural_timing: Dict[int, Dict] = {}  # line -> timing info  # signal -> [{condition, kind, location}]
 
         
         self._build_symbol_map()
@@ -328,6 +329,9 @@ class GraphBuilder:
             elif node.kind == 'Net' and node.attributes.get('initializer'):
                 # 处理 wire x = y ? a : b 形式的 Net 初始化
                 self._analyze_net_initializer_ternary(node)
+            elif node.kind == 'ProceduralBlock':
+                # 提取 ProceduralBlock 的 timing 信息 (时钟/复位)
+                self._extract_timing_info(node)
     
     def _analyze_case(self, case_node):
         """
@@ -417,6 +421,76 @@ class GraphBuilder:
         
         # 提取条件
         self._extract_ternary_conditions(target_path, initializer)
+    
+    def _extract_timing_info(self, procedural_block):
+        """从 ProceduralBlock 提取时钟和复位信息
+        
+        AST 结构:
+        ProceduralBlock {
+            procedureKind: "Always",
+            body: Timed {
+                timing: EventList { events: [SignalEvent, ...] }
+            }
+        }
+        
+        SignalEvent {
+            expr: NamedValue (信号),
+            edge: "PosEdge" | "NegEdge"
+        }
+        """
+        # 从 children 中找到 Timed 节点
+        timed_node = None
+        for child in procedural_block.children:
+            if child.kind == 'Timed':
+                timed_node = child
+                break
+        
+        if not timed_node:
+            return
+        
+        # 从 Timed 获取 timing 信息 (EventList.events)
+        timing_attr = timed_node.attributes.get('timing', {})
+        if isinstance(timing_attr, dict) and timing_attr.get('kind') == 'EventList':
+            events = timing_attr.get('events', [])
+        elif isinstance(timing_attr, list):
+            events = timing_attr
+        else:
+            events = []
+        
+        # 提取时钟和复位事件
+        clock_events = []
+        reset_events = []
+        
+        for event in events:
+            if not isinstance(event, dict):
+                continue
+            if event.get('kind') == 'SignalEvent':
+                edge = event.get('edge', 'PosEdge')
+                expr = event.get('expr', {})
+                signal_path = self._extract_expr_path(expr)
+                
+                if edge == 'NegEdge':
+                    # NegEdge 通常是异步复位
+                    reset_events.append({
+                        'signal': signal_path,
+                        'edge': edge
+                    })
+                else:  # PosEdge
+                    clock_events.append({
+                        'signal': signal_path,
+                        'edge': edge
+                    })
+        
+        # 获取 line 号 (从 Timed 的 attributes)
+        line = timed_node.attributes.get('source_line_start', 0)
+        
+        if clock_events or reset_events:
+            self._procedural_timing[line] = {
+                'clock': clock_events if clock_events else None,
+                'reset': reset_events if reset_events else None,
+                'is_register': True,
+                'procedureKind': procedural_block.attributes.get('procedureKind', 'Always')
+            }
     
     def _extract_ternary_conditions(self, target_path: str, cond_op: Dict):
         """从 ConditionalOp 提取条件并建立到目标信号的映射"""
@@ -760,14 +834,34 @@ class GraphBuilder:
             if target_path and target_path in self._node_attrs:
                 if target_path not in self._signal_conditions:
                     self._signal_conditions[target_path] = []
-                self._signal_conditions[target_path].append({
+                
+                # 查找关联的 timing 信息
+                timing_info = None
+                for line, info in self._procedural_timing.items():
+                    if location['line'] >= line and location['line'] < line + 20:
+                        timing_info = info
+                        break
+                
+                condition_entry = {
                     'condition': condition,
                     'kind': cond_kind,
                     'source': 'ast',
                     'location': location,
                     'statement': assignment_stmt,
-                    'if_expression': if_expression  # 完整 if 表达式
-                })
+                    'if_expression': if_expression
+                }
+                
+                if timing_info:
+                    condition_entry['target_kind'] = 'register_output'
+                    condition_entry['clock_domain'] = timing_info['clock'][0]['signal'] if timing_info['clock'] else None
+                    condition_entry['edge_type'] = timing_info['clock'][0]['edge'] if timing_info['clock'] else None
+                    if timing_info['reset']:
+                        condition_entry['reset_signal'] = timing_info['reset'][0]['signal']
+                        condition_entry['reset_kind'] = 'async'
+                else:
+                    condition_entry['target_kind'] = 'combinational'
+                
+                self._signal_conditions[target_path].append(condition_entry)
         
         elif kind == 'Block':
             for item in expr.get('items', []):
