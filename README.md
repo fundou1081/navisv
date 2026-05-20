@@ -1,119 +1,150 @@
 # navisv
 
-> Semantic navigation middleware for AI debugging agents, built on slang-netlist.
+> 基于 slang-netlist 的 SystemVerilog 语义导航工具
 
-navisv translates low-level netlist relationships into structured, debugging-oriented answers, enabling AI Agents to directly query and efficiently explore SystemVerilog designs.
+navisv 将底层网表关系转化为面向调试的结构化答案，让 AI Agent 能够直接查询和高效探索 SystemVerilog 设计。
 
-## Architecture
+## 功能特性
+
+- **信号分析**: 获取信号的驱动源、负载、条件列表
+- **时序属性**: 自动识别 clock_domain、reset_kind、target_kind
+- **寄存器报告**: 列出所有寄存器及其时序属性
+- **条件覆盖**: 分析信号的所有条件组合
+
+## 快速开始
+
+### Python API
+
+```python
+from navisv import DesignDriver
+
+# 构建设计图
+dd = DesignDriver(['design.sv'])
+dd.build()
+dg = dd.design_graph
+
+# 获取信号完整信息
+info = dg.get_signal_info('top.clk', source='both')
+print(info)
+
+# 获取信号的所有条件
+conds = dg.get_all_conditions('top.data_out')
+for c in conds:
+    print(f"  条件: {c['condition']}, 类型: {c['kind']}")
+```
+
+### CLI
+
+```bash
+# 获取信号信息
+/usr/bin/python3 cli.py info design.sv top.clk
+
+# 列出所有寄存器
+/usr/bin/python3 cli.py registers design.sv
+
+# 检查工具状态
+/usr/bin/python3 cli.py tools
+
+# JSON 输出
+/usr/bin/python3 cli.py --json info design.sv top.clk
+```
+
+## 架构
 
 ```
 User / AI Agent
      ↓
-App Layer          ← Scenario apps: compose queries, generate natural language summaries
+DesignDriver          # 统一入口，调用 slang 生成 AST/Netlist
      ↓
-Query Layer        ← Atomic queries: operate on DiGraph, return structured data
+┌────────────────────────────────┐
+│  Parsers                       │  ← AST/Netlist JSON 解析
+│    ├── ast_parser.py           │
+│    └── netlist_parser.py       │
+└────────────────────────────────┘
      ↓
-Graph Layer        ← Data holder: networkx DiGraph is the only storage
+┌────────────────────────────────┐
+│  Graph Layer                   │  ← NetworkX 图构建
+│    ├── graph_builder.py       │
+│    └── design_graph.py         │
+└────────────────────────────────┘
      ↓
-slang-netlist      ← Single source of truth: precise driver/load / path tracking
+slang / slang-netlist            # 单一数据源
 ```
 
-## Features
+### 核心模块
 
-**App Layer**（生成自然语言摘要）：
-| App | 说明 |
-|-----|------|
-| SignalProfileApp | 信号身份证 |
-| ImpactAnalysisApp | 影响范围分析 |
-| FindSignalsApp | 信号查找 |
-| RelationshipApp | 关系分析 |
-| FsmDetectApp | FSM 检测（实验性）|
-| ProtocolInferApp | 协议推断（实验性）|
+| 模块 | 文件 | 说明 |
+|------|------|------|
+| 配置层 | `navisv/config.py` | 工具路径、环境变量 |
+| 驱动层 | `navisv/drivers/` | DesignDriver/SlangDriver/NetlistDriver |
+| 解析层 | `navisv/parsers/` | AST/Netlist JSON 解析 |
+| 图层 | `navisv/graph/` | 图构建、查询 API |
 
-**Query Layer**（纯结构化数据）：
-- `get_drivers` / `get_loads`：驱动源与负载
-- `find_path`：路径查找
-- `fanin_cone` / `fanout_cone`：逻辑锥
-- `search_signals`：信号搜索
-- `scc_analysis`：强连通分量
+## 配置
 
-## Quick Start
+依赖工具路径通过环境变量配置：
 
-**Python API**：
+```bash
+export NAVISV_SLANG_BIN=~/my_dv_proj/slang/slang
+export NAVISV_NETLIST_BIN=~/my_dv_proj/slang-netlist/build/tools/driver/slang-netlist
+export NAVISV_CACHE_DIR=~/.cache/navisv
+```
+
+或使用 Python：
+
 ```python
-from navisv.graph import DesignGraph
-from navisv.query import QueryService
-from navisv.apps import SignalProfileApp
-
-# Build graph from SystemVerilog sources
-graph = DesignGraph(["design.sv"])
-query = QueryService(graph)
-app = SignalProfileApp(query)
-result = app.run("design.top.clk_i")
-print(result.summary)
+from navisv.config import SLANG_BIN, NETLIST_BIN
+print(SLANG_BIN)  # 当前路径
 ```
 
-**CLI**：
-```bash
-/usr/bin/python3 cli.py profile <signal>   # 信号身份证
-/usr/bin/python3 cli.py impact <signal>    # 影响范围分析
-/usr/bin/python3 cli.py relate <a> <b>     # 关系分析
-/usr/bin/python3 cli.py find [描述]        # 查找信号
-/usr/bin/python3 cli.py --json ...         # 输出 JSON
-/usr/bin/python3 cli.py fsm               # FSM 检测（实验性）
-/usr/bin/python3 cli.py protocol         # 协议推断（实验性）
-```
-
-## Installation
-
-```bash
-# Required: Python 3.9 with slang-netlist
-/usr/bin/python3 --version  # Should be 3.9.x
-
-# Clone
-git clone https://github.com/your-handle/navisv.git
-cd navisv
-
-# Run tests
-/usr/bin/python3 -m pytest tests/ -v
-```
-
-## Key Design Principles (Iron Rules)
-
-1. **slang-netlist is the single source of truth** — never rebuild driver/load logic
-2. **networkx DiGraph is the only query interface** — no independent custom indexes
-3. **Tags are sets, not enums** — signal attributes are additive
-4. **Translate, don't judge** — only organize data; admit uncertainty when confidence is low
-5. **Design output for Agents** — all interfaces return structured data + natural language summary
-6. **Query Layer returns pure structured data** — no NL in query results
-7. **App Layer is the only NL generation layer** — Query must stay clean
-
-## Project Structure
+## 项目结构
 
 ```
 navisv/
+├── FEATURE_PLAN.md          # P2/P3 功能规划
+├── README.md                # 本文件
+├── cli.py                   # 命令行入口
 ├── navisv/
-│   ├── graph/           # Graph Layer: DesignGraph, StatementExplorer
-│   ├── query/           # Query Layer: QueryService, models
-│   └── apps/            # App Layer: SignalProfile, ImpactAnalysis, etc.
-├── examples/            # Example scripts
-├── tests/               # Test suite (pytest)
-└── cli.py               # CLI tool
+│   ├── __init__.py
+│   ├── config.py            # 配置层
+│   ├── drivers/
+│   │   ├── design_driver.py  # 统一入口
+│   │   ├── slang_driver.py   # AST 生成
+│   │   └── netlist_driver.py # Netlist 生成
+│   ├── graph/
+│   │   ├── design_graph.py  # 查询 API
+│   │   └── graph_builder.py # 图构建
+│   └── parsers/
+│       ├── ast_parser.py    # AST 解析
+│       └── netlist_parser.py # Netlist 解析
+└── docs/
+    ├── DRIVER_CAPABILITIES.md
+    └── ...
 ```
 
-## Documentation
+## CLI 命令
 
-- [ARCHITECTURE.md](ARCHITECTURE.md) — Detailed architecture (v0.8)
-- [DEVELOPMENT.md](DEVELOPMENT.md) — Development discipline and iron rules
-- [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) — Development plan and progress
-- [RULES.md](RULES.md) — 25 iron rules
+| 命令 | 说明 |
+|------|------|
+| `navisv info <file> <signal>` | 获取信号完整信息 |
+| `navisv conditions <file> <signal>` | 获取信号的所有条件 |
+| `navisv registers <files...>` | 列出所有寄存器 |
+| `navisv ast <file>` | 生成 AST JSON |
+| `navisv analyze <files...>` | 完整分析 |
+| `navisv tools` | 检查依赖工具 |
 
-## Status
+## 环境要求
 
-v0.8.0 预发布（M3 milestone）。
+- Python 3.9+
+- slang (编译好的二进制)
+- slang-netlist (编译好的二进制)
 
-已验证：
-- OpenTitan I2C 模块（161 nodes, 24 edges）
-- 54 tests passed, 3 skipped
-- 4 core apps + 2 experimental apps
-- CLI fully functional
+## 开发
+
+```bash
+# 检查工具
+/usr/bin/python3 cli.py tools --check
+
+# 运行测试
+/usr/bin/python3 -m pytest navisv/tests/ -v
+```
