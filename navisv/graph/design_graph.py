@@ -665,23 +665,35 @@ class DesignGraph:
                 }
             }
         """
-        # 使用 networkx shortest_path 获取路径
+        # 1. 尝试 networkx shortest_path (时序边: clk/rst_n → register)
         try:
-            path = nx.shortest_path(self.graph, src, dst)
+            nx_path = nx.shortest_path(self.graph, src, dst)
+            return self._build_trace_result(nx_path, src, dst)
         except (nx.NodeNotFound, nx.NetworkXNoPath):
-            return {
-                'from': src,
-                'to': dst,
-                'success': False,
-                'path': [],
-                'summary': {
-                    'reset_safe': False,
-                    'cross_clock': False,
-                    'register_count': 0,
-                    'clocks': [],
-                    'path_length': 0
-                }
+            pass
+
+        # 2. Fallback: 使用 netlist path trace (包含完整数据流路径)
+        if self._netlist_driver:
+            result = self._netlist_driver.run_path_trace(src, dst)
+            if result['success']:
+                return self._build_trace_from_netlist(result['stdout'], src, dst)
+
+        # 3. 路径不存在
+        return {
+            'from': src,
+            'to': dst,
+            'success': False,
+            'path': [],
+            'summary': {
+                'reset_safe': False,
+                'cross_clock': False,
+                'register_count': 0,
+                'clocks': [],
+                'path_length': 0
             }
+        }
+
+    def _build_trace_result(self, path: List[str], src: str, dst: str) -> Dict[str, Any]:
 
         path_info = []
         clocks_seen = set()
@@ -793,6 +805,104 @@ class DesignGraph:
 
         return nodes
 
+    def _build_trace_from_netlist(self, stdout: str, src: str, dst: str) -> Dict[str, Any]:
+        """
+        从 netlist path trace 输出构建 trace 结果
+
+        解析 slang-netlist 的 --from --to 输出，获取完整路径节点序列，
+        并用 AST 条件信息增强。
+        """
+        import re
+
+        # 解析 netlist path trace 输出
+        ansi_pattern = re.compile(r'\x1b\[[0-9;]*m')
+        clean = ansi_pattern.sub('', stdout)
+
+        # 提取路径节点 (去重，保持顺序)
+        path_signals = []
+        seen = set()
+
+        for line in clean.splitlines():
+            match = re.search(r'value\s+(\S+)\[', line)
+            if match:
+                signal = match.group(1)
+                if signal not in seen:
+                    seen.add(signal)
+                    path_signals.append(signal)
+
+        if not path_signals:
+            return {
+                'from': src, 'to': dst, 'success': False,
+                'path': [],
+                'summary': {'reset_safe': False, 'cross_clock': False, 'register_count': 0, 'clocks': [], 'path_length': 0}
+            }
+
+        # 构建路径信息
+        path_info = []
+        clocks_seen = set()
+        register_count = 0
+
+        for i, signal in enumerate(path_signals):
+            timing = {'clock_domain': None, 'reset_kind': None, 'target_kind': None}
+            is_register = False
+
+            if signal in self._signal_conditions:
+                conds = self._signal_conditions[signal]
+                if conds:
+                    c = conds[0]
+                    timing['clock_domain'] = c.get('clock_domain')
+                    timing['reset_kind'] = c.get('reset_kind')
+                    timing['target_kind'] = c.get('target_kind')
+                    if c.get('target_kind') == 'register_output':
+                        is_register = True
+                        register_count += 1
+                    if c.get('clock_domain'):
+                        clocks_seen.add(c['clock_domain'])
+
+            location = ''
+            if signal in self._signal_conditions and self._signal_conditions[signal]:
+                loc = self._signal_conditions[signal][0].get('location', {})
+                if loc:
+                    file_name = loc.get('file', '')
+                    if '/' in file_name:
+                        file_name = file_name.split('/')[-1]
+                    line_num = loc.get('line', 0)
+                    col = loc.get('column', 0)
+                    if line_num:
+                        location = f"{file_name}:{line_num}:{col}"
+
+            edge_info = {'from': None, 'relation': 'drives', 'timing': None, 'edge_kind': None}
+            driving_condition = None
+            driving_kind = None
+
+            if i > 0:
+                prev_signal = path_signals[i - 1]
+                edge_info['from'] = prev_signal
+                edge_info['timing'] = 'sequential_input' if is_register else 'combinational'
+                if is_register:
+                    if timing['reset_kind'] == 'async':
+                        edge_info['edge_kind'] = 'NegEdge'
+                    elif timing['clock_domain']:
+                        edge_info['edge_kind'] = 'PosEdge'
+
+            path_info.append({
+                'signal': signal, 'location': location, 'timing': timing,
+                'is_register': is_register, 'driving_condition': driving_condition,
+                'driving_kind': driving_kind, 'edge': edge_info
+            })
+
+        cross_clock = len(clocks_seen) > 1
+        reset_safe = all(node.get('timing', {}).get('reset_kind') in (None, 'sync', 'none') for node in path_info)
+
+        return {
+            'from': src, 'to': dst, 'success': True,
+            'path': path_info,
+            'summary': {
+                'reset_safe': reset_safe, 'cross_clock': cross_clock,
+                'register_count': register_count, 'clocks': list(clocks_seen),
+                'path_length': len(path_info)
+            }
+        }
 
     def get_path_timing(self, src: str, dst: str) -> Dict[str, Any]:
         """
