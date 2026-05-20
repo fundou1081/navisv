@@ -846,6 +846,7 @@ class DesignGraph:
             timing = {'clock_domain': None, 'reset_kind': None, 'target_kind': None}
             is_register = False
 
+            # 优先从 _signal_conditions 获取 (AST 分析结果)
             if signal in self._signal_conditions:
                 conds = self._signal_conditions[signal]
                 if conds:
@@ -858,6 +859,29 @@ class DesignGraph:
                         register_count += 1
                     if c.get('clock_domain'):
                         clocks_seen.add(c['clock_domain'])
+            else:
+                # Fallback: 从 graph edges 推断时序属性
+                # 检查是否有 clk -> signal (PosEdge) 和 rst_n -> signal (NegEdge)
+                clock_domain = None
+                reset_kind = None
+                target_kind = 'register_output'
+
+                for src, dst, edge_data in self.graph.edges(data=True):
+                    if dst != signal:
+                        continue
+                    src_short = src.split('.')[-1] if '.' in src else src
+                    if src_short == 'clk' and edge_data.get('edge_kind') == 'PosEdge':
+                        clock_domain = 'clk'
+                    if src_short == 'rst_n' and edge_data.get('edge_kind') == 'NegEdge':
+                        reset_kind = 'async'
+
+                if clock_domain:
+                    timing['clock_domain'] = clock_domain
+                    timing['reset_kind'] = reset_kind
+                    timing['target_kind'] = target_kind
+                    is_register = True
+                    register_count += 1
+                    clocks_seen.add(clock_domain)
 
             location = ''
             if signal in self._signal_conditions and self._signal_conditions[signal]:
