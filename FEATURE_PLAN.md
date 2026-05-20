@@ -96,9 +96,9 @@
 
 ## 状态
 
-- [ ] fan-out 分析增强
-- [ ] 条件覆盖率
-- [ ] 路径分析增强
-- [ ] 多信号批量分析 API
-- [ ] Timing Report Generator
-- [ ] DOT Graph Visualization
+- [x] fan-out 分析增强 (P2-1)
+- [ ] 条件覆盖率 (P2-2)
+- [x] 路径分析增强 (P2-3)
+- [ ] 多信号批量分析 API (P3-1)
+- [ ] Timing Report Generator (P3-3)
+- [ ] DOT Graph Visualization (P3-4)
