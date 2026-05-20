@@ -15,12 +15,14 @@ class DesignGraph:
     封装 MultiDiGraph，提供语义查询接口。
     """
     
-    def __init__(self, graph: nx.MultiDiGraph):
+    def __init__(self, graph: nx.MultiDiGraph, signal_conditions: Optional[Dict[str, List[Dict]]] = None):
         """
         Args:
             graph: 由 GraphBuilder 构建的 MultiDiGraph
+            signal_conditions: {signal_path: [{condition, kind, source, location}]}
         """
         self.graph = graph
+        self._signal_conditions = signal_conditions or {}
     
     def __repr__(self) -> str:
         return f"DesignGraph(nodes={self.graph.number_of_nodes()}, edges={self.graph.number_of_edges()})"
@@ -241,6 +243,84 @@ class DesignGraph:
             return nx.shortest_path(self.graph, src, dst)
         except nx.NetworkXNoPath:
             return []
+    
+    # ============================================
+    # 条件查询 (Option B)
+    # ============================================
+    
+    def get_condition_pairs(self, signal: str) -> List[Dict[str, Any]]:
+        """
+        获取信号的"条件-语句"一一对应关系
+        
+        Args:
+            signal: 信号路径 (如 'top.alu_inst.result')
+        
+        Returns:
+            [
+                {
+                    'condition': 'op_sel == 3'b0',
+                    'statement': 'result = a + b',
+                    'kind': 'case',
+                    'location': {'file': 'design.sv', 'line': 12, 'column': 19}
+                },
+                ...
+            ]
+        """
+        if signal not in self._signal_conditions:
+            return []
+        
+        results = []
+        for cond_info in self._signal_conditions[signal]:
+            loc = cond_info.get('location', {})
+            # 清理文件路径（取文件名部分）
+            file_name = loc.get('file', 'unknown')
+            if '/' in file_name:
+                file_name = file_name.split('/')[-1]
+            
+            line = loc.get('line', 0)
+            column = loc.get('column', 0)
+            
+            results.append({
+                'condition': cond_info['condition'],
+                'statement': f"{file_name}:{line}:{column}",
+                'kind': cond_info['kind'],
+                'location': f"{file_name}:{line}:{column}"
+            })
+        
+        return results
+    
+    def get_all_conditions(self, signal: str) -> List[Dict[str, Any]]:
+        """
+        获取信号的所有条件（不带边）
+        
+        Args:
+            signal: 信号路径
+        
+        Returns:
+            [{condition, kind, location, edges}, ...]
+        """
+        if signal not in self._signal_conditions:
+            return []
+        
+        # 获取该信号的边
+        edges = []
+        for src, dst, data in self.graph.in_edges(signal, data=True):
+            edges.append({
+                'from': src,
+                'edge_kind': data.get('edge_kind'),
+                'timing': data.get('timing'),
+            })
+        
+        results = []
+        for cond_info in self._signal_conditions[signal]:
+            results.append({
+                'condition': cond_info['condition'],
+                'kind': cond_info['kind'],
+                'location': cond_info.get('location'),
+                'edges': edges if edges else None  # None 表示无 named 边
+            })
+        
+        return results
     
     # ============================================
     # 统计

@@ -157,7 +157,7 @@ class DesignDriver:
         
         self._graph_builder = GraphBuilder(self._ast_parser, self._netlist_parser)
         graph = self._graph_builder.build()
-        self._design_graph = DesignGraph(graph)
+        self._design_graph = DesignGraph(graph, self._graph_builder._signal_conditions)
     
     @property
     def design_graph(self) -> DesignGraph:
