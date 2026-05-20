@@ -539,6 +539,118 @@ class DesignGraph:
         return nodes
     
 
+    def get_path_timing(self, src: str, dst: str) -> Dict[str, Any]:
+        """
+        增强的路径分析 - 结合时序属性
+
+        追踪两点间的路径，返回每个节点的 timing 属性：
+        - clock_domain: 时钟域
+        - reset_kind: reset 类型 (async/sync/none)
+        - target_kind: 目标类型 (register_output/combinational)
+
+        Args:
+            src: 起始信号
+            dst: 目标信号
+
+        Returns:
+            {
+                'from': src,
+                'to': dst,
+                'path': [
+                    {
+                        'signal': signal_name,
+                        'location': file:line:col,
+                        'timing': {
+                            'clock_domain': clk,
+                            'reset_kind': async,
+                            'target_kind': register_output
+                        },
+                        'is_register': bool
+                    }
+                ],
+                'success': bool,
+                'summary': {
+                    'reset_safe': bool,  # 路径是否全部同步 reset
+                    'cross_clock': bool,  # 是否有跨时钟域
+                    'register_count': int
+                }
+            }
+        """
+        path = self.get_path(src, dst)
+        if not path:
+            return {
+                'from': src,
+                'to': dst,
+                'path': [],
+                'success': False,
+                'summary': {'reset_safe': False, 'cross_clock': False, 'register_count': 0}
+            }
+
+        path_info = []
+        clocks_seen = set()
+        register_count = 0
+
+        for signal in path:
+            # 获取该信号的时序属性
+            timing_info = {'clock_domain': None, 'reset_kind': None, 'target_kind': None}
+            is_register = False
+
+            if signal in self._signal_conditions:
+                conds = self._signal_conditions[signal]
+                if conds:
+                    # 从第一个条件获取时序属性
+                    c = conds[0]
+                    timing_info['clock_domain'] = c.get('clock_domain')
+                    timing_info['reset_kind'] = c.get('reset_kind')
+                    timing_info['target_kind'] = c.get('target_kind')
+
+                    if c.get('target_kind') == 'register_output':
+                        is_register = True
+                        register_count += 1
+
+                    if c.get('clock_domain'):
+                        clocks_seen.add(c['clock_domain'])
+
+            # 获取位置信息
+            location = ''
+            if signal in self._signal_conditions and self._signal_conditions[signal]:
+                loc = self._signal_conditions[signal][0].get('location', {})
+                if loc:
+                    file_name = loc.get('file', '')
+                    if '/' in file_name:
+                        file_name = file_name.split('/')[-1]
+                    line = loc.get('line', 0)
+                    col = loc.get('column', 0)
+                    if line:
+                        location = f"{file_name}:{line}:{col}"
+
+            path_info.append({
+                'signal': signal,
+                'location': location,
+                'timing': timing_info,
+                'is_register': is_register
+            })
+
+        # 判断路径安全性
+        cross_clock = len(clocks_seen) > 1
+        reset_safe = all(
+            node.get('timing', {}).get('reset_kind') in (None, 'sync', 'none')
+            for node in path_info
+        )
+
+        return {
+            'from': src,
+            'to': dst,
+            'path': path_info,
+            'success': True,
+            'summary': {
+                'reset_safe': reset_safe,
+                'cross_clock': cross_clock,
+                'register_count': register_count,
+                'clocks': list(clocks_seen)
+            }
+        }
+
 if __name__ == '__main__':
     from navisv.parsers import ASTParser, NetlistParser
     from navisv.graph.graph_builder import GraphBuilder
