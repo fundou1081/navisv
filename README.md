@@ -49,6 +49,87 @@ for c in conds:
 /usr/bin/python3 cli.py --json info design.sv top.clk
 ```
 
+## CLI 输出示例
+
+### navisv info
+
+```bash
+$ /usr/bin/python3 cli.py info /tmp/test_signal_attrs.sv test_signal_attributes.result
+
+============================================================
+信号: test_signal_attributes.result
+============================================================
+
+  驱动源 (1):
+    - unknown
+
+  负载 (1):
+    - unknown
+
+  条件 (5):
+    - [if] rst_n → result <= 8'h00
+    - [if] test_signal_attributes.enable → result <= a + b
+    - [if] !test_signal_attributes.enable → result <= 8'h00
+    - [plain]  → result <= 8'h00
+    - [plain]  → result <= a + b
+```
+
+### navisv registers
+
+```bash
+$ /usr/bin/python3 cli.py registers /tmp/test_signal_attrs.sv
+
+寄存器列表 (5 个):
+
+  信号                                  时钟         Reset   
+  ----------------------------------- ---------- --------
+  case_out                            clk        sync    
+  clk2_reg                            clk2       async   
+  complex_reg                         clk        async   
+  no_reset_reg                        clk        none    
+  result                              clk        async   
+
+  统计: async=3, sync=1, no_reset=1
+```
+
+### navisv tools
+
+```bash
+$ /usr/bin/python3 cli.py tools
+
+工具路径:
+  SLANG_BIN: /Users/fundou/my_dv_proj/slang/slang
+  NETLIST_BIN: /Users/fundou/my_dv_proj/slang-netlist/build/tools/driver/slang-netlist
+
+状态: ✅ 所有工具可用
+```
+
+### navisv --json
+
+```bash
+$ /usr/bin/python3 cli.py --json info /tmp/test_signal_attrs.sv test_signal_attributes.result
+
+{
+  "signal": "test_signal_attributes.result",
+  "drivers": [
+    {"path": "test_signal_attributes.result", "location": "...test_signal_attrs.sv:13:22"}
+  ],
+  "loads": [...],
+  "conditions": [
+    {
+      "condition": "rst_n",
+      "statement": "result <= 8'h00",
+      "if_expression": "if (rst_n) result <= 8'h00;",
+      "kind": "if",
+      "edges": [{"from": "test_signal_attributes.clk", "edge_kind": "PosEdge"}],
+      "target_kind": "register_output",
+      "clock_domain": "clk",
+      "reset_kind": "async"
+    }
+  ]
+}
+```
+
 ## 架构
 
 ```
@@ -90,13 +171,6 @@ export NAVISV_NETLIST_BIN=~/my_dv_proj/slang-netlist/build/tools/driver/slang-ne
 export NAVISV_CACHE_DIR=~/.cache/navisv
 ```
 
-或使用 Python：
-
-```python
-from navisv.config import SLANG_BIN, NETLIST_BIN
-print(SLANG_BIN)  # 当前路径
-```
-
 ## 项目结构
 
 ```
@@ -104,47 +178,19 @@ navisv/
 ├── FEATURE_PLAN.md          # P2/P3 功能规划
 ├── README.md                # 本文件
 ├── cli.py                   # 命令行入口
-├── navisv/
-│   ├── __init__.py
-│   ├── config.py            # 配置层
-│   ├── drivers/
-│   │   ├── design_driver.py  # 统一入口
-│   │   ├── slang_driver.py   # AST 生成
-│   │   └── netlist_driver.py # Netlist 生成
-│   ├── graph/
-│   │   ├── design_graph.py  # 查询 API
-│   │   └── graph_builder.py # 图构建
-│   └── parsers/
-│       ├── ast_parser.py    # AST 解析
-│       └── netlist_parser.py # Netlist 解析
-└── docs/
-    ├── DRIVER_CAPABILITIES.md
-    └── ...
+├── examples/                # 示例代码
+│   ├── 01_signal_info.py
+│   ├── 02_registers.py
+│   └── 03_conditions.py
+└── navisv/
+    ├── config.py            # 配置层
+    ├── drivers/
+    ├── graph/
+    └── parsers/
 ```
-
-## CLI 命令
-
-| 命令 | 说明 |
-|------|------|
-| `navisv info <file> <signal>` | 获取信号完整信息 |
-| `navisv conditions <file> <signal>` | 获取信号的所有条件 |
-| `navisv registers <files...>` | 列出所有寄存器 |
-| `navisv ast <file>` | 生成 AST JSON |
-| `navisv analyze <files...>` | 完整分析 |
-| `navisv tools` | 检查依赖工具 |
 
 ## 环境要求
 
 - Python 3.9+
 - slang (编译好的二进制)
 - slang-netlist (编译好的二进制)
-
-## 开发
-
-```bash
-# 检查工具
-/usr/bin/python3 cli.py tools --check
-
-# 运行测试
-/usr/bin/python3 -m pytest navisv/tests/ -v
-```
