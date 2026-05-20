@@ -457,6 +457,62 @@ class GraphBuilder:
         # 提取条件
         self._extract_ternary_conditions(target_path, initializer)
     
+
+    def _find_sync_reset_in_block(self, timed_node):
+        """检查 Timed 节点内是否有 sync reset (if (!rst_n) 在 always 块内)
+        
+        Returns:
+            [{'signal': path, 'edge': 'NegEdge', 'kind': 'sync'}] or None
+        """
+        if not timed_node:
+            return None
+        
+        for child in timed_node.children:
+            if child.kind == 'Block':
+                sync_reset = self._find_sync_reset_in_conditional(child)
+                if sync_reset:
+                    return sync_reset
+        
+        return None
+    
+    def _find_sync_reset_in_conditional(self, node):
+        """递归查找 sync reset 条件: if (!reset_signal)"""
+        if not node:
+            return None
+        
+        if node.kind == 'Conditional':
+            attrs = node.attributes
+            conditions = attrs.get('conditions', [])
+            
+            if conditions and isinstance(conditions, list):
+                for cond_item in conditions:
+                    if isinstance(cond_item, dict):
+                        cond_expr = cond_item.get('expr', {})
+                        
+                        if cond_expr.get('kind') == 'UnaryOp':
+                            operand = cond_expr.get('operand', {})
+                            operand_path = self._extract_expr_path(operand)
+                            
+                            if operand_path and 'rst' in operand_path.lower():
+                                return [{
+                                    'signal': operand_path,
+                                    'edge': 'NegEdge',
+                                    'kind': 'sync'
+                                }]
+            
+            if_false = attrs.get('ifFalse', {})
+            if isinstance(if_false, dict):
+                result = self._find_sync_reset_in_conditional(if_false)
+                if result:
+                    return result
+        
+        for child in node.children:
+            result = self._find_sync_reset_in_conditional(child)
+            if result:
+                return result
+        
+        return None
+
     def _extract_timing_from_block(self, procedural_block):
         """从 ProceduralBlock 提取时钟和复位信息，返回 dict
         
@@ -518,10 +574,13 @@ class GraphBuilder:
                         'edge': edge
                     })
         
-        if clock_events or reset_events:
+        # 检查是否有 sync reset (if (!rst_n) 在 always 块内)
+        sync_reset = self._find_sync_reset_in_block(timed_node)
+        
+        if clock_events or reset_events or sync_reset:
             return {
                 'clock': clock_events if clock_events else None,
-                'reset': reset_events if reset_events else None,
+                'reset': reset_events if reset_events else sync_reset,
                 'is_register': True,
                 'procedureKind': procedural_block.attributes.get('procedureKind', 'Always')
             }
