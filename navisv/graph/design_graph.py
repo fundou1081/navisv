@@ -284,12 +284,14 @@ class DesignGraph:
             line = loc.get('line', 0)
             column = loc.get('column', 0)
             
-            # 优先使用从源码提取的 statement，否则用 location
+            # 构建完整输出
             statement = cond_info.get('statement') or f"{file_name}:{line}:{column}"
+            if_expr = cond_info.get('if_expression') or f"if ({cond_info.get('condition', '')}) {statement}"
             
             results.append({
                 'condition': cond_info['condition'],
                 'statement': statement,
+                'if_expression': if_expr,  # 完整的 if 表达式
                 'kind': cond_info['kind'],
                 'location': f"{file_name}:{line}:{column}"
             })
@@ -322,9 +324,11 @@ class DesignGraph:
         for cond_info in self._signal_conditions[signal]:
             results.append({
                 'condition': cond_info['condition'],
+                'statement': cond_info.get('statement', ''),
+                'if_expression': cond_info.get('if_expression', ''),
                 'kind': cond_info['kind'],
                 'location': cond_info.get('location'),
-                'edges': edges if edges else None  # None 表示无 named 边
+                'edges': edges if edges else None
             })
         
         return results
@@ -444,7 +448,7 @@ class DesignGraph:
         Args:
             from_signal: 起始信号
             to_signal: 目标信号
-            enrich: 是否用 AST 条件信息增强路径节点
+            enrich: 是否用 AST 条件信息增强路径节点（只增强终点）
         
         Returns:
             {
@@ -462,11 +466,19 @@ class DesignGraph:
         # 解析路径
         path_nodes = self._parse_path_trace(result['stdout'])
         
-        # 用 AST conditions 增强
-        if enrich:
+        # 用 AST conditions 增强（只增强终点，即 to_signal）
+        if enrich and to_signal in self._signal_conditions:
+            # 找到 to_signal 对应的节点并附加条件
             for node in path_nodes:
-                # 查找这个节点相关的 condition
-                self._enrich_node_with_conditions(node)
+                if node['path'] == to_signal:
+                    conds = self._signal_conditions[to_signal]
+                    if conds:
+                        # 取第一个条件及其信息
+                        c = conds[0]
+                        node['condition'] = c.get('condition')
+                        node['statement'] = c.get('statement')
+                        node['condition_kind'] = c.get('kind')
+                    break
         
         return {
             'from': from_signal,
@@ -497,22 +509,6 @@ class DesignGraph:
         
         return nodes
     
-    def _enrich_node_with_conditions(self, node: Dict):
-        """用 AST conditions 增强单个路径节点"""
-        path = node.get('path', '')
-        signal_name = path.split('.')[-1] if '.' in path else path
-        
-        # 查找这个信号相关的 condition
-        for sig, conds in self._signal_conditions.items():
-            for c in conds:
-                cond = c.get('condition', '')
-                # 简单匹配：condition 中包含信号名
-                if signal_name in cond:
-                    node['condition'] = c.get('condition')
-                    node['statement'] = c.get('statement', '')
-                    node['condition_kind'] = c.get('kind')
-                    return
-
 
 if __name__ == '__main__':
     from navisv.parsers import ASTParser, NetlistParser

@@ -510,11 +510,22 @@ class GraphBuilder:
                 'column': expr.get('source_column_start', 0),
             }
             
-            # 提取语句文本
-            statement = self._read_source_line(
+            # 提取赋值语句文本 (e.g., "count <= 0")
+            assignment_stmt = self._read_source_line(
                 location['file'], location['line'],
                 expr.get('source_column_start', 0), expr.get('source_column_end', 0)
             )
+            
+            # 构建完整的 if 表达式 (e.g., "if (rst_n) count <= 0;")
+            if condition and assignment_stmt:
+                if cond_kind == 'if':
+                    if_expression = f"if ({condition}) {assignment_stmt};"
+                elif cond_kind == 'case':
+                    if_expression = f"case ({condition}) ... {assignment_stmt}"
+                else:
+                    if_expression = f"{condition} ? {assignment_stmt}"
+            else:
+                if_expression = assignment_stmt
             
             if target_path and target_path in self._node_attrs:
                 if target_path not in self._signal_conditions:
@@ -524,7 +535,8 @@ class GraphBuilder:
                     'kind': cond_kind,
                     'source': 'ast',
                     'location': location,
-                    'statement': statement
+                    'statement': assignment_stmt,
+                    'if_expression': if_expression  # 完整 if 表达式
                 })
         
         elif kind == 'Block':
