@@ -129,18 +129,54 @@ class DesignGraph:
         if not self.graph.has_node(signal):
             return []
 
-        # 获取驱动源的时钟域
+        # 获取驱动源的时钟域 (如果驱动源是寄存器)
         source_clock = None
         if signal in self._signal_conditions:
             conds = self._signal_conditions[signal]
             if conds:
                 source_clock = conds[0].get('clock_domain')
 
+        # 推断负载的时钟域
+        # 如果一个负载被某个时钟域的寄存器消费，则它属于该时钟域
+        def infer_load_clock_domain(load_sig):
+            """推断负载信号属于哪个时钟域"""
+            # 如果负载本身是寄存器，直接返回其时钟域
+            if load_sig in self._signal_conditions:
+                conds = self._signal_conditions[load_sig]
+                if conds and conds[0].get('clock_domain'):
+                    return conds[0].get('clock_domain')
+            
+            # 否则查看哪些寄存器的时钟输入来自这个信号
+            # 或者哪些寄存器的数据输入来自这个信号
+            candidate_clocks = set()
+            
+            # 方法1: 检查哪些寄存器的时钟端口连接到这个信号
+            for src, dst in self.graph.out_edges(load_sig):
+                if dst in self._signal_conditions:
+                    dst_conds = self._signal_conditions[dst]
+                    if dst_conds and dst_conds[0].get('clock_domain'):
+                        candidate_clocks.add(dst_conds[0].get('clock_domain'))
+            
+            # 方法2: 检查哪些寄存器的数据输入来自这个信号
+            for src, dst in self.graph.in_edges(load_sig):
+                if dst in self._signal_conditions:
+                    dst_conds = self._signal_conditions[dst]
+                    if dst_conds and dst_conds[0].get('clock_domain'):
+                        candidate_clocks.add(dst_conds[0].get('clock_domain'))
+            
+            if len(candidate_clocks) == 1:
+                return list(candidate_clocks)[0]
+            elif len(candidate_clocks) > 1:
+                # 多个时钟域，返回第一个
+                return list(candidate_clocks)[0]
+            return None
+
         loads = []
         for src, dst, data in self.graph.out_edges(signal, data=True):
             timing = {'clock_domain': None, 'reset_kind': None, 'target_kind': None}
             is_register = False
 
+            # 尝试从 _signal_conditions 获取时序信息
             if dst in self._signal_conditions:
                 conds = self._signal_conditions[dst]
                 if conds:
@@ -149,9 +185,26 @@ class DesignGraph:
                     timing['reset_kind'] = c.get('reset_kind')
                     timing['target_kind'] = c.get('target_kind')
                     is_register = c.get('target_kind') == 'register_output'
+            
+            # 如果没有时序信息，尝试推断
+            if not timing['clock_domain']:
+                inferred_clk = infer_load_clock_domain(dst)
+                if inferred_clk:
+                    timing['clock_domain'] = inferred_clk
+                    # 如果目标被某个时钟域的寄存器消费，推断它可能是组合逻辑
+                    if not timing['target_kind']:
+                        timing['target_kind'] = 'combinational'
 
-            cross_clock = bool(source_clock and timing['clock_domain'] and source_clock != timing['clock_domain'])
-            async_path = is_register and timing['reset_kind'] == 'async'
+            # 判断跨时钟域和异步路径
+            # 如果源信号本身有时钟域，才谈跨时钟域
+            cross_clock = False
+            async_path = False
+            
+            if source_clock and timing['clock_domain'] and source_clock != timing['clock_domain']:
+                cross_clock = True
+            
+            if is_register and timing['reset_kind'] == 'async':
+                async_path = True
 
             loads.append({
                 'signal': dst,
