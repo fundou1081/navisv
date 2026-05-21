@@ -174,7 +174,7 @@
 ## 状态
 
 - [x] fan-out 分析增强 (P2-1)
-- [ ] 条件覆盖率 (P2-2)
+- [x] 条件覆盖率 (P2-2) - ✅ 已完成 (get_condition_coverage)
 - [x] 路径分析增强 (P2-3)
 - [ ] 多信号批量分析 API (P3-1)
 - [ ] Timing Report Generator (P3-3)
