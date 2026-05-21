@@ -199,6 +199,35 @@ class GraphBuilder:
                 if name and name not in self._name_to_path:
                     self._name_to_path[name] = node.path
 
+        # 处理边的 symbol.path 中引用但没有对应节点的情况
+        # 例如模块实例端口连接的中间信号
+        existing_paths = set(n.path for n in self.netlist.nodes)
+        for edge in self.netlist.edges:
+            if edge.symbol and edge.symbol.get('path'):
+                symbol_path = edge.symbol['path']
+                # 如果 symbol.path 不存在于节点中，创建一个占位符 Net 节点
+                if symbol_path and symbol_path not in existing_paths:
+                    # 解析模块路径和信号名
+                    parts = symbol_path.rsplit('.', 1)
+                    if len(parts) == 2:
+                        module_path, signal_name = parts
+                        # 创建占位符节点
+                        placeholder_node = NetlistNode(
+                            id=-1,  # 占位符用负数 ID
+                            name=signal_name,
+                            kind='Net',
+                            path=symbol_path,
+                            bounds=edge.bounds if edge.bounds != (0, 0) else (0, 0),
+                            direction='',
+                            location=edge.symbol.get('location'),
+                            value=None,
+                            attributes={'placeholder': True, 'from_edge': True}
+                        )
+                        self.netlist.nodes.append(placeholder_node)
+                        existing_paths.add(symbol_path)
+                        # 添加到 path_map
+                        self.netlist.path_map[symbol_path] = placeholder_node
+
 
 
     def build(self) -> nx.MultiDiGraph:
@@ -226,7 +255,7 @@ class GraphBuilder:
         return self.graph
 
     def _add_named_nodes(self):
-        """添加 Named Nodes (Port + State)"""
+        """添加 Named Nodes (Port + State + Net)"""
         # 先添加 State 节点(更高优先级)
         for state in self.netlist.get_registers():
             attr = NodeAttr(
@@ -257,6 +286,21 @@ class GraphBuilder:
             )
             self._add_node(port.path, attr)
 
+        # 添加 Net 类型的 placeholder 节点(模块实例端口连接信号)
+        for node in self.netlist.nodes:
+            if node.kind == 'Net' and node.attributes.get('placeholder') and node.path not in self._node_attrs:
+                attr = NodeAttr(
+                    name=node.name,
+                    path=node.path,
+                    kind='Net',
+                    bit_width=node.bounds,
+                    timing='combinational',
+                    module=self._extract_module(node.path),
+                    location=node.location,
+                    attributes=node.attributes,
+                )
+                self._add_node(node.path, attr)
+
     def _add_node(self, path: str, attr: NodeAttr):
         """添加节点到图中"""
         if path in self.graph:
@@ -267,6 +311,10 @@ class GraphBuilder:
 
     def _add_edges(self):
         """从 Netlist 添加边"""
+        # 先收集所有 Assignment 节点的入边和出边信息
+        # 用于处理连续赋值的中间节点
+        assignment_edges_info = {}  # assignment_id -> {'in': [(src_path, symbol)], 'out': [(tgt_path, symbol)]}
+        
         for edge in self.netlist.edges:
             src_node = self.netlist.get_node_by_id(edge.source)
             tgt_node = self.netlist.get_node_by_id(edge.target)
@@ -274,12 +322,69 @@ class GraphBuilder:
             if not src_node or not tgt_node:
                 continue
 
-            # 只添加 named → named 边
-            if not src_node.path or not tgt_node.path:
+            # 收集 Assignment 相关边的信息
+            if tgt_node.kind == 'Assignment' and not tgt_node.path:
+                if tgt_node.id not in assignment_edges_info:
+                    assignment_edges_info[tgt_node.id] = {'in': [], 'out': []}
+                src_path = src_node.path if src_node.path else ''
+                if not src_path and edge.symbol and edge.symbol.get('path'):
+                    src_path = edge.symbol['path']
+                if src_path:
+                    assignment_edges_info[tgt_node.id]['in'].append((src_path, edge.symbol))
+            
+            if src_node.kind == 'Assignment' and not src_node.path:
+                if src_node.id not in assignment_edges_info:
+                    assignment_edges_info[src_node.id] = {'in': [], 'out': []}
+                tgt_path = tgt_node.path if tgt_node.path else ''
+                if not tgt_path and edge.symbol and edge.symbol.get('path'):
+                    tgt_path = edge.symbol['path']
+                if tgt_path:
+                    assignment_edges_info[src_node.id]['out'].append((tgt_path, edge.symbol))
+
+        # 处理边
+        for edge in self.netlist.edges:
+            src_node = self.netlist.get_node_by_id(edge.source)
+            tgt_node = self.netlist.get_node_by_id(edge.target)
+
+            if not src_node or not tgt_node:
+                continue
+
+            src_path = src_node.path if src_node.path else ''
+            tgt_path = tgt_node.path if tgt_node.path else ''
+
+            # 如果 source 没有 path 但有 symbol.path 且不等于 tgt_path,使用 symbol.path
+            if not src_path and edge.symbol and edge.symbol.get('path'):
+                symbol_path = edge.symbol['path']
+                if symbol_path and symbol_path != tgt_path:
+                    src_path = symbol_path
+
+            # 如果 target 没有 path 但有 symbol.path 且不等于 src_path,使用 symbol.path
+            if not tgt_path and edge.symbol and edge.symbol.get('path'):
+                symbol_path = edge.symbol['path']
+                if symbol_path and symbol_path != src_path:
+                    tgt_path = symbol_path
+
+            # 如果 target 是没有 path 的 Assignment，尝试从出边获取目标路径
+            if tgt_node.kind == 'Assignment' and not tgt_node.path and tgt_path:
+                # 检查 Assignment 是否有多条出边，尝试找到对应的出边 symbol
+                # 对于连续赋值的中间节点，入边的 symbol 是源信号，出边的 symbol 是目标信号
+                # 但这里我们直接使用 symbol.path 作为 tgt_path
+                pass
+
+            # 如果 target 是没有 path 的 Assignment 且没有有效的 symbol.path
+            # 尝试通过 assignment_edges_info 找到出边的目标路径
+            if tgt_node.kind == 'Assignment' and not tgt_path:
+                asn_info = assignment_edges_info.get(tgt_node.id)
+                if asn_info and asn_info['out']:
+                    # 使用第一条出边的目标路径
+                    tgt_path, _ = asn_info['out'][0]
+
+            # 跳过没有有效路径的边
+            if not src_path or not tgt_path:
                 continue
 
             # 跳过 self-loop
-            if src_node.path == tgt_node.path:
+            if src_path == tgt_path:
                 continue
 
             attr = EdgeAttr(
@@ -289,12 +394,31 @@ class GraphBuilder:
             )
 
             key = self.graph.add_edge(
-                src_node.path,
-                tgt_node.path,
+                src_path,
+                tgt_path,
                 **attr.to_dict()
             )
 
-            self._edge_attrs[(src_node.path, tgt_node.path, key)] = attr
+            self._edge_attrs[(src_path, tgt_path, key)] = attr
+
+            # 如果 target 是没有 path 的 Assignment，处理出边
+            if tgt_node.kind == 'Assignment' and not tgt_node.path:
+                asn_info = assignment_edges_info.get(tgt_node.id)
+                if asn_info and len(asn_info['out']) > 1:
+                    # 有多条出边，需要为每条出边创建对应的边
+                    for out_tgt_path, out_symbol in asn_info['out'][1:]:
+                        if out_tgt_path and out_tgt_path != src_path:
+                            out_attr = EdgeAttr(
+                                edge_kind=edge.edge_kind,
+                                bounds=edge.bounds,
+                                location=out_symbol.get('location') if out_symbol else None,
+                            )
+                            out_key = self.graph.add_edge(
+                                src_path,
+                                out_tgt_path,
+                                **out_attr.to_dict()
+                            )
+                            self._edge_attrs[(src_path, out_tgt_path, out_key)] = out_attr
 
     def _extract_module(self, path: str) -> str:
         """从路径提取模块名"""
