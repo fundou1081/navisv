@@ -1108,6 +1108,26 @@ class GraphBuilder:
                 if target_path not in self._signal_conditions:
                     self._signal_conditions[target_path] = []
 
+            # 如果 target_path 不在 _node_attrs 中(中间变量如 selector_out),
+            # 添加为节点并建立 _signal_conditions 条目
+            if target_path and target_path not in self._signal_conditions:
+                # 添加模块前缀(如果需要)
+                if self._current_module_path and not any(target_path.startswith(p) for p in ['test_', 'u_']):
+                    module_parts = self._current_module_path.split('.')
+                    if len(module_parts) == 3 and module_parts[1] == module_parts[2]:
+                        current_module_short = module_parts[-1]
+                        if not target_path.startswith(current_module_short + '.'):
+                            target_path = f"{current_module_short}.{target_path}"
+                
+                # 如果仍然不在 _node_attrs 中,添加为组合逻辑节点
+                if target_path not in self._node_attrs:
+                    self._node_attrs[target_path] = type('NodeAttr', (), {
+                        'kind': 'Net', 'name': target_path.split('.')[-1]
+                    })()
+                    self.graph.add_node(target_path, kind='Net', type='logic')
+                
+                self._signal_conditions[target_path] = []
+
             # 去重: 同一 target_path + condition + statement 只保留一个
             if not target_path or target_path not in self._signal_conditions:
                 return  # target_path 无效或未初始化
@@ -1148,7 +1168,8 @@ class GraphBuilder:
 
             # 如果在 timing_ctx 中(ProceduralBlock),添加数据流边
             # 这处理 always 块中的赋值,例如: always @(posedge clk) enable_reg <= data_in;
-            if timing_ctx and target_path in self._node_attrs:
+            # 也处理 always @(*) 组合逻辑块(timing_ctx 为 None)
+            if target_path in self._node_attrs:
                 # 提取右侧表达式中的驱动信号
                 right = expr.get('right', {})
                 if isinstance(right, dict):
@@ -1161,7 +1182,8 @@ class GraphBuilder:
                                 driver = f"{current_module_short}.{driver}"
                     if driver and self.graph.has_node(driver):
                         if not self.graph.has_edge(driver, target_path):
-                            timing_type = 'sequential' if timing_ctx.get('clock') else 'combinational'
+                            # always @(*) 或 if (timing_ctx is None) 时为组合逻辑,否则为时序逻辑
+                            timing_type = 'sequential' if (timing_ctx and timing_ctx.get('clock')) else 'combinational'
                             self.graph.add_edge(driver, target_path,
                                 relation='drives', timing=timing_type,
                                 edge_kind=None, condition=condition if condition else '')
