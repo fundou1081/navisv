@@ -617,6 +617,70 @@ class DesignGraph:
 
         return result
 
+    def get_signals_info_batch(self, signals: List[str], source: str = 'both') -> Dict[str, Any]:
+        """
+        批量获取多个信号的完整信息
+
+        Args:
+            signals: 信号路径列表
+            source: 数据源 ('netlist', 'ast', 'both')
+
+        Returns:
+            {
+                'signals': [信号路径列表],
+                'results': {
+                    signal_path: {
+                        'signal': signal_path,
+                        'drivers': [...],
+                        'loads': [...],
+                        'conditions': [...]
+                    }
+                },
+                'summary': {
+                    'total_signals': int,
+                    'signals_with_fan_in': int,
+                    'signals_with_fan_out': int,
+                    'signals_with_conditions': int
+                }
+            }
+        """
+        results = {}
+        signals_with_fan_in = 0
+        signals_with_fan_out = 0
+        signals_with_conditions = 0
+
+        for signal in signals:
+            if not self.graph.has_node(signal):
+                results[signal] = {
+                    'signal': signal,
+                    'error': 'signal not found',
+                    'drivers': [],
+                    'loads': [],
+                    'conditions': []
+                }
+                continue
+
+            info = self.get_signal_info(signal, source)
+            results[signal] = info
+
+            if info.get('drivers'):
+                signals_with_fan_in += 1
+            if info.get('loads'):
+                signals_with_fan_out += 1
+            if info.get('conditions'):
+                signals_with_conditions += 1
+
+        return {
+            'signals': signals,
+            'results': results,
+            'summary': {
+                'total_signals': len(signals),
+                'signals_with_fan_in': signals_with_fan_in,
+                'signals_with_fan_out': signals_with_fan_out,
+                'signals_with_conditions': signals_with_conditions
+            }
+        }
+
     def _parse_fan_item(self, item: str) -> Tuple[str, str]:
         """解析 fan-in/fan-out 输出的一行: 'path  location'"""
         parts = item.strip().split()
@@ -742,7 +806,48 @@ class DesignGraph:
                 'cross_clock': False,
                 'register_count': 0,
                 'clocks': [],
-                'path_length': 0
+                'path_length': 0,
+                'path_confidence': {'score': 0.0, 'details': {}}
+            }
+        }
+
+    def trace_paths_batch(self, path_specs: List[Tuple[str, str]]) -> Dict[str, Any]:
+        """
+        批量追踪多个路径
+
+        Args:
+            path_specs: 路径规格列表,每个元素为 (src, dst) 元组
+
+        Returns:
+            {
+                'paths': [
+                    {'from': src, 'to': dst, 'success': bool, 'path': [...], 'summary': {...}}
+                ],
+                'summary': {
+                    'total_paths': int,
+                    'successful_paths': int,
+                    'failed_paths': int
+                }
+            }
+        """
+        results = []
+        successful = 0
+        failed = 0
+
+        for src, dst in path_specs:
+            result = self.trace_full_path(src, dst)
+            results.append(result)
+            if result['success']:
+                successful += 1
+            else:
+                failed += 1
+
+        return {
+            'paths': results,
+            'summary': {
+                'total_paths': len(path_specs),
+                'successful_paths': successful,
+                'failed_paths': failed
             }
         }
 
