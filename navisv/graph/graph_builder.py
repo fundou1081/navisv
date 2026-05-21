@@ -1339,6 +1339,36 @@ class GraphBuilder:
 
                 self._signal_conditions[target_path].append(condition_entry)
 
+            # 如果在 case 上下文中,添加 case 选择变量 -> target 的边
+            # 这允许追踪 FSM 状态对数据赋值的控制
+            # 例如: case (curr_state) S_DATA: data = tx_fifo_data_i; -> curr_state -> data
+            if cond_kind == 'case' and condition:
+                # 从 condition 中提取 case 选择变量
+                # condition 可能是: "curr_state == S_DATA" (有 case_value) 或 "curr_state" (无 case_value)
+                case_var = condition.split('==')[0].strip() if '==' in condition else condition.strip()
+                
+                # 检查 case_var 是否是 FSM 状态变量
+                # 状态变量通常在 _node_attrs 中且名称包含 'state'
+                if case_var:
+                    # 尝试找到完整的 case_var 路径
+                    full_case_var = case_var
+                    if case_var in self._node_attrs:
+                        full_case_var = case_var
+                    elif self._current_module_path:
+                        # 尝试添加模块前缀
+                        module_parts = self._current_module_path.split('.')
+                        if len(module_parts) >= 2:
+                            module_short = module_parts[-1]
+                            if not case_var.startswith(module_short + '.'):
+                                full_case_var = f"{module_short}.{case_var}"
+                    
+                    if full_case_var in self._node_attrs or full_case_var in self.graph:
+                        if self.graph.has_node(full_case_var) and self.graph.has_node(target_path):
+                            if not self.graph.has_edge(full_case_var, target_path):
+                                self.graph.add_edge(full_case_var, target_path,
+                                    relation='controls', timing='combinational',
+                                    edge_kind=None, condition=condition)
+
             # 如果在 timing_ctx 中(ProceduralBlock),添加数据流边
             # 这处理 always 块中的赋值,例如: always @(posedge clk) enable_reg <= data_in;
             # 也处理 always @(*) 组合逻辑块(timing_ctx 为 None)
