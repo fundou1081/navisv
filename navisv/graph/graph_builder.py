@@ -318,7 +318,10 @@ class GraphBuilder:
 
     def _analyze_module_conditions(self, module_node):
         """分析模块内的条件语句 (语义化递归遍历,携带 timing context)"""
+        # 存储当前模块路径,用于 ContinuousAssign 等需要模块前缀的场景
+        self._current_module_path = module_node.path
         self._traverse_with_timing(module_node, timing_ctx=None)
+        self._current_module_path = None
 
     def _traverse_with_timing(self, node, timing_ctx):
         """递归遍历 AST,timing context 随遍历传递
@@ -489,70 +492,70 @@ class GraphBuilder:
         """递归查找 sync reset 条件: if (!reset_signal)"""
         if not node:
             return None
-        
+
         # 处理 dict 类型的节点
         if isinstance(node, dict):
             if node.get('kind') == 'Conditional':
                 conditions = node.get('conditions', [])
-                
+
                 if conditions and isinstance(conditions, list):
                     for cond_item in conditions:
                         if isinstance(cond_item, dict):
                             cond_expr = cond_item.get('expr', {})
-                            
+
                             if cond_expr.get('kind') == 'UnaryOp':
                                 operand = cond_expr.get('operand', {})
                                 operand_path = self._extract_expr_path(operand)
-                                
+
                                 if operand_path and 'rst' in operand_path.lower():
                                     return [{
                                         'signal': operand_path,
                                         'edge': 'NegEdge',
                                         'kind': 'sync'
                                     }]
-                
+
                 if_false = node.get('ifFalse', {})
                 if isinstance(if_false, dict):
                     result = self._find_sync_reset_in_conditional(if_false)
                     if result:
                         return result
-            
+
             # 遍历 children
             for child in node.get('children', []):
                 if isinstance(child, dict):
                     result = self._find_sync_reset_in_conditional(child)
                     if result:
                         return result
-            
+
             return None
-        
+
         # 处理 ASTNode 对象
         if node.kind == 'Conditional':
             attrs = node.attributes
             conditions = attrs.get('conditions', [])
-            
+
             if conditions and isinstance(conditions, list):
                 for cond_item in conditions:
                     if isinstance(cond_item, dict):
                         cond_expr = cond_item.get('expr', {})
-                        
+
                         if cond_expr.get('kind') == 'UnaryOp':
                             operand = cond_expr.get('operand', {})
                             operand_path = self._extract_expr_path(operand)
-                            
+
                             if operand_path and 'rst' in operand_path.lower():
                                 return [{
                                     'signal': operand_path,
                                     'edge': 'NegEdge',
                                     'kind': 'sync'
                                 }]
-            
+
             if_false = attrs.get('ifFalse', {})
             if isinstance(if_false, dict):
                 result = self._find_sync_reset_in_conditional(if_false)
                 if result:
                     return result
-        
+
         for child in node.children:
             result = self._find_sync_reset_in_conditional(child)
             if result:
@@ -755,17 +758,96 @@ class GraphBuilder:
         if not target_path:
             return
 
-        # 确保目标在图中
+        # 添加模块前缀(如果 _current_module_path 可用)
+        if self._current_module_path and not target_path.startswith(self._current_module_path.split('.')[-1] + '.'):
+            # 从 $root.module.module 提取 short module name
+            parts = self._current_module_path.split('.')
+            if len(parts) >= 2:
+                module_short = parts[-1]
+                target_path = f"{module_short}.{target_path}"
+
+        # 如果目标不在图中,添加为组合逻辑节点
         if not self.graph.has_node(target_path):
-            return
+            self.graph.add_node(target_path, kind='Net', type='logic[7:0]')
+            self._node_attrs[target_path] = type('NodeAttr', (), {
+                'kind': 'Net', 'name': target_path.split('.')[-1]
+            })()
 
         right = assignment.get('right', {})
         if not isinstance(right, dict):
             return
 
-        # 如果右侧是 ConditionalOp,提取条件
+        # 如果右侧是 ConditionalOp,提取条件并添加边
         if right.get('kind') == 'ConditionalOp':
             self._extract_ternary_conditions(target_path, right)
+
+            # 添加连续赋值边: 从驱动信号到目标信号
+            self._add_combinational_edges(target_path, right)
+
+    def _add_combinational_edges(self, target_path: str, expr: Dict):
+        """为连续赋值表达式添加组合逻辑边"""
+        if not isinstance(expr, dict):
+            return
+
+        # 确保目标节点在图中(使用完整路径)
+        if not self.graph.has_node(target_path):
+            self.graph.add_node(target_path, kind='Net', type='logic[7:0]')
+            self._node_attrs[target_path] = type('NodeAttr', (), {
+                'kind': 'Net', 'name': target_path.split('.')[-1]
+            })()
+
+        kind = expr.get('kind', '')
+
+        if kind == 'ConditionalOp':
+            # 条件驱动: 添加条件信号边
+            conditions = expr.get('conditions', [])
+            for cond in conditions:
+                if isinstance(cond, dict):
+                    cond_expr = cond.get('expr', {})
+                    if cond_expr.get('kind') == 'ElementSelect':
+                        # sel[0] -> 获取 sel
+                        value = cond_expr.get('value', {})
+                        if value.get('kind') == 'NamedValue':
+                            driver = self._extract_expr_path(value)
+                            if driver and self.graph.has_node(driver):
+                                self.graph.add_edge(driver, target_path,
+                                    relation='drives', timing='combinational',
+                                    edge_kind=None, condition=target_path.split('.')[-1] + '.sel')
+
+            # 递归处理左右分支
+            left = expr.get('left', {})
+            right = expr.get('right', {})
+            if isinstance(left, dict):
+                self._add_combinational_edges(target_path, left)
+            if isinstance(right, dict):
+                self._add_combinational_edges(target_path, right)
+
+        elif kind == 'NamedValue':
+            # 简单信号赋值: 添加边
+            driver = self._extract_expr_path(expr)
+            # 添加模块前缀
+            if self._current_module_path and driver and not any(d in driver for d in ['.', 'test_', 'u_']):
+                module_short = self._current_module_path.split('.')[-1]
+                if not driver.startswith(module_short + '.'):
+                    driver = f"{module_short}.{driver}"
+            if driver and self.graph.has_node(driver):
+                if not self.graph.has_edge(driver, target_path):
+                    self.graph.add_edge(driver, target_path,
+                        relation='drives', timing='combinational',
+                        edge_kind=None)
+
+        elif kind == 'ElementSelect':
+            # 数组/向量选择: 从基础信号添加边
+            value = expr.get('value', {})
+            if isinstance(value, dict):
+                self._add_combinational_edges(target_path, value)
+
+        elif kind == 'BinaryOp':
+            # 二元操作: 递归处理左右操作数
+            for key in ('left', 'right'):
+                operand = expr.get(key, {})
+                if isinstance(operand, dict):
+                    self._add_combinational_edges(target_path, operand)
 
     def _analyze_conditional(self, cond_node_or_dict, timing_ctx=None):
         """
@@ -881,8 +963,31 @@ class GraphBuilder:
             if ' ' in sym:
                 sym_id, name = sym.split(' ', 1)
 
-                # 构建符号ID到完整路径的映射
-                # 遍历 _node_attrs,匹配 name
+                # 优先使用当前模块上下文来构建路径
+                if self._current_module_path:
+                    module_parts = self._current_module_path.split('.')
+
+                    if len(module_parts) == 3 and module_parts[1] == module_parts[2]:
+                        # $root.test_multi_clock_domain.test_multi_clock_domain 模式
+                        # 信号存储为 test_multi_clock_domain.<name>
+                        current_module_short = module_parts[-1]
+                        candidate = f"{current_module_short}.{name}"
+                        if candidate in self._node_attrs or self.graph.has_node(candidate):
+                            return candidate
+                    elif len(module_parts) >= 4:
+                        # $root.A.A.u_inst.B 或类似模式
+                        # 信号存储为 B.<name> (instance name 作为前缀)
+                        current_module_short = module_parts[-1]
+                        candidate = f"{current_module_short}.{name}"
+                        if candidate in self._node_attrs or self.graph.has_node(candidate):
+                            return candidate
+                        # 也检查完整路径的情况
+                        current_module_path = f"{module_parts[-2]}.{current_module_short}"
+                        candidate = f"{current_module_path}.{name}"
+                        if candidate in self._node_attrs or self.graph.has_node(candidate):
+                            return candidate
+
+                # Fallback: 遍历 _node_attrs,匹配 name
                 for node_path in self._node_attrs:
                     if node_path.endswith(f'.{name}'):
                         return node_path
@@ -892,7 +997,7 @@ class GraphBuilder:
             return sym
 
         # 递归处理
-        for key in ('left', 'right', 'operand', 'operand1', 'operand2', 'expr'):
+        for key in ('left', 'right', 'operand', 'operand1', 'operand2', 'expr', 'value'):
             if key in expr:
                 result = self._extract_expr_path(expr[key])
                 if result:
@@ -967,6 +1072,14 @@ class GraphBuilder:
             left = expr.get('left', {})
             target_path = self._extract_expr_path(left)
 
+            # 添加模块前缀(如果 _current_module_path 可用)
+            if self._current_module_path and target_path:
+                module_parts = self._current_module_path.split('.')
+                if len(module_parts) == 3 and module_parts[1] == module_parts[2]:
+                    current_module_short = module_parts[-1]
+                    if not target_path.startswith(current_module_short + '.'):
+                        target_path = f"{current_module_short}.{target_path}"
+
             # 提取位置信息
             location = {
                 'file': expr.get('source_file_start', ''),
@@ -998,7 +1111,7 @@ class GraphBuilder:
             # 去重: 同一 target_path + condition + statement 只保留一个
             if not target_path or target_path not in self._signal_conditions:
                 return  # target_path 无效或未初始化
-            
+
             dedup_key = (condition, assignment_stmt)
             for i, existing in enumerate(self._signal_conditions[target_path]):
                 if existing.get('condition') == condition and existing.get('statement') == assignment_stmt:
@@ -1032,6 +1145,26 @@ class GraphBuilder:
                     condition_entry['target_kind'] = 'combinational'
 
                 self._signal_conditions[target_path].append(condition_entry)
+
+            # 如果在 timing_ctx 中(ProceduralBlock),添加数据流边
+            # 这处理 always 块中的赋值,例如: always @(posedge clk) enable_reg <= data_in;
+            if timing_ctx and target_path in self._node_attrs:
+                # 提取右侧表达式中的驱动信号
+                right = expr.get('right', {})
+                if isinstance(right, dict):
+                    driver = self._extract_expr_path(right)
+                    if self._current_module_path and driver and not any(d in driver for d in ['.', 'test_', 'u_']):
+                        module_parts = self._current_module_path.split('.')
+                        if len(module_parts) == 3 and module_parts[1] == module_parts[2]:
+                            current_module_short = module_parts[-1]
+                            if not driver.startswith(current_module_short + '.'):
+                                driver = f"{current_module_short}.{driver}"
+                    if driver and self.graph.has_node(driver):
+                        if not self.graph.has_edge(driver, target_path):
+                            timing_type = 'sequential' if timing_ctx.get('clock') else 'combinational'
+                            self.graph.add_edge(driver, target_path,
+                                relation='drives', timing=timing_type,
+                                edge_kind=None, condition=condition if condition else '')
 
         elif kind == 'Block':
             for item in expr.get('items', []):
