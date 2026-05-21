@@ -996,6 +996,9 @@ class GraphBuilder:
                     self._signal_conditions[target_path] = []
 
             # 去重: 同一 target_path + condition + statement 只保留一个
+            if not target_path or target_path not in self._signal_conditions:
+                return  # target_path 无效或未初始化
+            
             dedup_key = (condition, assignment_stmt)
             for i, existing in enumerate(self._signal_conditions[target_path]):
                 if existing.get('condition') == condition and existing.get('statement') == assignment_stmt:
