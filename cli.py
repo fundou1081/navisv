@@ -240,6 +240,44 @@ def main():
     # navisv tools
     p = sub.add_parser('tools', help='检查依赖工具')
 
+    # navisv trace <file> <src> <dst>
+    p = sub.add_parser('trace', help='路径追踪')
+    p.add_argument('file', help='设计文件')
+    p.add_argument('src', help='起始信号')
+    p.add_argument('dst', help='目标信号')
+
+    # navisv batch-trace <file> <path1> <path2> ...
+    p = sub.add_parser('batch-trace', help='批量路径追踪')
+    p.add_argument('file', help='设计文件')
+    p.add_argument('paths', nargs='+', help='路径对，格式: src->dst')
+
+    # navisv timing <file>
+    p = sub.add_parser('timing', help='时序报告')
+    p.add_argument('file', help='设计文件')
+    p.add_argument('--format', '-f', choices=['text', 'markdown', 'json'], help='输出格式')
+
+    # navisv fanout <file> <signal>
+    p = sub.add_parser('fanout', help='Fan-out 时序分析')
+    p.add_argument('file', help='设计文件')
+    p.add_argument('signal', help='信号路径')
+
+    # navisv coverage <file> [signal]
+    p = sub.add_parser('coverage', help='条件覆盖率分析')
+    p.add_argument('file', help='设计文件')
+    p.add_argument('signal', nargs='?', help='信号路径 (省略则批量分析)')
+
+    # navisv dot <file>
+    p = sub.add_parser('dot', help='DOT 导出')
+    p.add_argument('file', help='设计文件')
+    p.add_argument('--subgraph', '-s', help='子图过滤模式 (如 module.*)')
+    p.add_argument('--output', '-o', help='输出文件路径')
+
+    # navisv fanin-cone <file> <signal>
+    p = sub.add_parser('fanin-cone', help='Fan-in 锥分析')
+    p.add_argument('file', help='设计文件')
+    p.add_argument('signal', help='信号路径')
+    p.add_argument('--depth', '-d', type=int, help='深度 (默认 3)')
+
     args = parser.parse_args()
 
     try:
@@ -251,6 +289,20 @@ def main():
             run_ast(args)
         elif args.command == 'tools':
             run_tools(args)
+        elif args.command == 'trace':
+            run_trace(args)
+        elif args.command == 'batch-trace':
+            run_batch_trace(args)
+        elif args.command == 'timing':
+            run_timing(args)
+        elif args.command == 'fanout':
+            run_fanout(args)
+        elif args.command == 'coverage':
+            run_coverage(args)
+        elif args.command == 'dot':
+            run_dot(args)
+        elif args.command == 'fanin-cone':
+            run_fanin_cone(args)
     except Exception as e:
         print(f"错误: {e}", file=sys.stderr)
         if args.json:
@@ -260,3 +312,302 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+# ========== 新增 CLI 命令 ==========
+
+def run_trace(args):
+    """路径追踪"""
+    errors = check_tools()
+    if errors:
+        for e in errors:
+            print(f"错误: {e}", file=sys.stderr)
+        return {'success': False}
+    
+    output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
+    try:
+        dd = DesignDriver([args.file], output_dir=output_dir, include_dirs=args.include or [])
+        dd.build()
+        dg = dd.design_graph
+        
+        result = dg.trace_full_path(args.src, args.dst)
+        
+        if args.json:
+            print(json.dumps(result, indent=2, default=str))
+        else:
+            if result['success']:
+                print(f"\n路径: {' → '.join([n['signal'].split('.')[-1] for n in result['path']])}")
+                print(f"成功: ✅")
+                print(f"寄存器数: {result['summary'].get('register_count', 0)}")
+                print(f"跨时钟域: {result['summary'].get('cross_clock', False)}")
+                conf = result['summary'].get('path_confidence', {})
+                if conf:
+                    print(f"置信度: {conf.get('score', 0):.3f}")
+            else:
+                print(f"\n路径追踪失败 ❌")
+                print(f"  from: {args.src}")
+                print(f"  to: {args.dst}")
+        
+        return result
+    finally:
+        shutil.rmtree(output_dir, ignore_errors=True)
+
+
+def run_batch_trace(args):
+    """批量路径追踪"""
+    errors = check_tools()
+    if errors:
+        for e in errors:
+            print(f"错误: {e}", file=sys.stderr)
+        return {'success': False}
+    
+    output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
+    try:
+        dd = DesignDriver([args.file], output_dir=output_dir, include_dirs=args.include or [])
+        dd.build()
+        dg = dd.design_graph
+        
+        # 解析路径对
+        path_specs = []
+        for pair in args.paths:
+            parts = pair.split('->')
+            if len(parts) == 2:
+                path_specs.append((parts[0].strip(), parts[1].strip()))
+        
+        result = dg.trace_paths_batch(path_specs)
+        
+        if args.json:
+            print(json.dumps(result, indent=2, default=str))
+        else:
+            summary = result['summary']
+            print(f"\n批量路径追踪结果:")
+            print(f"  总路径数: {summary['total_paths']}")
+            print(f"  成功: {summary['successful_paths']}")
+            print(f"  失败: {summary['failed_paths']}")
+            
+            for i, p in enumerate(result['paths']):
+                status = "✅" if p['success'] else "❌"
+                src_short = p['from'].split('.')[-1]
+                dst_short = p['to'].split('.')[-1]
+                if p['success']:
+                    conf = p['summary'].get('path_confidence', {}).get('score', '?')
+                    print(f"  {status} {src_short} → {dst_short} (conf={conf})")
+                else:
+                    print(f"  {status} {src_short} → {dst_short}")
+        
+        return result
+    finally:
+        shutil.rmtree(output_dir, ignore_errors=True)
+
+
+def run_timing(args):
+    """时序报告"""
+    errors = check_tools()
+    if errors:
+        for e in errors:
+            print(f"错误: {e}", file=sys.stderr)
+        return {'success': False}
+    
+    output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
+    try:
+        dd = DesignDriver([args.file], output_dir=output_dir, include_dirs=args.include or [])
+        dd.build()
+        dg = dd.design_graph
+        
+        report = dg.generate_timing_report(format=args.format or 'text')
+        
+        if args.json:
+            print(json.dumps(report, indent=2, default=str))
+        else:
+            if args.format == 'markdown':
+                md = dg._generate_markdown_report(report)
+                print(md)
+            else:
+                print(report.get('report_text', ''))
+        
+        return report
+    finally:
+        shutil.rmtree(output_dir, ignore_errors=True)
+
+
+def run_fanout(args):
+    """Fan-out 时序分析"""
+    errors = check_tools()
+    if errors:
+        for e in errors:
+            print(f"错误: {e}", file=sys.stderr)
+        return {'success': False}
+    
+    output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
+    try:
+        dd = DesignDriver([args.file], output_dir=output_dir, include_dirs=args.include or [])
+        dd.build()
+        dg = dd.design_graph
+        
+        loads = dg.get_loads_with_timing(args.signal)
+        
+        if args.json:
+            print(json.dumps(loads, indent=2, default=str))
+        else:
+            print(f"\n信号 {args.signal.split('.')[-1]} 的 fan-out ({len(loads)} 负载):\n")
+            
+            # 分类
+            registers = [l for l in loads if l['timing'].get('target_kind') == 'register_output']
+            combinational = [l for l in loads if l['timing'].get('target_kind') == 'combinational']
+            cross_clock = [l for l in loads if l.get('cross_clock')]
+            
+            print(f"  寄存器负载: {len(registers)}")
+            print(f"  组合逻辑负载: {len(combinational)}")
+            print(f"  跨时钟域: {len(cross_clock)}")
+            
+            if loads:
+                print(f"\n  负载详情:")
+                for l in loads[:10]:
+                    tgt = l['signal'].split('.')[-1]
+                    clk = l['timing'].get('clock_domain', '?')
+                    clk_short = clk.split('.')[-1] if clk else '?'
+                    kind = l['timing'].get('target_kind', '?')
+                    cc = " ⚠️ CDC" if l.get('cross_clock') else ""
+                    print(f"    → {tgt} [{clk_short}] {kind}{cc}")
+                
+                if len(loads) > 10:
+                    print(f"    ... 还有 {len(loads) - 10} 个")
+        
+        return {'success': True, 'loads': loads}
+    finally:
+        shutil.rmtree(output_dir, ignore_errors=True)
+
+
+def run_coverage(args):
+    """条件覆盖率分析"""
+    errors = check_tools()
+    if errors:
+        for e in errors:
+            print(f"错误: {e}", file=sys.stderr)
+        return {'success': False}
+    
+    output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
+    try:
+        dd = DesignDriver([args.file], output_dir=output_dir, include_dirs=args.include or [])
+        dd.build()
+        dg = dd.design_graph
+        
+        if args.signal:
+            # 单信号分析
+            coverage = dg.get_condition_coverage(args.signal)
+            
+            if args.json:
+                print(json.dumps(coverage, indent=2, default=str))
+            else:
+                sig = args.signal.split('.')[-1]
+                print(f"\n信号 {sig} 的条件覆盖率:")
+                print(f"  总条件数: {coverage['total_conditions']}")
+                
+                s = coverage['coverage_summary']
+                print(f"  if: {s.get('if', 0)}, case: {s.get('case', 0)}, plain: {s.get('plain', 0)}, ternary: {s.get('ternary', 0)}")
+                
+                if coverage['conditions']:
+                    print(f"\n  条件详情:")
+                    for c in coverage['conditions']:
+                        kind = c['kind']
+                        cond = c['condition'][:30] if c['condition'] else ''
+                        stmt = c['statement'][:40] if c['statement'] else ''
+                        print(f"    [{kind}] {cond} → {stmt}")
+                
+                if coverage['warnings']:
+                    print(f"\n  警告:")
+                    for w in coverage['warnings']:
+                        print(f"    ⚠️ {w}")
+        else:
+            # 批量分析
+            analysis = dg.analyze_condition_coverage()
+            
+            if args.json:
+                print(json.dumps(analysis, indent=2, default=str))
+            else:
+                print(f"\n条件覆盖率批量分析:")
+                print(f"  总信号数: {analysis['total_signals']}")
+                print(f"  总条件数: {analysis['total_conditions']}")
+                print(f"  有冗余的信号: {analysis['signals_with_redundancy']}")
+                print(f"  可能有死代码的信号: {len(analysis['dead_code_signals'])}")
+                
+                if analysis['dead_code_signals']:
+                    print(f"\n  死代码风险信号:")
+                    for sig in analysis['dead_code_signals'][:5]:
+                        print(f"    - {sig.split('.')[-1]}")
+        
+        return {'success': True}
+    finally:
+        shutil.rmtree(output_dir, ignore_errors=True)
+
+
+def run_dot(args):
+    """DOT 导出"""
+    errors = check_tools()
+    if errors:
+        for e in errors:
+            print(f"错误: {e}", file=sys.stderr)
+        return {'success': False}
+    
+    output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
+    try:
+        dd = DesignDriver([args.file], output_dir=output_dir, include_dirs=args.include or [])
+        dd.build()
+        dg = dd.design_graph
+        
+        dot = dg.export_to_dot(subgraph=args.subgraph)
+        
+        if args.output:
+            with open(args.output, 'w') as f:
+                f.write(dot)
+            print(f"\nDOT 已导出: {args.output}")
+        elif args.json:
+            print(dot)
+        else:
+            lines = dot.split('\n')
+            print(f"\nDOT 内容 ({len(lines)} 行):")
+            for line in lines[:30]:
+                print(f"  {line}")
+            if len(lines) > 30:
+                print(f"  ... 还有 {len(lines) - 30} 行")
+        
+        return {'success': True}
+    finally:
+        shutil.rmtree(output_dir, ignore_errors=True)
+
+
+def run_fanin_cone(args):
+    """Fan-in 锥分析"""
+    errors = check_tools()
+    if errors:
+        for e in errors:
+            print(f"错误: {e}", file=sys.stderr)
+        return {'success': False}
+    
+    output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
+    try:
+        dd = DesignDriver([args.file], output_dir=output_dir, include_dirs=args.include or [])
+        dd.build()
+        dg = dd.design_graph
+        
+        depth = args.depth or 3
+        cone = dg.get_fanin_cone(args.signal, depth=depth)
+        
+        if args.json:
+            print(json.dumps(list(cone), indent=2))
+        else:
+            sig = args.signal.split('.')[-1]
+            print(f"\n信号 {sig} 的 fan-in 锥 (深度 {depth}):")
+            print(f"  影响信号数: {len(cone)}")
+            for s in sorted(cone)[:20]:
+                print(f"    ← {s.split('.')[-1]}")
+            if len(cone) > 20:
+                print(f"    ... 还有 {len(cone) - 20} 个")
+        
+        return {'success': True}
+    finally:
+        shutil.rmtree(output_dir, ignore_errors=True)
+
+# ========== 注册新命令到 main() ==========
+
+# 在 main() 函数的 subparsers 定义之后添加:
+
