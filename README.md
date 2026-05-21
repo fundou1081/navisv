@@ -99,9 +99,49 @@ print(f"成功: {paths['summary']['successful_paths']}/{paths['summary']['total_
 # 检查工具状态
 /usr/bin/python3 cli.py tools
 
+# 路径追踪
+/usr/bin/python3 cli.py trace design.sv top.src top.dst
+
+# 批量路径追踪
+/usr/bin/python3 cli.py batch-trace design.sv top.a->top.b top.c->top.d
+
+# 时序报告
+/usr/bin/python3 cli.py timing design.sv
+/usr/bin/python3 cli.py timing design.sv --format markdown
+
+# Fan-out 时序分析
+/usr/bin/python3 cli.py fanout design.sv top.clk
+
+# 条件覆盖率
+/usr/bin/python3 cli.py coverage design.sv top.signal
+/usr/bin/python3 cli.py coverage design.sv  # 批量分析
+
+# DOT 导出
+/usr/bin/python3 cli.py dot design.sv -o output.dot
+/usr/bin/python3 cli.py dot design.sv --subgraph "module.*" -o module.dot
+
+# Fan-in 锥分析
+/usr/bin/python3 cli.py fanin-cone design.sv top.target --depth 5
+
 # JSON 输出
-/usr/bin/python3 cli.py --json info design.sv top.clk
+/usr/bin/python3 cli.py --json trace design.sv top.a top.b
 ```
+
+### CLI 命令与 API 对应表
+
+| CLI 命令 | 底层 API | 说明 |
+|----------|----------|------|
+| `info` | `get_signal_info` | 获取信号完整信息 (drivers/loads/conditions) |
+| `registers` | `get_registers` | 报告所有寄存器及其时钟域 |
+| `ast` | - | 生成 AST JSON |
+| `tools` | - | 检查依赖工具 |
+| `trace` | `trace_full_path` | 两点间路径追踪 |
+| `batch-trace` | `trace_paths_batch` | 批量追踪多条路径 |
+| `timing` | `generate_timing_report` | 生成完整时序报告 |
+| `fanout` | `get_loads_with_timing` | Fan-out 时序分析 |
+| `coverage` | `get_condition_coverage` / `analyze_condition_coverage` | 条件覆盖率分析 |
+| `dot` | `export_to_dot` | 导出为 DOT 格式 |
+| `fanin-cone` | `get_fanin_cone` | Fan-in 锥分析 |
 
 ## CLI 输出示例
 
