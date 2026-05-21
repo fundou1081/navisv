@@ -1284,9 +1284,166 @@ class DesignGraph:
                 'reset_safe': reset_safe,
                 'cross_clock': cross_clock,
                 'register_count': register_count,
-                'clocks': list(clocks_seen)
+                'clocks': list(clocks_seen),
+                'path_length': len(path_info)
             }
         }
+
+    def generate_timing_report(self, format: str = 'text') -> Dict[str, Any]:
+        """
+        生成完整的时序分析报告
+
+        Args:
+            format: 输出格式 ('text', 'markdown', 'json')
+
+        Returns:
+            {
+                'summary': {...},
+                'clock_domains': {...},
+                'registers': [...],
+                'async_paths': [...],
+                'cross_clock_paths': [...],
+                'report_text': str  (format='text'时)
+            }
+        """
+        clock_domains_data = {}
+        all_registers = []
+        async_paths = []
+        cross_clock_paths = []
+
+        # 按时钟域分组
+        for sig, conds in self._signal_conditions.items():
+            if not conds:
+                continue
+            clk = conds[0].get('clock_domain')
+            reset_kind = conds[0].get('reset_kind', 'sync')
+            target_kind = conds[0].get('target_kind')
+            if not clk:
+                continue
+            clk_short = clk.split('.')[-1] if '.' in clk else clk
+
+            if clk_short not in clock_domains_data:
+                clock_domains_data[clk_short] = {
+                    'full_name': clk,
+                    'signals': [],
+                    'registers': [],
+                    'reset_kind': reset_kind
+                }
+            if target_kind == 'register_output':
+                clock_domains_data[clk_short]['registers'].append(sig)
+                all_registers.append({'signal': sig, 'clock': clk_short, 'reset_kind': reset_kind})
+            else:
+                clock_domains_data[clk_short]['signals'].append(sig)
+
+        # 收集跨时钟域和异步路径
+        for sig in self.graph.nodes():
+            loads = self.get_loads_with_timing(sig)
+            for l in loads:
+                if l.get('cross_clock'):
+                    cross_clock_paths.append({
+                        'source': sig,
+                        'target': l['signal'],
+                        'source_clock': l['timing'].get('clock_domain', '').split('.')[-1],
+                        'target_clock': next((c['clock_domain'].split('.')[-1] for c in self._signal_conditions.get(sig, []) if c.get('clock_domain')), '')
+                    })
+                if l.get('async_path'):
+                    async_paths.append({'source': sig, 'target': l['signal']})
+
+        # 生成文本报告
+        report_lines = []
+        report_lines.append("=" * 70)
+        report_lines.append("                        TIMING REPORT")
+        report_lines.append("=" * 70)
+        report_lines.append("")
+        report_lines.append("SUMMARY")
+        report_lines.append("-" * 70)
+        total_signals = len(self.graph.nodes())
+        signals_with_timing = sum(1 for s, c in self._signal_conditions.items() if c)
+        report_lines.append(f"  Total signals:          {total_signals}")
+        report_lines.append(f"  Signals with timing:    {signals_with_timing}")
+        report_lines.append(f"  Clock domains:          {len(clock_domains_data)}")
+        report_lines.append(f"  Registers:              {len(all_registers)}")
+        report_lines.append(f"  Async paths:            {len(async_paths)}")
+        report_lines.append(f"  Cross-clock paths:      {len(cross_clock_paths)}")
+        report_lines.append("")
+
+        report_lines.append("CLOCK DOMAINS")
+        report_lines.append("-" * 70)
+        for clk, data in sorted(clock_domains_data.items()):
+            report_lines.append(f"\n  [{clk}] reset={data['reset_kind']}")
+            report_lines.append(f"    Registers: {len(data['registers'])}")
+            report_lines.append(f"    Combinational: {len(data['signals'])}")
+            if data['registers']:
+                report_lines.append(f"    Examples: {', '.join([s.split('.')[-1] for s in data['registers'][:3]])}")
+        report_lines.append("")
+
+        if cross_clock_paths:
+            report_lines.append("CROSS-CLOCK DOMAIN PATHS (CDC RISKS)")
+            report_lines.append("-" * 70)
+            for path in cross_clock_paths[:10]:
+                report_lines.append(f"  {path['source'].split('.')[-1]} [{path['source_clock']}] -> {path['target'].split('.')[-1]} [{path['target_clock']}]")
+            if len(cross_clock_paths) > 10:
+                report_lines.append(f"  ... and {len(cross_clock_paths) - 10} more")
+            report_lines.append("")
+
+        if async_paths:
+            report_lines.append("ASYNC PATHS (RESET RISKS)")
+            report_lines.append("-" * 70)
+            for path in async_paths[:10]:
+                report_lines.append(f"  {path['source'].split('.')[-1]} -> {path['target'].split('.')[-1]}")
+            if len(async_paths) > 10:
+                report_lines.append(f"  ... and {len(async_paths) - 10} more")
+            report_lines.append("")
+
+        report_lines.append("=" * 70)
+        report_text = '\n'.join(report_lines)
+
+        result = {
+            'summary': {
+                'total_signals': total_signals,
+                'signals_with_timing': signals_with_timing,
+                'clock_domains': len(clock_domains_data),
+                'registers': len(all_registers),
+                'async_paths': len(async_paths),
+                'cross_clock_paths': len(cross_clock_paths)
+            },
+            'clock_domains': clock_domains_data,
+            'registers': all_registers,
+            'async_paths': async_paths,
+            'cross_clock_paths': cross_clock_paths,
+            'report_text': report_text
+        }
+
+        return result
+
+    def _generate_markdown_report(self, data: Dict) -> str:
+        """生成 Markdown 格式的报告"""
+        lines = ["# Timing Report\n", "## Summary\n"]
+        s = data['summary']
+        lines.extend([f"| Metric | Value |", f"|---------|-------|",
+                      f"| Total Signals | {s['total_signals']} |",
+                      f"| Signals with Timing | {s['signals_with_timing']} |",
+                      f"| Clock Domains | {s['clock_domains']} |",
+                      f"| Registers | {s['registers']} |",
+                      f"| Async Paths | {s['async_paths']} |",
+                      f"| Cross-Clock Paths | {s['cross_clock_paths']} |", ""])
+        lines.append("## Clock Domains\n")
+        for clk, info in data['clock_domains'].items():
+            lines.append(f"### {clk} (reset={info['reset_kind']})\n")
+            lines.append(f"- Registers: {len(info['registers'])}")
+            lines.append(f"- Combinational: {len(info['signals'])}")
+            if info['registers']:
+                lines.append(f"- Examples: `{'`, `'.join([s.split('.')[-1] for s in info['registers'][:5]])}`")
+            lines.append("")
+        if data['cross_clock_paths']:
+            lines.append("## CDC Risks\n")
+            lines.extend([f"| Source | Target | Source Clock | Target Clock |",
+                          f"|--------|--------|--------------|---------------|"])
+            for p in data['cross_clock_paths'][:10]:
+                lines.append(f"| {p['source'].split('.')[-1]} | {p['target'].split('.')[-1]} | {p['source_clock']} | {p['target_clock']} |")
+            lines.append("")
+        return '\n'.join(lines)
+
 
 if __name__ == '__main__':
     from navisv.parsers import ASTParser, NetlistParser
