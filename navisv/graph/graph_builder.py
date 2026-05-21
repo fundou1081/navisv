@@ -1247,7 +1247,11 @@ class GraphBuilder:
 
             if data.get('edge_kind') in ('PosEdge', 'NegEdge'):
                 data['timing'] = 'sequential_input'
-            elif src_attr.kind == 'State' and dst_attr.kind != 'State':
+            elif data.get('timing') == 'combinational':
+                # 保持已设置的组合逻辑 timing 不变
+                pass
+            elif src_attr.kind == 'State' and dst_attr.kind == 'State':
+                # State -> State 边通常是 sequential_output (寄存器到寄存器)
                 data['timing'] = 'sequential_output'
             elif dst_attr.kind == 'State' and data.get('edge_kind') == 'None':
                 data['timing'] = 'sequential_input'
