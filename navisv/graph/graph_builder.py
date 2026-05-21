@@ -576,14 +576,17 @@ class GraphBuilder:
                 timed_node = child
                 break
 
+        # Fallback: 检查 body.timing (有些 AST 格式将 timing 放在 body 下而非单独的 Timed 节点)
+        timing_attr = None
         if not timed_node:
-            return None
+            body = procedural_block.attributes.get('body', {})
+            if isinstance(body, dict):
+                timing_attr = body.get('timing')
+        else:
+            timing_attr = timed_node.attributes.get('timing', {})
 
-        # 从 Timed 获取 timing 信息
-        # timing 可能是:
-        # 1. EventList with events array: {'kind': 'EventList', 'events': [...]}
-        # 2. Single SignalEvent: {'kind': 'SignalEvent', 'expr': {...}, 'edge': 'PosEdge'}
-        timing_attr = timed_node.attributes.get('timing', {})
+        if not timing_attr:
+            return None
 
         clock_events = []
         reset_events = []
@@ -878,17 +881,13 @@ class GraphBuilder:
             if ' ' in sym:
                 sym_id, name = sym.split(' ', 1)
 
-                # 先从 _symbol_to_path 获取 AST path
-                if sym_id in self._symbol_to_path:
-                    stored_name, ast_path = self._symbol_to_path[sym_id]
+                # 构建符号ID到完整路径的映射
+                # 遍历 _node_attrs,匹配 name
+                for node_path in self._node_attrs:
+                    if node_path.endswith(f'.{name}'):
+                        return node_path
 
-                    # 直接匹配 _node_attrs 中的路径
-                    for node_path in self._node_attrs:
-                        if node_path.endswith(f'.{stored_name}'):
-                            return node_path
-
-                    # 如果找不到精确匹配,返回 name
-                    return stored_name
+                # 如果找不到精确匹配,返回 name (可能只是模块内信号)
                 return name
             return sym
 
@@ -910,7 +909,16 @@ class GraphBuilder:
             expr = stmt.get('expr', {})
             self._extract_assignments_from_expr(condition, cond_kind, expr, timing_ctx)
         elif stmt.get('kind') == 'Block':
-            for item in stmt.get('items', []):
+            # Block 结构可能是:
+            # 1. items: [{ExpressionStatement}, ...]
+            # 2. body.list: [{ExpressionStatement}, ...]  (slang AST 格式)
+            items = stmt.get('items', [])
+            if not items:
+                # 尝试 body.list 结构
+                body = stmt.get('body', {})
+                if isinstance(body, dict):
+                    items = body.get('list', [])
+            for item in items:
                 self._extract_assignments_from_stmt(condition, cond_kind, item, timing_ctx)
 
     def _extract_assignments_from_expr(self, condition: str, cond_kind: str, expr: Dict, timing_ctx=None):
