@@ -758,19 +758,21 @@ class GraphBuilder:
         if not target_path:
             return
 
-        # 添加模块前缀(如果 _current_module_path 可用)
-        if self._current_module_path and not target_path.startswith(self._current_module_path.split('.')[-1] + '.'):
-            # 从 $root.module.module 提取 short module name
+        # 添加模块前缀(如果需要) - 构造完整路径而不是只取最后一部分
+        full_target_path = target_path
+        if self._current_module_path and not target_path.startswith(self._current_module_path):
             parts = self._current_module_path.split('.')
             if len(parts) >= 2:
-                module_short = parts[-1]
-                target_path = f"{module_short}.{target_path}"
+                # 使用完整模块路径前缀，例如 $root.A.B -> A.B.signal
+                module_prefix = '.'.join(parts[1:])  # 去掉 $root
+                if not target_path.startswith(module_prefix + '.'):
+                    full_target_path = f"{module_prefix}.{target_path}"
 
         # 如果目标不在图中,添加为组合逻辑节点
-        if not self.graph.has_node(target_path):
-            self.graph.add_node(target_path, kind='Net', type='logic[7:0]')
-            self._node_attrs[target_path] = type('NodeAttr', (), {
-                'kind': 'Net', 'name': target_path.split('.')[-1]
+        if not self.graph.has_node(full_target_path):
+            self.graph.add_node(full_target_path, kind='Net', type='logic[7:0]')
+            self._node_attrs[full_target_path] = type('NodeAttr', (), {
+                'kind': 'Net', 'name': full_target_path.split('.')[-1]
             })()
 
         right = assignment.get('right', {})
@@ -783,6 +785,25 @@ class GraphBuilder:
 
             # 添加连续赋值边: 从驱动信号到目标信号
             self._add_combinational_edges(target_path, right)
+        elif right.get('kind') == 'NamedValue':
+            # 简单连续赋值: assign x = y;
+            driver = self._extract_expr_path(right)
+            if driver and self.graph.has_node(driver) and self.graph.has_node(target_path):
+                if not self.graph.has_edge(driver, target_path):
+                    self.graph.add_edge(driver, target_path,
+                        relation='drives', timing='combinational',
+                        edge_kind=None, condition='')
+        elif right.get('kind') == 'ElementSelect':
+            # 数组索引赋值: assign x = y[3];
+            # 递归处理基础信号
+            base_value = right.get('value', {})
+            if isinstance(base_value, dict) and base_value.get('kind') == 'NamedValue':
+                driver = self._extract_expr_path(right)
+                if driver and self.graph.has_node(driver) and self.graph.has_node(target_path):
+                    if not self.graph.has_edge(driver, target_path):
+                        self.graph.add_edge(driver, target_path,
+                            relation='drives', timing='combinational',
+                            edge_kind=None, condition='')
 
     def _add_combinational_edges(self, target_path: str, expr: Dict):
         """为连续赋值表达式添加组合逻辑边"""
@@ -1042,9 +1063,37 @@ class GraphBuilder:
                 left = assignment.get('left', {})
                 target_path = self._extract_expr_path(left)
 
-                # 处理右侧表达式 (可能是 ConditionalOp)
+                # 添加目标模块前缀
+                if self._current_module_path and target_path and not any(
+                    target_path.startswith(p) for p in ['.', 'test_', 'u_']
+                ):
+                    module_parts = self._current_module_path.split('.')
+                    if len(module_parts) == 3 and module_parts[1] == module_parts[2]:
+                        current_module_short = module_parts[-1]
+                        if not target_path.startswith(current_module_short + '.'):
+                            target_path = f"{current_module_short}.{target_path}"
+
+                # 处理右侧表达式 (可能是 ConditionalOp 或简单的 NamedValue)
                 right = assignment.get('right', {})
                 self._extract_assignments_from_expr(condition, cond_kind, right, timing_ctx)
+
+                # 为 ContinuousAssign 添加边: driver -> target
+                # 对于 assign x = y, 添加边: y -> x
+                if target_path and isinstance(right, dict):
+                    driver = self._extract_expr_path(right)
+                    if driver and self._current_module_path and not any(
+                        driver.startswith(p) for p in ['.', 'test_', 'u_']
+                    ):
+                        module_parts = self._current_module_path.split('.')
+                        if len(module_parts) == 3 and module_parts[1] == module_parts[2]:
+                            current_module_short = module_parts[-1]
+                            if not driver.startswith(current_module_short + '.'):
+                                driver = f"{current_module_short}.{driver}"
+                    if driver and self.graph.has_node(driver) and self.graph.has_node(target_path):
+                        if not self.graph.has_edge(driver, target_path):
+                            self.graph.add_edge(driver, target_path,
+                                relation='drives', timing='combinational',
+                                edge_kind=None, condition='')
             return
 
         # 处理 ConditionalOp (三元运算符)
