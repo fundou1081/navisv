@@ -1594,6 +1594,232 @@ class DesignGraph:
             'results': results
         }
 
+    def export_to_dot(self, file_path: str = None, subgraph: str = None, 
+                       include_timing: bool = True, include_conditions: bool = True) -> str:
+        """
+        导出图到 DOT 格式
+
+        Args:
+            file_path: 输出文件路径, None 表示返回 DOT 字符串
+            subgraph: 子图范围, None 表示导出完整图
+                       支持格式: 'module.signal' 或 glob pattern 'module.*'
+            include_timing: 是否包含时序信息(时钟域、reset 类型)
+            include_conditions: 是否包含条件信息
+
+        Returns:
+            DOT 格式字符串 (如果 file_path 为 None)
+        """
+        # 获取要导出的节点
+        if subgraph:
+            nodes = self._filter_nodes_by_pattern(subgraph)
+        else:
+            nodes = list(self.graph.nodes())
+
+        # 构建 DOT 内容
+        lines = []
+        lines.append('digraph design_graph {')
+        lines.append('    # Graph attributes')
+        lines.append('    rankdir=LR;')
+        lines.append('    splines=ortho;')
+        lines.append('    nodesep=0.5;')
+        lines.append('    ranksep=0.8;')
+        lines.append('')
+
+        # 添加节点定义
+        lines.append('    # Nodes')
+        for node in nodes:
+            attrs = self.graph.nodes[node]
+            node_label = node.split('.')[-1]  # 简短名称
+            
+            # 节点样式
+            kind = attrs.get('kind', 'unknown')
+            timing = attrs.get('timing', 'unknown')
+            
+            # 根据类型设置形状和颜色
+            shape = 'box'
+            color = '#333333'
+            fillcolor = 'white'
+            
+            if kind == 'Port':
+                shape = 'oval'
+                color = '#0066cc'
+            elif kind == 'State':
+                shape = 'box'
+                color = '#009966'
+            elif kind == 'Net':
+                shape = 'ellipse'
+            
+            # 时序信息颜色
+            if include_timing:
+                if timing == 'sequential':
+                    fillcolor = '#e6f3ff'
+                elif timing == 'combinational':
+                    fillcolor = '#fff9e6'
+            
+            # 构建节点属性
+            tooltip_parts = [f"{node_label}", f"kind: {kind}", f"timing: {timing}"]
+            
+            # 添加时钟域信息
+            if include_timing and node in self._signal_conditions and self._signal_conditions[node]:
+                c = self._signal_conditions[node][0]
+                clk = c.get('clock_domain', '')
+                reset = c.get('reset_kind', '')
+                if clk:
+                    tooltip_parts.append(f"clock: {clk.split('.')[-1]}")
+                if reset:
+                    tooltip_parts.append(f"reset: {reset}")
+            
+            tooltip = '\\n'.join(tooltip_parts)
+            
+            lines.append(f'    "{node}" [')
+            lines.append(f'        label="{node_label}"')
+            lines.append(f'        shape={shape}')
+            lines.append(f'        style=filled')
+            lines.append(f'        fillcolor="{fillcolor}"')
+            lines.append(f'        color="{color}"')
+            lines.append(f'        fontname="Helvetica"')
+            lines.append(f'        fontsize=10')
+            lines.append(f'        tooltip="{tooltip}"')
+            lines.append('    ];')
+
+        lines.append('')
+
+        # 添加边定义
+        lines.append('    # Edges')
+        for src, dst, data in self.graph.edges(nodes, data=True):
+            edge_label_parts = []
+            
+            # 关系类型
+            relation = data.get('relation', '')
+            if relation:
+                edge_label_parts.append(relation)
+            
+            # 时序类型
+            if include_timing:
+                timing = data.get('timing', '')
+                if timing:
+                    edge_label_parts.append(f"[{timing}]")
+            
+            # 条件信息
+            if include_conditions:
+                condition = data.get('condition', '')
+                if condition:
+                    edge_label_parts.append(f"({condition[:30]}...)" if len(condition) > 30 else f"({condition})")
+            
+            edge_label = ', '.join(edge_label_parts) if edge_label_parts else ''
+            
+            # 边样式
+            color = '#666666'
+            penwidth = '1.0'
+            
+            if relation == 'controls':
+                color = '#cc6600'
+                penwidth = '1.5'
+            elif data.get('cross_clock'):
+                color = '#ff0000'
+                penwidth = '2.0'
+            elif timing == 'sequential' or timing == 'sequential_input':
+                color = '#0066cc'
+            elif timing == 'combinational':
+                color = '#999900'
+            
+            lines.append(f'    "{src}" -> "{dst}" [')
+            if edge_label:
+                lines.append(f'        label="{edge_label}"')
+            lines.append(f'        color="{color}"')
+            lines.append(f'        penwidth="{penwidth}"')
+            lines.append(f'        fontname="Helvetica"')
+            lines.append(f'        fontsize=9')
+            lines.append('    ];')
+
+        lines.append('}')
+
+        dot_content = '\n'.join(lines)
+
+        # 写入文件或返回
+        if file_path:
+            with open(file_path, 'w') as f:
+                f.write(dot_content)
+            return None
+        else:
+            return dot_content
+
+    def export_to_svg(self, file_path: str, subgraph: str = None,
+                       include_timing: bool = True, include_conditions: bool = True) -> bool:
+        """
+        导出图到 SVG 格式
+
+        需要 graphviz 安装
+
+        Args:
+            file_path: 输出 SVG 文件路径
+            subgraph: 子图范围
+            include_timing: 是否包含时序信息
+            include_conditions: 是否包含条件信息
+
+        Returns:
+            是否成功
+        """
+        try:
+            import subprocess
+            dot_content = self.export_to_dot(subgraph=subgraph, 
+                                              include_timing=include_timing,
+                                              include_conditions=include_conditions)
+            
+            # 调用 dot 生成 SVG
+            result = subprocess.run(
+                ['dot', '-Tsvg', '-o', file_path],
+                input=dot_content,
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            
+            return result.returncode == 0
+        except Exception as e:
+            print(f"Error generating SVG: {e}")
+            return False
+
+    def _filter_nodes_by_pattern(self, pattern: str) -> List[str]:
+        """
+        根据模式过滤节点
+
+        Args:
+            pattern: 模块路径或 glob 模式, 如 'uart_tx.*' 或 'uart_controller.uart_tx.data'
+
+        Returns:
+            匹配的节点列表
+        """
+        import fnmatch
+
+        # 如果是完整路径且节点存在
+        if pattern in self.graph.nodes():
+            return [pattern]
+
+        # 如果是 glob 模式
+        nodes = []
+        pattern_parts = pattern.split('.')
+        
+        for node in self.graph.nodes():
+            node_parts = node.split('.')
+            
+            # 检查是否匹配
+            match = True
+            for i, part in enumerate(pattern_parts):
+                if i >= len(node_parts):
+                    match = False
+                    break
+                if part == '*':
+                    continue
+                if part != node_parts[i] and part != '*':
+                    match = False
+                    break
+            
+            if match:
+                nodes.append(node)
+
+        return nodes
+
     def _generate_markdown_report(self, data: Dict) -> str:
         """生成 Markdown 格式的报告"""
         lines = ["# Timing Report\n", "## Summary\n"]
