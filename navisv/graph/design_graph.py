@@ -769,6 +769,9 @@ class DesignGraph:
             for node in path_info
         )
 
+        # 计算路径置信度评分 (0-1)
+        path_confidence = self._calculate_path_confidence(path_info, path, src, dst)
+
         return {
             'from': src,
             'to': dst,
@@ -779,7 +782,94 @@ class DesignGraph:
                 'cross_clock': cross_clock,
                 'register_count': register_count,
                 'clocks': list(clocks_seen),
-                'path_length': len(path_info)
+                'path_length': len(path_info),
+                'path_confidence': path_confidence
+            }
+        }
+
+    def _calculate_path_confidence(self, path_info: List[Dict], path: List[str], src: str, dst: str) -> Dict[str, Any]:
+        """
+        计算路径置信度评分 (0-1)
+
+        评分维度:
+        1. 节点匹配度: 路径中有多少节点有时序信息 (权重 40%)
+        2. 边完整性: 边是否有完整的属性 (condition, timing) (权重 30%)
+        3. 模块边界损失: 跨模块路径可能损失信息 (权重 15%)
+        4. 时钟域一致性: 单一时钟域更可靠 (权重 15%)
+        """
+        if not path:
+            return {'score': 0.0, 'details': {}}
+
+        # 1. 节点匹配度 (40%)
+        nodes_with_timing = sum(1 for node in path_info if node.get('timing', {}).get('clock_domain'))
+        node_match_score = nodes_with_timing / len(path_info) if path_info else 0
+
+        # 2. 边完整性 (30%)
+        edges_with_condition = 0
+        edges_with_timing = 0
+        total_edges = len(path_info) - 1  # 边数 = 节点数 - 1
+
+        if total_edges > 0:
+            for node in path_info:
+                edge = node.get('edge', {})
+                if edge.get('condition'):
+                    edges_with_condition += 1
+                if edge.get('timing'):
+                    edges_with_timing += 1
+
+        edge_condition_score = edges_with_condition / total_edges if total_edges > 0 else 0
+        edge_timing_score = edges_with_timing / total_edges if total_edges > 0 else 0
+        edge_completeness_score = (edge_condition_score + edge_timing_score) / 2
+
+        # 3. 模块边界损失 (15%)
+        # 计算路径中的模块边界数
+        module_boundaries = 0
+        for i in range(1, len(path)):
+            prev_parts = path[i-1].split('.')
+            curr_parts = path[i].split('.')
+            # 如果两个节点的模块数量不同或模块名不同,算一个边界
+            if len(prev_parts) != len(curr_parts):
+                module_boundaries += 1
+            elif len(prev_parts) >= 2 and prev_parts[1] != curr_parts[1]:
+                module_boundaries += 1
+
+        # 边界越多,置信度越低 (最多扣 15%)
+        boundary_penalty = min(module_boundaries * 0.03, 0.15)
+        module_boundary_score = 1.0 - boundary_penalty
+
+        # 4. 时钟域一致性 (15%)
+        clocks = set()
+        for node in path_info:
+            clk = node.get('timing', {}).get('clock_domain')
+            if clk:
+                clocks.add(clk)
+
+        if len(clocks) <= 1:
+            clock_consistency_score = 1.0  # 单一时钟域
+        elif len(clocks) == 2:
+            clock_consistency_score = 0.7  # 轻微跨时钟域
+        else:
+            clock_consistency_score = 0.4  # 多时钟域
+
+        # 综合评分
+        final_score = (
+            node_match_score * 0.40 +
+            edge_completeness_score * 0.30 +
+            module_boundary_score * 0.15 +
+            clock_consistency_score * 0.15
+        )
+
+        return {
+            'score': round(final_score, 3),
+            'details': {
+                'node_match_score': round(node_match_score, 3),
+                'edge_completeness_score': round(edge_completeness_score, 3),
+                'module_boundary_score': round(module_boundary_score, 3),
+                'clock_consistency_score': round(clock_consistency_score, 3),
+                'nodes_with_timing': nodes_with_timing,
+                'total_nodes': len(path_info),
+                'module_boundaries': module_boundaries,
+                'clock_domains': len(clocks)
             }
         }
 
