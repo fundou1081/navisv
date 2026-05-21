@@ -347,3 +347,302 @@ navisv/
 ## 许可证
 
 MIT
+
+---
+
+## 架构详解：语义 AST 与 Netlist 协作
+
+### 设计理念
+
+navisv 采用**双数据源协作**策略，结合 **slang AST** 的语义信息和 **slang-netlist** 的结构信息，生成完整的 design graph。
+
+```
+slang (AST)                    slang-netlist (Netlist)
+     │                              │
+     │  语法树                       │  网表
+     │  - 模块层次                   │  - 节点/边
+     │  - 条件语句 (if/case)         │  - Port/State
+     │  - 时序上下文 (always 块)     │  - Assignment
+     │  - 符号映射                   │  - Timing/EdgeKind
+     │                              │
+     └──────────┬───────────────────┘
+                │
+                ▼
+     ┌─────────────────────┐
+     │     GraphBuilder   │
+     │                     │
+     │  1. 添加 Named Nodes │ ← Netlist 提供节点结构
+     │  2. 分析 AST 条件   │ ← AST 提供语义信息
+     │  3. 添加边          │ ← Netlist 提供边结构
+     │  4. 丰富边属性      │ ← AST 补充条件
+     │  5. 推断时序分类   │ ← AST 时序上下文
+     │  6. 计算 bit_mapping │ ← Netlist bounds
+     └─────────────────────┘
+                │
+                ▼
+        DesignGraph (Graph)
+```
+
+### slang AST 提供的数据
+
+**来源**: `slang --ast-json ast.json design.sv`
+
+**数据类型**:
+| 数据 | 说明 | 用途 |
+|------|------|------|
+| **模块层次** | `module.path` 如 `uart_controller.uart_tx` | 构建完整路径 |
+| **条件语句** | `if/case/ternary` 结构 | 提取 `condition`、`kind`、`statement` |
+| **时序上下文** | `ProceduralBlock` + `Timed` (clock/reset) | 推断 `clock_domain`、`reset_kind` |
+| **符号映射** | `symbol="id name"` | 从信号 ID 映射到名称 |
+| **源码位置** | `source_line_start`、`source_column_start` | 提取 `statement` 文本 |
+
+**关键处理**:
+
+```python
+# 1. 分析条件语句，建立 signal -> conditions 映射
+def _traverse_with_timing(node, timing_ctx):
+    if node.kind == 'ProceduralBlock':
+        new_timing = _extract_timing_from_block(node)  # 提取 always @(posedge clk) 的 clock/reset
+        for child in node.children:
+            _traverse_with_timing(child, timing_ctx=new_timing)
+    
+    elif node.kind == 'Case':
+        case_var = _extract_expr_path(node.attributes.get('expr', {}))  # 提取 case 选择变量
+        for item in node.attributes.get('items', []):
+            condition = f"{case_var} == {case_value}"
+            _extract_assignments_from_stmt(condition, 'case', stmt, timing_ctx)
+    
+    elif node.kind == 'Conditional':
+        _analyze_conditional(node, timing_ctx)
+
+# 2. 提取 timing context
+def _extract_timing_from_block(node):
+    # 从 Timed 节点提取: @posedge clk, if (!rst_n)
+    for child in node.children:
+        if child.kind == 'Timed':
+            clock = _extract_clock_from_timed(child)
+            reset = _extract_reset_from_timed(child)
+            return {'clock': clock, 'reset': reset}
+```
+
+### slang-netlist 提供的数据
+
+**来源**: `slang-netlist --output netlist.json design.sv`
+
+**数据类型**:
+| 数据 | 说明 | 用途 |
+|------|------|------|
+| **节点** | `Port`、`State`、`Net`、`Assignment` | 构建图的顶点 |
+| **边** | `source → target` 带 `edge_kind`、`timing` | 构建图的边 |
+| **路径** | 完整信号路径 `module.signal` | 节点/边的标识 |
+| **位宽** | `bounds` (msb, lsb) | 计算 `bit_width` |
+| **方向** | `input/output/inout` | 标记 Port 方向 |
+
+**关键处理**:
+
+```python
+# 1. 添加 Named Nodes (Port + State)
+for state in netlist.get_registers():  # State 节点
+    attr = NodeAttr(name=state.name, path=state.path, kind='State', 
+                    bit_width=state.bounds, timing='sequential')
+    self._add_node(state.path, attr)
+
+for port in netlist.get_ports():  # Port 节点
+    attr = NodeAttr(name=port.name, path=port.path, kind='Port',
+                    direction=port.direction, timing='combinational')
+    self._add_node(port.path, attr)
+
+# 2. 从 Netlist 添加边
+for edge in netlist.edges:
+    src_path = src_node.path
+    tgt_path = tgt_node.path
+    attr = EdgeAttr(edge_kind=edge.edge_kind, bounds=edge.bounds)
+    self.graph.add_edge(src_path, tgt_path, **attr.to_dict())
+```
+
+### 协作模式
+
+#### 1. 节点构建：Netlist 提供结构，AST 补充属性
+
+```
+Netlist State 节点 ──────→ Graph 节点
+    path/name/kind/bounds          继承 + timing='sequential'
+    
+Netlist Port 节点 ──────→ Graph 节点
+    path/name/direction/bounds     继承 + timing='combinational'
+```
+
+#### 2. 边构建：Netlist 提供边结构
+
+```
+Netlist Edge (source → target) ──→ Graph Edge
+    edge_kind/timing/bounds            继承
+    + condition (来自 AST 补充)
+```
+
+**特殊处理 - Assignment 节点**:
+
+Netlist 中 `Assignment` 节点没有 `path`，需要从边信息推断：
+
+```python
+# 如果 Assignment 是连续赋值的中间节点
+if tgt_node.kind == 'Assignment' and not tgt_node.path:
+    # 从出边 symbol 获取目标路径
+    asn_info = assignment_edges_info.get(tgt_node.id)
+    if asn_info['out']:
+        tgt_path = asn_info['out'][0][0]
+```
+
+#### 3. 条件信息：AST 提供语义，Netlist 提供位置
+
+```
+AST CaseStatement                AST Conditional
+    condition='curr_state'  ──────→ _signal_conditions[signal]
+    kind='case'                   location (from AST)
+
+Netlist Edge                      + condition_kind/condition_signals
+    condition (补充)              + statement (从源文件读取)
+```
+
+#### 4. 时序推断：AST 时序上下文 + Netlist 边类型
+
+```
+AST ProceduralBlock               AST Timed
+    always @(posedge clk)    ───→ clock_domain = 'uart_clk_i'
+    if (!rst_n)             ───→ reset_kind = 'async'
+
+Netlist Edge                      Graph Edge
+    edge_kind='PosEdge'          timing='sequential'
+```
+
+### 数据流向
+
+```
+1. DesignDriver.__init__()
+   └─→ SlangDriver.generate_ast()
+   └─→ NetlistDriver.generate_netlist()
+
+2. GraphBuilder.__init__(ast_parser, netlist_parser)
+   └─→ _build_symbol_map()  # 建立 symbol -> path 映射
+
+3. GraphBuilder.build()
+   │
+   ├─→ _add_named_nodes()           # Netlist → Graph 节点
+   │      State: path, kind, bounds
+   │      Port: path, kind, direction, bounds
+   │      Net: placeholder 信号
+   │
+   ├─→ _analyze_ast_conditions()      # AST → _signal_conditions
+   │      遍历模块，提取 if/case/ternary
+   │      从 ProceduralBlock 提取 clock/reset
+   │      建立 signal → [conditions] 映射
+   │
+   ├─→ _add_edges()                   # Netlist edges → Graph edges
+   │      source → target (带 edge_kind/timing)
+   │
+   ├─→ _enrich_edges_with_conditions()  # 补充 AST 条件
+   │      从 _signal_conditions 补充
+   │
+   ├─→ _classify_timing()             # 推断 timing 类型
+   │      sequential / combinational
+   │
+   └─→ _calculate_bit_mapping()       # 计算 bit 映射
+
+4. DesignGraph(_signal_conditions)
+   └─→ 可查询: trace_full_path, get_loads_with_timing, 
+              generate_timing_report, get_condition_coverage
+```
+
+### 关键数据结构
+
+#### _signal_conditions
+
+```python
+{
+    'module.signal': [
+        {
+            'condition': 'curr_state == S_DATA',  # 条件表达式
+            'kind': 'case',                        # if/case/plain/ternary
+            'statement': 'data <= tx_fifo_data_i',  # 赋值语句
+            'clock_domain': 'uart_clk_i',          # 时钟域
+            'reset_kind': 'sync',                  # reset 类型
+            'target_kind': 'register_output',      # register_output/combinational
+            'location': {'file': 'uart_tx.sv', 'line': 224, 'column': 13},
+            'source': 'ast'                         # 数据来源
+        },
+        ...
+    ]
+}
+```
+
+#### _node_attrs
+
+```python
+{
+    'module.signal': NodeAttr(
+        name='signal',
+        path='module.signal',
+        kind='State',         # Port/State/Net
+        bit_width=(7, 0),      # [7:0]
+        timing='sequential',   # sequential/combinational
+        module='module',
+        location={...}
+    )
+}
+```
+
+#### Graph Edge
+
+```python
+Graph.add_edge(
+    'module.src_signal',           # source
+    'module.dst_signal',           # target
+    relation='drives',              # drives/controls
+    timing='sequential',            # sequential/combinational/sequential_input/sequential_output
+    edge_kind='PosEdge',           # PosEdge/NegEdge/None
+    condition='curr_state',         # 来自 AST
+    condition_kind='case'          # if/case/plain/ternary
+)
+```
+
+### FSM 路径建模特殊处理
+
+FSM 的 `case(curr_state)` 语句中，数据赋值（如 `data = tx_fifo_data_i`）与状态选择变量（如 `curr_state`）相关，但不直接连接。需要建立 **case 选择变量 → 目标信号** 的边：
+
+```python
+# 在 _extract_assignments_from_expr 中
+if cond_kind == 'case' and condition:
+    # 从 condition 提取 case 选择变量
+    case_var = condition.split('==')[0].strip()  # 'curr_state'
+    
+    if case_var in self._node_attrs:
+        self.graph.add_edge(
+            case_var, target_path,
+            relation='controls',    # 不同于 'drives'
+            timing='combinational',
+            condition=condition    # 如 'curr_state == S_DATA'
+        )
+```
+
+这使得 `trace_full_path('curr_state', 'data')` 可以找到直接路径。
+
+### 置信度评分
+
+路径置信度基于四个维度：
+
+```python
+score = (
+    0.40 * node_match_score +      # 路径节点匹配度
+    0.30 * edge_completeness_score +  # 边完整性 (condition + timing)
+    0.15 * module_boundary_score +    # 模块边界损失
+    0.15 * clock_consistency_score    # 时钟一致性
+)
+```
+
+### 限制与已知问题
+
+1. **AST 解析失败**: 如果 slang 返回非零退出码，部分语义信息可能丢失
+2. **Netlist 边界**: 对于某些复杂赋值，可能无法正确建立边
+3. **符号冲突**: 同名信号在不同模块可能冲突（通过完整路径解决）
+4. **Timing 推断**: 只支持 `always @(posedge clk)` 和 `always @(negedge clk)`，不支持多时钟
+
