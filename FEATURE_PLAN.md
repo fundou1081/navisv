@@ -178,7 +178,7 @@
 - [x] 路径分析增强 (P2-3)
 - [ ] 多信号批量分析 API (P3-1)
 - [ ] Timing Report Generator (P3-3)
-- [ ] DOT Graph Visualization (P3-4)
+- [x] DOT Graph Visualization (P3-4) - ✅ 已完成 (export_to_dot)
 - [ ] APB PRDATA 路径修复 (P1)
 - [ ] FSM 内部路径建模 (P1)
 - [ ] 组合逻辑出边修复 (P1)
