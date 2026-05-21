@@ -259,6 +259,145 @@ class SlangDriver:
             return result.stdout.strip() if result.returncode == 0 else None
         except Exception:
             return None
+    
+    @staticmethod
+    def compile_check(files: List[str],
+                      include_dirs: Optional[List[str]] = None,
+                      defines: Optional[Dict[str, str]] = None,
+                      std: str = '1800-2017',
+                      top: Optional[str] = None,
+                      ignore_unknown_modules: bool = False,
+                      include_dirs_extra: Optional[List[str]] = None) -> Dict[str, Any]:
+        """
+        快速检查源码编译状态（语法检查）
+
+        使用 slang 的 lint-only 模式，不生成完整 AST，只检查编译错误。
+
+        Args:
+            files: 源文件列表
+            include_dirs: include 目录列表
+            defines: 宏定义
+            std: 语言标准 (默认 systemverilog)
+            top: 顶层模块名
+            ignore_unknown_modules: 是否忽略未知模块
+            include_dirs_extra: 额外的 include 目录
+
+        Returns:
+            dict: {
+                'success': bool,          # 是否通过编译检查
+                'returncode': int,        # 返回码
+                'error_count': int,      # 错误数
+                'warning_count': int,     # 警告数
+                'diagnostics': list,      # 诊断信息列表
+                'errors': list,           # 错误详情 (file, line, column, message)
+                'warnings': list,         # 警告详情
+                'stdout': str,
+                'stderr': str,
+            }
+        """
+        import json as json_module
+        
+        # 合并 include 目录
+        all_include_dirs = list(include_dirs or [])
+        if include_dirs_extra:
+            all_include_dirs.extend(include_dirs_extra)
+        
+        with tempfile.TemporaryDirectory(prefix='navisv_compile_check_') as tmp_dir:
+            diag_json = os.path.join(tmp_dir, 'diag.json')
+            
+            cmd = [SLANG_BIN]
+            
+            # 语言标准
+            cmd.extend(['--std', std])
+            
+            # Include 路径
+            for inc_dir in all_include_dirs:
+                cmd.extend(['-I', inc_dir])
+            
+            # 宏定义
+            for macro, value in (defines or {}).items():
+                if value:
+                    cmd.extend(['-D', f'{macro}={value}'])
+                else:
+                    cmd.extend(['-D', macro])
+            
+            # 顶层模块
+            if top:
+                cmd.extend(['--top', top])
+            
+            # 忽略未知模块
+            if ignore_unknown_modules:
+                cmd.append('--ignore-unknown-modules')
+            
+            # 只做 lint，不生成 AST
+            cmd.append('--lint-only')
+            
+            # 诊断输出到文件
+            cmd.extend(['--diag-json', diag_json])
+            
+            # 源文件
+            cmd.extend(files)
+            
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True
+            )
+            
+            # 解析诊断
+            diagnostics = []
+            errors = []
+            warnings = []
+            error_count = 0
+            warning_count = 0
+            
+            if os.path.exists(diag_json):
+                try:
+                    with open(diag_json) as f:
+                        diag_data = json_module.load(f)
+                        diagnostics = diag_data if isinstance(diag_data, list) else [diag_data]
+                        
+                    for d in diagnostics:
+                        entry = {
+                            'severity': d.get('severity', 'Unknown'),
+                            'message': d.get('message', ''),
+                            'code': d.get('code', ''),
+                        }
+                        
+                        # 提取位置信息 - slang 使用 "location" 格式: "file:line:column"
+                        if 'location' in d:
+                            loc_str = d['location']
+                            if ':' in loc_str:
+                                parts = loc_str.rsplit(':', 2)
+                                if len(parts) == 3:
+                                    entry['file'] = parts[0]
+                                    entry['line'] = int(parts[1]) if parts[1].isdigit() else 0
+                                    entry['column'] = int(parts[2]) if parts[2].isdigit() else 0
+                                elif len(parts) == 2:
+                                    entry['file'] = parts[0]
+                                    entry['line'] = int(parts[1]) if parts[1].isdigit() else 0
+                        
+                        severity_lower = d.get('severity', '').lower()
+                        if severity_lower == 'error':
+                            error_count += 1
+                            errors.append(entry)
+                        elif severity_lower == 'warning':
+                            warning_count += 1
+                            warnings.append(entry)
+                except (json_module.JSONDecodeError, IOError):
+                    pass
+            
+            return {
+                'success': error_count == 0,
+                'returncode': result.returncode,
+                'error_count': error_count,
+                'warning_count': warning_count,
+                'diagnostics': diagnostics,
+                'errors': errors,
+                'warnings': warnings,
+                'stdout': result.stdout,
+                'stderr': result.stderr,
+            }
 
 
 if __name__ == '__main__':

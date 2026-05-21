@@ -135,6 +135,7 @@ print(f"成功: {paths['summary']['successful_paths']}/{paths['summary']['total_
 | `registers` | `get_registers` | 报告所有寄存器及其时钟域 |
 | `ast` | - | 生成 AST JSON |
 | `tools` | - | 检查依赖工具 |
+| `check` | `SlangDriver.compile_check` | 快速检查源码编译状态（语法检查） |
 | `trace` | `trace_full_path` | 两点间路径追踪 |
 | `batch-trace` | `trace_paths_batch` | 批量追踪多条路径 |
 | `timing` | `generate_timing_report` | 生成完整时序报告 |

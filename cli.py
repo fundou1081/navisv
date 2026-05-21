@@ -193,6 +193,47 @@ def run_ast(args):
         shutil.rmtree(output_dir, ignore_errors=True)
 
 
+
+def run_check(args):
+    """检查源码编译状态"""
+    from navisv.drivers import SlangDriver
+    
+    files = args.file if isinstance(args.file, list) else [args.file]
+    
+    result = SlangDriver.compile_check(
+        files,
+        include_dirs=args.include or [],
+        std=args.std or '1800-2017',
+        top=args.top,
+        ignore_unknown_modules=args.ignore_unknown,
+    )
+    
+    if args.json:
+        print(json.dumps(result, indent=2, default=str))
+    else:
+        if result['success']:
+            print("\n✅ 编译检查通过 (error=0, warning={warning})".format(warning=result['warning_count']))
+        else:
+            print("\n❌ 编译检查失败")
+            print(f"   error: {result['error_count']}, warning: {result['warning_count']}")
+            
+            if result['errors']:
+                print("\n   错误详情:")
+                for e in result['errors'][:10]:
+                    file = e.get('file', '')
+                    line = e.get('line', '?')
+                    # 简化文件路径显示
+                    if '/' in file:
+                        file = file.split('/')[-1]
+                    msg = e.get('message', '')[:60]
+                    print(f"     {file}:{line} - {msg}")
+                
+                if len(result['errors']) > 10:
+                    print(f"     ... 还有 {len(result['errors']) - 10} 个错误")
+    
+    return result
+
+
 def run_tools(args):
     """检查依赖工具"""
     from navisv.config import SLANG_BIN, NETLIST_BIN
@@ -272,6 +313,13 @@ def main():
     p.add_argument('--subgraph', '-s', help='子图过滤模式 (如 module.*)')
     p.add_argument('--output', '-o', help='输出文件路径')
 
+    # navisv check <file>
+    p = sub.add_parser('check', help='检查源码编译状态')
+    p.add_argument('file', nargs='+', help='设计文件')
+    p.add_argument('--std', '-s', help='语言标准 (1800-2017, 1800-2023, latest)')
+    p.add_argument('--top', '-t', help='顶层模块名')
+    p.add_argument('--ignore-unknown', '-i', action='store_true', help='忽略未知模块')
+
     # navisv fanin-cone <file> <signal>
     p = sub.add_parser('fanin-cone', help='Fan-in 锥分析')
     p.add_argument('file', help='设计文件')
@@ -289,6 +337,8 @@ def main():
             run_ast(args)
         elif args.command == 'tools':
             run_tools(args)
+        elif args.command == 'check':
+            run_check(args)
         elif args.command == 'trace':
             run_trace(args)
         elif args.command == 'batch-trace':

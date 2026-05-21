@@ -385,3 +385,47 @@ class TestPorts:
 
 if __name__ == '__main__':
     pytest.main([__file__, '-v', '--tb=short'])
+
+class TestCompileCheck:
+    """编译检查测试"""
+    
+    def test_compile_check_valid_file(self):
+        """测试正常文件"""
+        from navisv.drivers import SlangDriver
+        result = SlangDriver.compile_check(['/tmp/test_signal_attrs.sv'])
+        assert result is not None
+        assert 'success' in result
+        assert 'error_count' in result
+        assert 'diagnostics' in result
+        assert result['success'] == True
+        assert result['error_count'] == 0
+    
+    def test_compile_check_invalid_file(self):
+        """测试有错误的文件"""
+        from navisv.drivers import SlangDriver
+        result = SlangDriver.compile_check(['/tmp/test_apb_uart.sv'])
+        assert result is not None
+        assert result['success'] == False
+        assert result['error_count'] > 0
+        assert len(result['errors']) > 0
+    
+    def test_compile_check_with_include_dirs(self):
+        """测试带 include 目录"""
+        from navisv.drivers import SlangDriver
+        result = SlangDriver.compile_check(
+            ['/tmp/test_signal_attrs.sv'],
+            include_dirs=['/tmp']
+        )
+        assert result is not None
+    
+    def test_compile_check_cli(self):
+        """测试 CLI check 命令"""
+        import subprocess
+        result = subprocess.run(
+            ['/usr/bin/python3', 'cli.py', 'check', '/tmp/test_signal_attrs.sv'],
+            capture_output=True,
+            text=True,
+            cwd='/Users/fundou/my_dv_proj/navisv'
+        )
+        assert result.returncode == 0
+        assert '✅' in result.stdout or 'error=0' in result.stdout
