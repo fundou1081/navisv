@@ -485,18 +485,70 @@ class DesignGraph:
 
         return results
 
-    def _find_condition_key(self, signal: str) -> str:
-        """查找 signal 在 _signal_conditions 中的键"""
+    def _find_condition_key(self, signal: str) -> Optional[str]:
+        """查找 signal 在 _signal_conditions 中的键（精确优先，前缀/短名称回退）
+        
+        注意：建议使用 resolve_signal_path() 获取完整路径列表，
+        此方法仅在确定只有一个匹配时使用。
+        """
         if signal in self.__signal_conditions:
             return signal
 
-        # 尝试去掉前缀
-        if '.' in signal:
-            unprefixed = signal.split('.')[-1]
-            if unprefixed in self.__signal_conditions:
-                return unprefixed
+        # 前缀匹配: signal = 'test_signal_attributes', 匹配 'test_signal_attributes.result'
+        prefix_matches = [k for k in self.__signal_conditions if k.startswith(signal + '.')]
+        if len(prefix_matches) == 1:
+            return prefix_matches[0]
+        elif len(prefix_matches) > 1:
+            return min(prefix_matches, key=len)
+
+        # 短名称匹配: signal = 'result', 匹配 'test_signal_attributes.result'
+        short_name = signal.split('.')[-1]
+        if short_name != signal or not prefix_matches:
+            short_matches = [k for k in self.__signal_conditions if k.split('.')[-1] == short_name]
+            if len(short_matches) == 1:
+                return short_matches[0]
+            elif len(short_matches) > 1:
+                return min(short_matches, key=len)
 
         return None
+
+    def resolve_signal_path(self, signal: str) -> List[str]:
+        """解析信号路径，支持精确、前缀、短名称匹配
+        
+        Args:
+            signal: 信号路径（可以是完整路径、前缀或短名称）
+            
+        Returns:
+            匹配的完整路径列表（可能多个）
+        """
+        matches = []
+        
+        # 1. 精确匹配
+        if signal in self.__signal_conditions:
+            return [signal]
+        
+        # 2. 前缀匹配
+        prefix_matches = [k for k in self.__signal_conditions if k.startswith(signal + '.')]
+        if prefix_matches:
+            matches.extend(prefix_matches)
+        
+        # 3. 短名称匹配
+        short_name = signal.split('.')[-1]
+        if not prefix_matches or '.' not in signal:
+            short_matches = [k for k in self.__signal_conditions 
+                          if k.split('.')[-1] == short_name]
+            for m in short_matches:
+                if m not in matches:
+                    matches.append(m)
+        
+        return matches
+
+    def _get_conditions(self, signal: str) -> List[Dict[str, Any]]:
+        """获取信号的条件列表，使用路径解析辅助方法"""
+        key = self._find_condition_key(signal)
+        if key:
+            return self.__signal_conditions.get(key, [])
+        return []
 
     def get_all_conditions(self, signal: str) -> List[Dict[str, Any]]:
         """
@@ -1491,11 +1543,12 @@ class DesignGraph:
             'warnings': []
         }
 
-        if signal not in self.__signal_conditions:
+        condition_key = self._find_condition_key(signal)
+        if not condition_key:
             result['warnings'].append(f"Signal '{signal}' has no conditions")
             return result
 
-        conds = self.__signal_conditions[signal]
+        conds = self.__signal_conditions[condition_key]
         result['total_conditions'] = len(conds)
 
         # 统计条件类型

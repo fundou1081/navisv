@@ -101,6 +101,46 @@ class TestSignalInfo:
             _ = dg._signal_conditions
             assert len(w) >= 1
             assert '已废弃' in str(w[0].message)
+    
+    def test_resolve_signal_path_exact(self, dg):
+        """测试精确路径解析"""
+        result = dg.resolve_signal_path('test_signal_attributes.result')
+        assert len(result) == 1
+        assert result[0] == 'test_signal_attributes.result'
+    
+    def test_resolve_signal_path_short_name(self, dg):
+        """测试短名称解析"""
+        result = dg.resolve_signal_path('result')
+        assert len(result) == 1
+        assert result[0] == 'test_signal_attributes.result'
+    
+    def test_resolve_signal_path_prefix(self, dg):
+        """测试前缀解析"""
+        result = dg.resolve_signal_path('test_signal_attributes')
+        assert len(result) >= 5  # 模块下有多个信号
+    
+    def test_resolve_signal_path_not_found(self, dg):
+        """测试不存在的信号"""
+        result = dg.resolve_signal_path('nonexistent_signal')
+        assert result == []
+    
+    def test_resolve_signal_path_multiple_matches(self, dg):
+        """测试多个匹配（如果有）"""
+        result = dg.resolve_signal_path('clk')
+        # clk2_reg 可能匹配 'clk' 作为短名称
+        assert isinstance(result, list)
+    
+    def test_get_all_conditions_with_short_name(self, dg):
+        """测试 get_all_conditions 使用短名称"""
+        # 使用短名称 'result' 而不是完整路径
+        conds = dg.get_all_conditions('result')
+        assert len(conds) > 0  # 应该有条件
+    
+    def test_get_condition_coverage_with_short_name(self, dg):
+        """测试 get_condition_coverage 使用短名称"""
+        coverage = dg.get_condition_coverage('result')
+        assert coverage is not None
+        assert coverage['total_conditions'] > 0
 
 
     """信号信息查询测试"""

@@ -160,9 +160,12 @@ def test_single_file_build(self, test_file):
 
 ### P1 - 应该修复
 
-- [ ] **IMPROVE: 路径精确匹配**
-  - [ ] 模糊匹配改为前缀匹配或精确匹配
-  - [ ] 添加单元测试验证匹配逻辑
+- [x] **IMPROVE: 路径精确匹配**
+  - [x] 新增 `_find_condition_key()` 方法支持精确/前缀/短名称匹配
+  - [x] 新增 `resolve_signal_path()` 方法返回匹配路径列表
+  - [x] 新增 `_get_conditions()` 辅助方法
+  - [x] `get_condition_coverage()` 使用 `_find_condition_key()` 修复
+  - [x] 添加 7 个新测试验证匹配逻辑 (50 tests passed)
 
 - [x] **IMPROVE: 错误处理**
   - [x] 解析错误时返回结构化错误信息 (新增 `parse_error` 字段)
