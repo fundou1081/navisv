@@ -8,6 +8,7 @@ slang driver - 调用 slang 工具生成 AST JSON
 - 依赖文件生成
 """
 
+import logging
 import subprocess
 import os
 import json
@@ -17,6 +18,9 @@ from typing import List, Optional, Dict, Any
 
 # slang 工具路径
 from navisv.config import SLANG_BIN
+
+
+logger = logging.getLogger(__name__)
 
 
 class SlangDriver:
@@ -172,8 +176,13 @@ class SlangDriver:
                         error_count += 1
                     elif d.get('severity') == 'Warning':
                         warning_count += 1
-            except (json.JSONDecodeError, IOError):
-                pass
+            except (json.JSONDecodeError, IOError) as e:
+                logger.warning(f"Failed to parse diagnostics JSON: {e}")
+                diagnostics = []
+                error_count = -1
+                warning_count = -1
+        
+        json_size = os.path.getsize(ast_json) if os.path.exists(ast_json) else 0
         
         return {
             'ast_json': ast_json if result.returncode == 0 else None,
@@ -186,7 +195,8 @@ class SlangDriver:
             'error_count': error_count,
             'warning_count': warning_count,
             'scope': scope,
-            'json_size': os.path.getsize(ast_json) if os.path.exists(ast_json) else 0
+            'json_size': json_size,
+            'parse_error': None if error_count >= 0 else "Failed to parse diagnostics"
         }
     
     def run_fan_in(self, signal_path: str) -> Dict[str, Any]:
@@ -418,8 +428,12 @@ class SlangDriver:
                         elif severity_lower == 'warning':
                             warning_count += 1
                             warnings.append(entry)
-                except (json_module.JSONDecodeError, IOError):
-                    pass
+                except (json_module.JSONDecodeError, IOError) as e:
+                    logger.warning(f"Failed to parse diagnostics JSON: {e}")
+                    diagnostics = []
+                    errors = [{'message': f'Parse error: {e}', 'severity': 'Error', 'file': '', 'line': 0}]
+                    warnings_list = []
+                    error_count = 1
             
             return {
                 'success': error_count == 0,

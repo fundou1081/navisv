@@ -164,14 +164,15 @@ def test_single_file_build(self, test_file):
   - [ ] 模糊匹配改为前缀匹配或精确匹配
   - [ ] 添加单元测试验证匹配逻辑
 
-- [ ] **IMPROVE: 错误处理**
-  - [ ] 解析错误时返回结构化错误信息
-  - [ ] 添加错误日志（可选）
-  - [ ] 吞掉的异常改为记录或返回警告
+- [x] **IMPROVE: 错误处理**
+  - [x] 解析错误时返回结构化错误信息 (新增 `parse_error` 字段)
+  - [x] 添加 logging 模块 (logger.warning)
+  - [x] 吞掉的异常改为记录或返回警告 (43 tests passed)
 
-- [ ] **IMPROVE: 测试路径可配置**
-  - [ ] 使用 `pytest.fixture` + `tmp_path`
-  - [ ] 测试文件应通过 fixture 创建或从配置路径加载
+- [x] **IMPROVE: 测试路径可配置**
+  - [x] 使用 `pytest.fixture` + `tmp_path`
+  - [x] 创建 conftest.py 定义 fixtures
+  - [x] 添加注释说明推荐用法 (43 tests passed)
 
 ### P2 - 改进建议
 

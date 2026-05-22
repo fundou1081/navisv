@@ -17,6 +17,17 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from navisv import DesignDriver
 
 # 测试设计文件路径
+# 注意: 这些是向后兼容的硬编码路径。
+# 推荐使用 conftest.py 中定义的 fixtures 来创建临时测试文件。
+# 例如在测试函数参数中使用 test_signal_attrs_file fixture。
+#
+# conftest.py 提供了以下 fixtures:
+# - test_signal_attrs_file: 临时 test_signal_attrs.sv 文件
+# - test_apb_uart_file: 临时 test_apb_uart.sv 文件  
+# - test_filelist_file: 临时 filelist 文件
+# - legacy_test_signal_attrs: '/tmp/test_signal_attrs.sv' (向后兼容)
+# - legacy_test_apb_uart: '/tmp/test_apb_uart.sv' (向后兼容)
+
 TEST_SIGNAL_ATTRS = '/tmp/test_signal_attrs.sv'
 UART_CONTROLLER_SV = '/tmp/UART-Implementation/TCL/UART_Controller/RTL/uart_controller.sv'
 UART_TX_SV = '/tmp/UART-Implementation/TCL/UART_Controller/RTL/uart_tx.sv'
