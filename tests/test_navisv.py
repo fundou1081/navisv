@@ -429,3 +429,23 @@ class TestCompileCheck:
         )
         assert result.returncode == 0
         assert '✅' in result.stdout or 'error=0' in result.stdout
+    
+    def test_compile_check_filelist(self):
+        """测试 filelist 功能"""
+        from navisv.drivers import SlangDriver
+        result = SlangDriver.compile_check(filelist='/tmp/test_filelist.f')
+        assert result is not None
+        assert result['success'] == True
+        assert result['error_count'] == 0
+    
+    def test_compile_check_cli_filelist(self):
+        """测试 CLI check -F filelist 命令"""
+        import subprocess
+        result = subprocess.run(
+            ['/usr/bin/python3', 'cli.py', 'check', '-F', '/tmp/test_filelist.f'],
+            capture_output=True,
+            text=True,
+            cwd='/Users/fundou/my_dv_proj/navisv'
+        )
+        assert result.returncode == 0
+        assert '✅' in result.stdout or 'error=0' in result.stdout

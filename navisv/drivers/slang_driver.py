@@ -261,13 +261,15 @@ class SlangDriver:
             return None
     
     @staticmethod
-    def compile_check(files: List[str],
+    def compile_check(files: Optional[List[str]] = None,
                       include_dirs: Optional[List[str]] = None,
                       defines: Optional[Dict[str, str]] = None,
                       std: str = '1800-2017',
                       top: Optional[str] = None,
                       ignore_unknown_modules: bool = False,
-                      include_dirs_extra: Optional[List[str]] = None) -> Dict[str, Any]:
+                      include_dirs_extra: Optional[List[str]] = None,
+                      filelist: Optional[str] = None,
+                      filelist_includes: Optional[List[str]] = None) -> Dict[str, Any]:
         """
         快速检查源码编译状态（语法检查）
 
@@ -277,10 +279,12 @@ class SlangDriver:
             files: 源文件列表
             include_dirs: include 目录列表
             defines: 宏定义
-            std: 语言标准 (默认 systemverilog)
+            std: 语言标准 (默认 1800-2017)
             top: 顶层模块名
             ignore_unknown_modules: 是否忽略未知模块
             include_dirs_extra: 额外的 include 目录
+            filelist: filelist 文件路径（自动使用 -F 选项）
+            filelist_includes: filelist 内的相对 include 目录
 
         Returns:
             dict: {
@@ -301,6 +305,21 @@ class SlangDriver:
         all_include_dirs = list(include_dirs or [])
         if include_dirs_extra:
             all_include_dirs.extend(include_dirs_extra)
+        
+        # 处理 filelist
+        cmd_files = list(files) if files else []
+        
+        if filelist:
+            # 使用 slang -F 选项加载 filelist
+            # filelist 中的相对路径基于 filelist 文件所在目录
+            if filelist_includes:
+                # 动态添加 filelist 所在目录为 include 目录
+                filelist_dir = os.path.dirname(os.path.abspath(filelist))
+                all_include_dirs.append(filelist_dir)
+            
+            # -F 选项会自动解析 filelist 内的 +incdir 和 -I 选项
+            cmd_files.append(f'-F')
+            cmd_files.append(filelist)
         
         with tempfile.TemporaryDirectory(prefix='navisv_compile_check_') as tmp_dir:
             diag_json = os.path.join(tmp_dir, 'diag.json')
@@ -336,7 +355,7 @@ class SlangDriver:
             cmd.extend(['--diag-json', diag_json])
             
             # 源文件
-            cmd.extend(files)
+            cmd.extend(cmd_files)
             
             result = subprocess.run(
                 cmd,

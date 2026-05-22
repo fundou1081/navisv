@@ -198,15 +198,24 @@ def run_check(args):
     """检查源码编译状态"""
     from navisv.drivers import SlangDriver
     
-    files = args.file if isinstance(args.file, list) else [args.file]
-    
-    result = SlangDriver.compile_check(
-        files,
-        include_dirs=args.include or [],
-        std=args.std or '1800-2017',
-        top=args.top,
-        ignore_unknown_modules=args.ignore_unknown,
-    )
+    # 处理 filelist 参数
+    if args.filelist:
+        result = SlangDriver.compile_check(
+            filelist=args.filelist,
+            include_dirs=args.include or [],
+            std=args.std or '1800-2017',
+            top=args.top,
+            ignore_unknown_modules=args.ignore_unknown,
+        )
+    else:
+        files = args.file if isinstance(args.file, list) else [args.file]
+        result = SlangDriver.compile_check(
+            files=files,
+            include_dirs=args.include or [],
+            std=args.std or '1800-2017',
+            top=args.top,
+            ignore_unknown_modules=args.ignore_unknown,
+        )
     
     if args.json:
         print(json.dumps(result, indent=2, default=str))
@@ -313,9 +322,10 @@ def main():
     p.add_argument('--subgraph', '-s', help='子图过滤模式 (如 module.*)')
     p.add_argument('--output', '-o', help='输出文件路径')
 
-    # navisv check <file>
+    # navisv check <file> or <filelist>
     p = sub.add_parser('check', help='检查源码编译状态')
-    p.add_argument('file', nargs='+', help='设计文件')
+    p.add_argument('file', nargs='*', help='设计文件 (可多个, 或与 -F 互斥)')
+    p.add_argument('--filelist', '-F', help='filelist 文件路径')
     p.add_argument('--std', '-s', help='语言标准 (1800-2017, 1800-2023, latest)')
     p.add_argument('--top', '-t', help='顶层模块名')
     p.add_argument('--ignore-unknown', '-i', action='store_true', help='忽略未知模块')
