@@ -64,6 +64,44 @@ class TestSignalInfo:
             dd.build()
             yield dd.design_graph
     
+    def test_get_signal_conditions(self, dg):
+        """测试公开的 get_signal_conditions 方法"""
+        # 通过公开方法获取条件
+        conds = dg.get_signal_conditions('test_signal_attributes.result')
+        assert conds is not None
+        assert isinstance(conds, list)
+    
+    def test_get_signal_conditions_not_affect_internal(self, dg):
+        """测试 get_signal_conditions 返回副本，不影响内部状态"""
+        conds = dg.get_signal_conditions('test_signal_attributes.result')
+        if conds:
+            # 修改返回的副本
+            conds[0]['modified'] = True
+            
+            # 再次获取应该是原始值
+            conds2 = dg.get_signal_conditions('test_signal_attributes.result')
+            assert 'modified' not in conds2[0]
+    
+    def test_signal_conditions_deprecation_warning(self, dg):
+        """测试访问 _signal_conditions 会发出废弃警告"""
+        import warnings
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            _ = dg._signal_conditions
+            assert len(w) >= 1
+            assert '已废弃' in str(w[0].message)
+
+
+    """信号信息查询测试"""
+    
+    @pytest.fixture
+    def dg(self):
+        """共享的 DesignGraph fixture"""
+        with tempfile.TemporaryDirectory(prefix='navisv_test_') as output_dir:
+            dd = DesignDriver([TEST_SIGNAL_ATTRS], output_dir=output_dir)
+            dd.build()
+            yield dd.design_graph
+    
     def test_get_signal_info(self, dg):
         """测试 get_signal_info 基本功能"""
         info = dg.get_signal_info('test_signal_attributes.result')
@@ -449,3 +487,13 @@ class TestCompileCheck:
         )
         assert result.returncode == 0
         assert '✅' in result.stdout or 'error=0' in result.stdout
+    
+    def test_compile_check_multi_files(self):
+        """测试多文件自动转 filelist"""
+        from navisv.drivers import SlangDriver
+        result = SlangDriver.compile_check(
+            files=['/tmp/test_signal_attrs.sv', '/tmp/test_signal_attrs.sv']
+        )
+        assert result is not None
+        assert result['success'] == True
+        assert result['error_count'] == 0

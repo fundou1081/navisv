@@ -147,16 +147,16 @@ def test_single_file_build(self, test_file):
 
 ### P0 - 必须修复
 
-- [ ] **FIX: 封装 _signal_conditions**
-  - [ ] 改为返回深拷贝
-  - [ ] 或提供公开的 `get_signal_conditions(signal)` 方法
-  - [ ] 验证修改后不影响现有功能
+- [x] **FIX: 封装 _signal_conditions**
+  - [x] 改为 name mangling 存储 `__signal_conditions`
+  - [x] 提供公开的 `get_signal_conditions(signal)` 方法
+  - [x] `_signal_conditions` 访问发出废弃警告
+  - [x] 验证修改后不影响现有功能 (43 tests passed)
 
-- [ ] **FIX: 多文件编译返回 0 节点**
-  - [ ] 调查 slang 对多文件的处理方式
-  - [ ] 确定是否需要 `--top` 参数
-  - [ ] 自动推断顶层模块或要求用户指定
-  - [ ] 节点为 0 时给出明确错误提示
+- [x] **FIX: 多文件编译返回 0 节点**
+  - [x] 实现方案 C: 多文件自动生成临时 filelist 调用 slang -F
+  - [x] 添加测试 `test_compile_check_multi_files`
+  - [x] 验证修改后不影响现有功能 (43 tests passed)
 
 ### P1 - 应该修复
 

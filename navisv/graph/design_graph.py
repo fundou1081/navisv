@@ -4,6 +4,8 @@ DesignGraph - 最终用户接口
 Layer 3: 封装 MultiDiGraph,提供查询接口
 """
 
+import copy
+import warnings
 import networkx as nx
 from typing import List, Dict, Any, Optional, Set, Tuple
 
@@ -25,12 +27,40 @@ class DesignGraph:
             netlist_driver: NetlistDriver 实例(用于 fan-in/fan-out 查询)
         """
         self.graph = graph
-        self._signal_conditions = signal_conditions or {}
+        # 内部存储使用 name mangling，外部无法直接访问
+        self.__signal_conditions = signal_conditions or {}
         self._netlist_driver = netlist_driver
 
     def __repr__(self) -> str:
         return f"DesignGraph(nodes={self.graph.number_of_nodes()}, edges={self.graph.number_of_edges()})"
 
+    # ============================================
+    # 条件查询（公开 API）
+    # ============================================
+    
+    def get_signal_conditions(self, signal: str) -> List[Dict[str, Any]]:
+        """获取信号的条件列表
+        
+        Args:
+            signal: 信号路径
+            
+        Returns:
+            条件字典列表的副本（修改不影响内部状态）
+        """
+        raw = self.__signal_conditions.get(signal, [])
+        return [dict(c) for c in raw]
+    
+    @property
+    def _signal_conditions(self) -> Dict[str, List[Dict[str, Any]]]:
+        """内部数据访问（向后兼容，建议使用 get_signal_conditions）"""
+        warnings.warn(
+            "直接访问 _signal_conditions 已废弃，请使用 get_signal_conditions(signal) 方法",
+            DeprecationWarning,
+            stacklevel=2
+        )
+        return {k: [dict(c) for c in v] 
+                for k, v in self.__signal_conditions.items()}
+    
     # ============================================
     # 基本查询
     # ============================================
@@ -131,8 +161,8 @@ class DesignGraph:
 
         # 获取驱动源的时钟域 (如果驱动源是寄存器)
         source_clock = None
-        if signal in self._signal_conditions:
-            conds = self._signal_conditions[signal]
+        if signal in self.__signal_conditions:
+            conds = self.__signal_conditions[signal]
             if conds:
                 source_clock = conds[0].get('clock_domain')
 
@@ -141,8 +171,8 @@ class DesignGraph:
         def infer_load_clock_domain(load_sig):
             """推断负载信号属于哪个时钟域"""
             # 如果负载本身是寄存器，直接返回其时钟域
-            if load_sig in self._signal_conditions:
-                conds = self._signal_conditions[load_sig]
+            if load_sig in self.__signal_conditions:
+                conds = self.__signal_conditions[load_sig]
                 if conds and conds[0].get('clock_domain'):
                     return conds[0].get('clock_domain')
             
@@ -152,15 +182,15 @@ class DesignGraph:
             
             # 方法1: 检查哪些寄存器的时钟端口连接到这个信号
             for src, dst in self.graph.out_edges(load_sig):
-                if dst in self._signal_conditions:
-                    dst_conds = self._signal_conditions[dst]
+                if dst in self.__signal_conditions:
+                    dst_conds = self.__signal_conditions[dst]
                     if dst_conds and dst_conds[0].get('clock_domain'):
                         candidate_clocks.add(dst_conds[0].get('clock_domain'))
             
             # 方法2: 检查哪些寄存器的数据输入来自这个信号
             for src, dst in self.graph.in_edges(load_sig):
-                if dst in self._signal_conditions:
-                    dst_conds = self._signal_conditions[dst]
+                if dst in self.__signal_conditions:
+                    dst_conds = self.__signal_conditions[dst]
                     if dst_conds and dst_conds[0].get('clock_domain'):
                         candidate_clocks.add(dst_conds[0].get('clock_domain'))
             
@@ -177,8 +207,8 @@ class DesignGraph:
             is_register = False
 
             # 尝试从 _signal_conditions 获取时序信息
-            if dst in self._signal_conditions:
-                conds = self._signal_conditions[dst]
+            if dst in self.__signal_conditions:
+                conds = self.__signal_conditions[dst]
                 if conds:
                     c = conds[0]
                     timing['clock_domain'] = c.get('clock_domain')
@@ -427,11 +457,11 @@ class DesignGraph:
                 ...
             ]
         """
-        if signal not in self._signal_conditions:
+        if signal not in self.__signal_conditions:
             return []
 
         results = []
-        for cond_info in self._signal_conditions[signal]:
+        for cond_info in self.__signal_conditions[signal]:
             loc = cond_info.get('location', {})
             # 清理文件路径(取文件名部分)
             file_name = loc.get('file', 'unknown')
@@ -457,13 +487,13 @@ class DesignGraph:
 
     def _find_condition_key(self, signal: str) -> str:
         """查找 signal 在 _signal_conditions 中的键"""
-        if signal in self._signal_conditions:
+        if signal in self.__signal_conditions:
             return signal
 
         # 尝试去掉前缀
         if '.' in signal:
             unprefixed = signal.split('.')[-1]
-            if unprefixed in self._signal_conditions:
+            if unprefixed in self.__signal_conditions:
                 return unprefixed
 
         return None
@@ -493,7 +523,7 @@ class DesignGraph:
                 })
 
         results = []
-        for cond_info in self._signal_conditions[condition_key]:
+        for cond_info in self.__signal_conditions[condition_key]:
             result = {
                 'condition': cond_info['condition'],
                 'statement': cond_info.get('statement', ''),
@@ -717,11 +747,11 @@ class DesignGraph:
         path_nodes = self._parse_path_trace(result['stdout'])
 
         # 用 AST conditions 增强(只增强终点,即 to_signal)
-        if enrich and to_signal in self._signal_conditions:
+        if enrich and to_signal in self.__signal_conditions:
             # 找到 to_signal 对应的节点并附加条件
             for node in path_nodes:
                 if node['path'] == to_signal:
-                    conds = self._signal_conditions[to_signal]
+                    conds = self.__signal_conditions[to_signal]
                     if conds:
                         # 取第一个条件及其信息
                         c = conds[0]
@@ -862,8 +892,8 @@ class DesignGraph:
             timing = {'clock_domain': None, 'reset_kind': None, 'target_kind': None}
             is_register = False
 
-            if signal in self._signal_conditions:
-                conds = self._signal_conditions[signal]
+            if signal in self.__signal_conditions:
+                conds = self.__signal_conditions[signal]
                 if conds:
                     c = conds[0]
                     timing['clock_domain'] = c.get('clock_domain')
@@ -877,8 +907,8 @@ class DesignGraph:
 
             # 获取位置信息
             location = ''
-            if signal in self._signal_conditions and self._signal_conditions[signal]:
-                loc = self._signal_conditions[signal][0].get('location', {})
+            if signal in self.__signal_conditions and self.__signal_conditions[signal]:
+                loc = self.__signal_conditions[signal][0].get('location', {})
                 if loc:
                     file_name = loc.get('file', '')
                     if '/' in file_name:
@@ -1095,8 +1125,8 @@ class DesignGraph:
             is_register = False
 
             # 优先从 _signal_conditions 获取 (AST 分析结果)
-            if signal in self._signal_conditions:
-                conds = self._signal_conditions[signal]
+            if signal in self.__signal_conditions:
+                conds = self.__signal_conditions[signal]
                 if conds:
                     c = conds[0]
                     timing['clock_domain'] = c.get('clock_domain')
@@ -1132,8 +1162,8 @@ class DesignGraph:
                     clocks_seen.add(clock_domain)
 
             location = ''
-            if signal in self._signal_conditions and self._signal_conditions[signal]:
-                loc = self._signal_conditions[signal][0].get('location', {})
+            if signal in self.__signal_conditions and self.__signal_conditions[signal]:
+                loc = self.__signal_conditions[signal][0].get('location', {})
                 if loc:
                     file_name = loc.get('file', '')
                     if '/' in file_name:
@@ -1232,8 +1262,8 @@ class DesignGraph:
             timing_info = {'clock_domain': None, 'reset_kind': None, 'target_kind': None}
             is_register = False
 
-            if signal in self._signal_conditions:
-                conds = self._signal_conditions[signal]
+            if signal in self.__signal_conditions:
+                conds = self.__signal_conditions[signal]
                 if conds:
                     # 从第一个条件获取时序属性
                     c = conds[0]
@@ -1250,8 +1280,8 @@ class DesignGraph:
 
             # 获取位置信息
             location = ''
-            if signal in self._signal_conditions and self._signal_conditions[signal]:
-                loc = self._signal_conditions[signal][0].get('location', {})
+            if signal in self.__signal_conditions and self.__signal_conditions[signal]:
+                loc = self.__signal_conditions[signal][0].get('location', {})
                 if loc:
                     file_name = loc.get('file', '')
                     if '/' in file_name:
@@ -1312,7 +1342,7 @@ class DesignGraph:
         cross_clock_paths = []
 
         # 按时钟域分组
-        for sig, conds in self._signal_conditions.items():
+        for sig, conds in self.__signal_conditions.items():
             if not conds:
                 continue
             clk = conds[0].get('clock_domain')
@@ -1344,7 +1374,7 @@ class DesignGraph:
                         'source': sig,
                         'target': l['signal'],
                         'source_clock': l['timing'].get('clock_domain', '').split('.')[-1],
-                        'target_clock': next((c['clock_domain'].split('.')[-1] for c in self._signal_conditions.get(sig, []) if c.get('clock_domain')), '')
+                        'target_clock': next((c['clock_domain'].split('.')[-1] for c in self.__signal_conditions.get(sig, []) if c.get('clock_domain')), '')
                     })
                 if l.get('async_path'):
                     async_paths.append({'source': sig, 'target': l['signal']})
@@ -1358,7 +1388,7 @@ class DesignGraph:
         report_lines.append("SUMMARY")
         report_lines.append("-" * 70)
         total_signals = len(self.graph.nodes())
-        signals_with_timing = sum(1 for s, c in self._signal_conditions.items() if c)
+        signals_with_timing = sum(1 for s, c in self.__signal_conditions.items() if c)
         report_lines.append(f"  Total signals:          {total_signals}")
         report_lines.append(f"  Signals with timing:    {signals_with_timing}")
         report_lines.append(f"  Clock domains:          {len(clock_domains_data)}")
@@ -1461,11 +1491,11 @@ class DesignGraph:
             'warnings': []
         }
 
-        if signal not in self._signal_conditions:
+        if signal not in self.__signal_conditions:
             result['warnings'].append(f"Signal '{signal}' has no conditions")
             return result
 
-        conds = self._signal_conditions[signal]
+        conds = self.__signal_conditions[signal]
         result['total_conditions'] = len(conds)
 
         # 统计条件类型
@@ -1562,7 +1592,7 @@ class DesignGraph:
             }
         """
         if signals is None:
-            signals = [s for s, c in self._signal_conditions.items() if c]
+            signals = [s for s, c in self.__signal_conditions.items() if c]
 
         results = {}
         signals_with_redundancy = 0
@@ -1660,8 +1690,8 @@ class DesignGraph:
             tooltip_parts = [f"{node_label}", f"kind: {kind}", f"timing: {timing}"]
             
             # 添加时钟域信息
-            if include_timing and node in self._signal_conditions and self._signal_conditions[node]:
-                c = self._signal_conditions[node][0]
+            if include_timing and node in self.__signal_conditions and self.__signal_conditions[node]:
+                c = self.__signal_conditions[node][0]
                 clk = c.get('clock_domain', '')
                 reset = c.get('reset_kind', '')
                 if clk:

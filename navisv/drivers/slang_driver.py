@@ -321,6 +321,21 @@ class SlangDriver:
             cmd_files.append(f'-F')
             cmd_files.append(filelist)
         
+        # P0-2: 多文件时自动生成临时 filelist
+        elif len(cmd_files) > 1:
+            # 自动生成临时 filelist，调用 slang -F
+            with tempfile.TemporaryDirectory(prefix='navisv_filelist_') as fl_dir:
+                # 创建 filelist，按文件名排序保证确定性
+                fl_path = os.path.join(fl_dir, 'auto_filelist.f')
+                with open(fl_path, 'w') as fl:
+                    for f in sorted(cmd_files):
+                        fl.write(f + '\n')
+                
+                # 使用 filelist 调用
+                cmd_files = []
+                cmd_files.append(f'-F')
+                cmd_files.append(fl_path)
+        
         with tempfile.TemporaryDirectory(prefix='navisv_compile_check_') as tmp_dir:
             diag_json = os.path.join(tmp_dir, 'diag.json')
             
