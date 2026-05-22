@@ -123,6 +123,12 @@ print(f"成功: {paths['summary']['successful_paths']}/{paths['summary']['total_
 # Fan-in 锥分析
 /usr/bin/python3 cli.py fanin-cone design.sv top.target --depth 5
 
+# 编译检查（语法检查）
+/usr/bin/python3 cli.py check design.sv
+/usr/bin/python3 cli.py check file1.sv file2.sv
+/usr/bin/python3 cli.py check -F filelist.f  # 使用 filelist
+/usr/bin/python3 cli.py check -F filelist.f --std 1800-2023
+
 # JSON 输出
 /usr/bin/python3 cli.py --json trace design.sv top.a top.b
 ```
@@ -135,7 +141,7 @@ print(f"成功: {paths['summary']['successful_paths']}/{paths['summary']['total_
 | `registers` | `get_registers` | 报告所有寄存器及其时钟域 |
 | `ast` | - | 生成 AST JSON |
 | `tools` | - | 检查依赖工具 |
-| `check` | `SlangDriver.compile_check` | 快速检查源码编译状态（语法检查） |
+| `check` | `SlangDriver.compile_check` | 快速检查源码编译状态（支持 filelist） |
 | `trace` | `trace_full_path` | 两点间路径追踪 |
 | `batch-trace` | `trace_paths_batch` | 批量追踪多条路径 |
 | `timing` | `generate_timing_report` | 生成完整时序报告 |
@@ -326,6 +332,47 @@ navisv/
 |------|------|
 | `export_to_dot(file_path, subgraph, include_timing, include_conditions)` | 导出 DOT 格式 |
 | `export_to_svg(file_path, subgraph, include_timing, include_conditions)` | 导出 SVG 格式 |
+
+#### SlangDriver 编译检查
+| 方法 | 说明 |
+|------|------|
+| `compile_check(files, ...)` | 快速语法检查（支持 files 或 filelist） |
+| `check_available()` | 检查 slang 是否可用 |
+| `get_version()` | 获取 slang 版本 |
+
+### compile_check 参数说明
+
+```python
+SlangDriver.compile_check(
+    files=None,              # 源文件列表
+    include_dirs=None,       # include 目录
+    defines=None,           # 宏定义
+    std='1800-2017',         # 语言标准
+    top=None,                # 顶层模块
+    ignore_unknown_modules=False,  # 忽略未知模块
+    filelist=None,           # filelist 文件路径 (-F 选项)
+    filelist_includes=None,  # filelist 内相对 include 目录
+)
+```
+
+### compile_check 返回值
+
+```python
+{
+    'success': True,           # 是否通过编译检查
+    'returncode': 0,           # slang 返回码
+    'error_count': 0,         # 错误数
+    'warning_count': 0,       # 警告数
+    'errors': [                # 错误详情列表
+        {'file': 'file.sv', 'line': 68, 'column': 22, 'message': '...'},
+        ...
+    ],
+    'warnings': [...],         # 警告详情列表
+    'diagnostics': [...],      # 原始诊断信息
+    'stdout': '',              # slang 标准输出
+    'stderr': '',              # slang 标准错误
+}
+```
 
 ### 返回结构示例
 
