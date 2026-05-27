@@ -1683,7 +1683,7 @@ class GraphBuilder:
             # ProceduralBlock: 进入 always_ff/always_comb
             if kind == 'ProceduralBlock':
                 self._walk_ast_for_true_cond(node.get('body', {}), [], [])
-                # 不 return, 继续遍历子节点
+                return  # ProceduralBlock 只 walk body
 
             # Conditional: if/else if/else
             elif kind == 'Conditional':
@@ -1721,7 +1721,7 @@ class GraphBuilder:
                         else_tc = ' && '.join(else_neg) if else_neg else ''
                         self._annotate_block(if_false, else_tc)
                         self._walk_ast_for_true_cond(if_false, [], else_neg)
-                # 不 return, 继续遍历子节点
+                return  # Conditional 处理完
 
             # Case 语句
             elif kind == 'Case':
@@ -1754,6 +1754,7 @@ class GraphBuilder:
                     default_tc = ' && '.join(default_negs) if default_negs else ''
                     self._annotate_block(default_case, default_tc)
                     self._walk_ast_for_true_cond(default_case, [], neg_stack)
+                return  # Case 处理完，不继续 generic loop
 
             # ContinuousAssign: assign out = cond ? a ? b
             elif kind in ('ContinuousAssign', 'ContinuousAssignment'):
@@ -1779,6 +1780,7 @@ class GraphBuilder:
                     false_expr = node.get('right', {})
                     self._annotate_ternary_target(true_expr, cond_str, neg_stack)
                     self._annotate_ternary_target(false_expr, '!' + cond_str, neg_stack)
+                return  # ConditionalOp 处理完
 
             for v in node.values():
                 self._walk_ast_for_true_cond(v, cond_stack, neg_stack)
@@ -1858,23 +1860,40 @@ class GraphBuilder:
                     target_sym = left.get('symbol', '')
                     _, target_name = self._parse_ast_symbol(target_sym)
                     source_name = ''
+                    source_in_graph = False
                     if right.get('kind') == 'NamedValue':
                         _, source_name = self._parse_ast_symbol(right.get('symbol', ''))
+                        if source_name:
+                            source_in_graph = any(
+                                path.endswith(f'.{source_name}') or path == source_name
+                                for path in self.graph.nodes
+                            )
                     elif right.get('kind') == 'IntegerLiteral':
                         source_name = right.get('constant', right.get('value', ''))
+                        # 整数字面量不在图中
+                        source_in_graph = False
                     if target_name:
-                        self._set_true_condition_on_edge(source_name, target_name, true_condition)
+                        self._set_true_condition_on_edge(
+                            source_name if source_in_graph else '',
+                            target_name, true_condition
+                        )
             elif kind == 'Block':
+                # 递归进入 block body
                 body = block_node.get('body', {})
-                if isinstance(body, dict) and body.get('kind') == 'List':
-                    for item in body.get('list', []):
-                        self._annotate_block(item, true_condition)
-                elif isinstance(body, list):
-                    for item in body:
-                        self._annotate_block(item, true_condition)
+                self._annotate_block(body, true_condition)
             elif kind == 'List':
                 for item in block_node.get('list', []):
                     self._annotate_block(item, true_condition)
+            elif kind == 'ExpressionStatement':
+                pass  # handled above
+            else:
+                # 其他节点，递归遍历
+                for v in block_node.values():
+                    if isinstance(v, (dict, list)):
+                        self._annotate_block(v, true_condition)
+        elif isinstance(block_node, list):
+            for item in block_node:
+                self._annotate_block(item, true_condition)
 
     def _annotate_ternary_target(self, expr_node: dict, true_condition: str, neg_stack: list):
         """标注三元运算符的目标"""
@@ -1891,7 +1910,7 @@ class GraphBuilder:
             self._annotate_ternary_target(expr_node.get('operand', {}), true_condition, neg_stack)
 
     def _set_true_condition_on_edge(self, source_name: str, target_name: str, true_condition: str):
-        """给匹配的边设置 true_condition"""
+        """给匹配的边设置 true_condition (支持多条件叠加)"""
         target_path = None
         for path in self.graph.nodes:
             if path.endswith(f'.{target_name}') or path == target_name:
@@ -1900,13 +1919,16 @@ class GraphBuilder:
         if not target_path:
             return
         for src, dst, key, data in self.graph.in_edges(target_path, data=True, keys=True):
-            if data.get('true_condition'):
-                continue
             if source_name:
                 src_short = src.split('.')[-1]
                 if src_short != source_name and not src.endswith(f'.{source_name}'):
                     continue
-            data['true_condition'] = true_condition
+            # 多条件叠加
+            existing = data.get('true_condition', '')
+            if existing:
+                data['true_condition'] = existing + ' | ' + true_condition
+            else:
+                data['true_condition'] = true_condition
 
     def _ast_expr_to_string(self, node: dict) -> str:
         """将 AST 表达式节点转为可读字符串"""
