@@ -64,6 +64,37 @@ CoverGroupAnalyzer (新增)
 
 ---
 
+## P2: DesignGraph 可靠性修复
+
+| 问题 | 根因 | 状态 |
+|------|------|------|
+| netlist 只传顶层文件 | 多文件传递 | ✅ |
+| 中间节点断链 | Assignment/Conditional 无 path 被跳过 | ✅ |
+| 条件信号无边 | netlist 不建模 if 块数据流 | ✅ |
+| 拼接表达式断链 | netlist 不建模 {a,b,c} 数据依赖 | ✅ |
+| always_comb 条件未提取 | AST 分析未覆盖组合逻辑 | ✅ |
+
+UART 测试: 60% → 100% (10/10)
+Benchmark: 94% (75/79, 剩余 4 个是 pipeline 跨域路径)
+
+---
+
+## P3: true_condition 标注
+
+从 AST 提取条件表达式标注到图的边上。
+
+| 场景 | 状态 |
+|------|------|
+| if/else if/else 链 | ✅ |
+| 嵌套 if | ✅ |
+| case 语句 | ✅ |
+| 三元运算符 | ✅ |
+| 连续赋值 (assign) | ✅ |
+
+测试: 9 个
+
+---
+
 ## P2: 高级分析功能
 
 ### 1. fan-out 分析增强
