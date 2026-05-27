@@ -341,6 +341,25 @@ class GraphBuilder:
                 if tgt_path:
                     intermediate_info[src_node.id]['out'].append((tgt_path, edge.symbol))
 
+        # 传播: 中间节点的入边路径 → 出边目标
+        # 当 Conditional → Assignment 边没有 symbol 时，从入边继承路径
+        for _ in range(3):  # 多轮传播处理嵌套
+            for nid, info in intermediate_info.items():
+                if info['out'] and info['in']:
+                    continue  # 已有信息
+                # 如果有入边但没有出边，从入边传播到出边节点
+                if info['in'] and not info['out']:
+                    # 找这个节点的出边
+                    for edge in self.netlist.edges:
+                        if edge.source == nid:
+                            tgt = self.netlist.get_node_by_id(edge.target)
+                            if tgt and tgt.kind in ('Assignment', 'Conditional', 'Case', 'Merge') and not tgt.path:
+                                tgt_info = intermediate_info.get(tgt.id)
+                                if tgt_info and not tgt_info['in']:
+                                    # 从源节点继承入边路径
+                                    for src_path, sym in info['in']:
+                                        tgt_info['in'].append((src_path, sym))
+
         # 处理边
         for edge in self.netlist.edges:
             src_node = self.netlist.get_node_by_id(edge.source)
@@ -364,17 +383,13 @@ class GraphBuilder:
                 if symbol_path and symbol_path != src_path:
                     tgt_path = symbol_path
 
-            # 如果 target 是中间节点且没有有效 path，从出边获取目标路径
+            # 如果 target 是中间节点且没有有效 path，递归从出边获取目标路径
             if not tgt_path and tgt_node.kind in ('Assignment', 'Conditional', 'Case', 'Merge'):
-                info = intermediate_info.get(tgt_node.id)
-                if info and info['out']:
-                    tgt_path, _ = info['out'][0]
+                tgt_path = self._resolve_intermediate_path(tgt_node.id, intermediate_info, 'out')
 
-            # 如果 source 是中间节点且没有有效 path，从入边获取源路径
+            # 如果 source 是中间节点且没有有效 path，递归从入边获取源路径
             if not src_path and src_node.kind in ('Assignment', 'Conditional', 'Case', 'Merge'):
-                info = intermediate_info.get(src_node.id)
-                if info and info['in']:
-                    src_path, _ = info['in'][0]
+                src_path = self._resolve_intermediate_path(src_node.id, intermediate_info, 'in')
 
             # 跳过没有有效路径的边
             if not src_path or not tgt_path:
@@ -1449,6 +1464,95 @@ class GraphBuilder:
 
         # 补充: 从 AST 中提取拼接表达式的数据路径
         self._extract_concat_edges_from_ast()
+        # 补充: 从 AST 中提取 always_comb 条件边
+        self._extract_comb_cond_edges_from_ast()
+
+    def _extract_comb_cond_edges_from_ast(self):
+        """从 AST 提取 always_comb 块中的条件信号边"""
+        if not self.ast_json_path or not os.path.exists(self.ast_json_path):
+            return
+        import json as json_mod
+        try:
+            with open(self.ast_json_path) as f:
+                ast_data = json_mod.load(f)
+        except (json_mod.JSONDecodeError, IOError):
+            return
+        self._walk_ast_for_comb_cond(ast_data, [])
+
+    def _walk_ast_for_comb_cond(self, node: Any, cond_stack: list):
+        """遍历 AST 提取 always_comb 中的条件赋值关系"""
+        if isinstance(node, dict):
+            kind = node.get('kind', '')
+
+            if kind == 'ProceduralBlock' and node.get('procedureKind') == 'AlwaysComb':
+                self._walk_ast_for_comb_cond(node.get('body', {}), [])
+                return
+
+            if kind == 'Conditional':
+                # 提取条件信号
+                conditions = node.get('conditions', [])
+                cond_signals = []
+                for cond in conditions:
+                    expr = cond.get('expr', {})
+                    self._collect_cond_signals(expr, cond_signals)
+
+                new_stack = cond_stack + cond_signals
+
+                # if 分支的赋值
+                if_true = node.get('ifTrue', {})
+                self._walk_ast_for_comb_cond(if_true, new_stack)
+
+                # else 分支
+                if_false = node.get('ifFalse', {})
+                if if_false:
+                    self._walk_ast_for_comb_cond(if_false, new_stack)
+                return
+
+            if kind == 'ExpressionStatement':
+                expr = node.get('expr', {})
+                if expr.get('kind') == 'Assignment' and not expr.get('isNonBlocking', False):
+                    left = expr.get('left', {})
+                    target_sym = left.get('symbol', '')
+                    _, target_name = self._parse_ast_symbol(target_sym)
+                    if target_name and cond_stack:
+                        target_path = None
+                        for path in self.graph.nodes:
+                            if path.endswith(f'.{target_name}') or path == target_name:
+                                target_path = path
+                                break
+                        if target_path:
+                            for cond_sig in cond_stack:
+                                if cond_sig in self.graph and not self.graph.has_edge(cond_sig, target_path):
+                                    attr = EdgeAttr(edge_kind='None', bounds=(0, 0))
+                                    key = self.graph.add_edge(cond_sig, target_path, **attr.to_dict())
+                                    self._edge_attrs[(cond_sig, target_path, key)] = attr
+                return
+
+            for v in node.values():
+                self._walk_ast_for_comb_cond(v, cond_stack)
+        elif isinstance(node, list):
+            for item in node:
+                self._walk_ast_for_comb_cond(item, cond_stack)
+
+    def _collect_cond_signals(self, expr: dict, signals: list):
+        """从条件表达式中提取信号路径"""
+        kind = expr.get('kind', '')
+        if kind == 'NamedValue':
+            sym = expr.get('symbol', '')
+            _, name = self._parse_ast_symbol(sym)
+            if name:
+                for path in self.graph.nodes:
+                    if path.endswith(f'.{name}') or path == name:
+                        if path not in signals:
+                            signals.append(path)
+                        break
+        elif kind == 'ElementSelect':
+            self._collect_cond_signals(expr.get('value', {}), signals)
+        elif kind == 'BinaryOp':
+            self._collect_cond_signals(expr.get('left', {}), signals)
+            self._collect_cond_signals(expr.get('right', {}), signals)
+        elif kind == 'UnaryOp':
+            self._collect_cond_signals(expr.get('operand', {}), signals)
 
     def _extract_concat_edges_from_ast(self):
         """从 AST 提取拼接表达式的数据依赖边"""
@@ -1511,6 +1615,29 @@ class GraphBuilder:
                         attr = EdgeAttr(edge_kind='None', bounds=(0, 0))
                         key = self.graph.add_edge(op_path, target_path, **attr.to_dict())
                         self._edge_attrs[(op_path, target_path, key)] = attr
+
+    def _resolve_intermediate_path(self, node_id: int, intermediate_info: dict, direction: str = 'out', depth: int = 0) -> str:
+        """递归解析中间节点到有 path 的节点"""
+        if depth > 10:
+            return ''
+        info = intermediate_info.get(node_id)
+        if not info:
+            return ''
+        targets = info.get(direction, [])
+        if not targets:
+            return ''
+        # 优先选择有 path 的目标
+        for path, _ in targets:
+            if path:
+                # 检查这个 path 是否也是一个中间节点
+                node = self.netlist.get_node_by_path(path)
+                if node and node.kind in ('Assignment', 'Conditional', 'Case', 'Merge'):
+                    # 继续递归
+                    result = self._resolve_intermediate_path(node.id, intermediate_info, direction, depth + 1)
+                    if result:
+                        return result
+                return path
+        return ''
 
     def _parse_ast_symbol(self, symbol: str) -> tuple:
         """解析 AST symbol: 'addr name' -> (addr, name)"""
