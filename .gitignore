@@ -50,6 +50,7 @@ Thumbs.db
 !examples/**/*.sv
 !examples/**/*.v
 !tests/fixtures/*.sv
+!tests/sv/*.sv
 
 # Logs
 *.log

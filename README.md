@@ -30,6 +30,22 @@ navisv 将底层网表关系转化为面向调试的结构化答案，让 AI Age
 - **CDC 检测**: 自动识别跨时钟域路径
 - **条件冗余检测**: 识别重复的条件-语句对
 
+### Class Constraint 分析
+- **约束查询**: 变量在哪些 class 的哪些 constraint 中 (Q1)
+- **约束影响**: constraint 能影响哪些变量 (Q2)
+- **变量关系**: 两个变量之间是否存在约束关系 (Q3)
+- **多层继承**: 自动追溯继承链上的约束
+- **组合穿透**: 跨 class instance 的约束追踪 (如 `pkt.length`)
+- **位精确度**: 识别部分位约束 (如 `ctrl_word[15:12]`)
+- **条件约束**: 识别 if/else 条件分支，返回完整条件上下文
+- **foreach 约束**: 正确处理 foreach 循环内的约束
+- **solve...before**: 识别求解顺序约束
+
+### CoverGroup 分析
+- **CoverGroup 解析**: 从 AST 提取 covergroup/coverpoint/bins/cross 定义
+- **bin-constraint 一致性**: 检测死 bin、遗漏 bin、missing illegal bin
+- **coverage 质量评估**: data 类看极值粒度、control 类看特殊值和 cross
+
 ## 快速开始
 
 ### Python API
@@ -131,6 +147,20 @@ print(f"成功: {paths['summary']['successful_paths']}/{paths['summary']['total_
 
 # JSON 输出
 /usr/bin/python3 cli.py --json trace design.sv top.a top.b
+
+# Class Constraint 分析
+/usr/bin/python3 cli.py constraints design.sv                  # 列出所有 class 和 constraint
+/usr/bin/python3 cli.py constraints design.sv -v               # 显示约束体内容
+/usr/bin/python3 cli.py cvar design.sv pkg.Class.var           # Q1: 变量在哪些 constraint 中
+/usr/bin/python3 cli.py cvar -c design.sv pkg.Class.var        # Q1: 含组合穿透
+/usr/bin/python3 cli.py ccons design.sv pkg.Class.constraint   # Q2: 约束影响哪些变量
+/usr/bin/python3 cli.py crel design.sv pkg.Class.var1 pkg.Class.var2  # Q3: 变量关系
+
+# CoverGroup 分析
+/usr/bin/python3 cli.py cg-list design.sv                              # 列出 covergroup/coverpoint/bins
+/usr/bin/python3 cli.py cg-check design.sv pkg.Class.var cg cp         # bin-constraint 一致性
+/usr/bin/python3 cli.py cg-quality design.sv cg                        # covergroup 质量评估
+/usr/bin/python3 cli.py cg-quality design.sv pkg.Class.var cg cp -t data  # coverpoint 质量评估
 ```
 
 ### CLI 命令与 API 对应表
@@ -149,6 +179,13 @@ print(f"成功: {paths['summary']['successful_paths']}/{paths['summary']['total_
 | `coverage` | `get_condition_coverage` / `analyze_condition_coverage` | 条件覆盖率分析 |
 | `dot` | `export_to_dot` | 导出为 DOT 格式 |
 | `fanin-cone` | `get_fanin_cone` | Fan-in 锥分析 |
+| `constraints` | `ConstraintGraph.get_classes` | 列出所有 class 和 constraint |
+| `cvar` | `ConstraintGraph.get_constraints_for_variable` | Q1: 变量在哪些 constraint 中 |
+| `ccons` | `ConstraintGraph.get_variables_in_constraint` | Q2: 约束影响哪些变量 |
+| `crel` | `ConstraintGraph.get_constraint_relationship` | Q3: 两变量间的约束关系 |
+| `cg-list` | `CovergroupAnalyzer.get_covergroups` | 列出所有 covergroup/coverpoint/bins |
+| `cg-check` | `CovergroupAnalyzer.check_bin_constraint_consistency` | bin-constraint 一致性检查 |
+| `cg-quality` | `CovergroupAnalyzer.check_coverage_quality` / `check_cg_quality` | coverage 质量评估 |
 
 ## CLI 输出示例
 
@@ -231,6 +268,105 @@ $ /usr/bin/python3 cli.py --json info /tmp/test_signal_attrs.sv test_signal_attr
 }
 ```
 
+### navisv constraints
+
+```bash
+$ /usr/bin/python3 cli.py constraints tests/sv/realworld_ethernet.sv
+
+类 (8):
+  packet
+    变量 (7):
+      mac_dst_addr         Rand   [48b]
+      payload              Rand   [8b]
+      ipg                  Rand   [32b]
+    约束 (3):
+      C_proper_sop_eop_marks
+      C_payload_size
+      C_ipg
+  packet_bringup
+    继承: packet_bringup -> packet
+    约束 (4):
+      C_bringup
+      C_proper_sop_eop_marks
+      C_payload_size
+      C_ipg
+  ethernet_env
+    变量 (3):
+      pkt                  Rand   -> packet
+      wb_item              Rand   -> wishbone_item
+```
+
+### navisv cvar
+
+```bash
+$ /usr/bin/python3 cli.py cvar tests/sv/realworld_ethernet.sv ethernet_pkg.packet.ipg
+
+变量 ipg 的约束 (4):
+
+  packet::C_ipg
+    expr: ipg inside { 10:50 }
+
+  packet_bringup::C_bringup
+    expr: ipg == 10
+
+  packet_small_ipg::C_ipg
+    expr: ipg inside { 1:10 }
+
+  packet_zero_ipg::C_ipg
+    expr: ipg == 0
+```
+
+```bash
+# 位精确度
+$ /usr/bin/python3 cli.py cvar tests/sv/constraint_conditional.sv constraint_conditional_pkg.bit_precision_packet.ctrl_word
+
+变量 ctrl_word 的约束 (3):
+
+  bit_precision_packet::c_ctrl_high [15:12]
+    expr: ctrl_word[15:12] inside { 4'b1, 4'b10, 4'b11 }
+
+  bit_precision_packet::c_ctrl_low [7:0]
+    expr: ctrl_word[7:0] == addr
+
+  bit_precision_packet::c_ctrl_flag [8:8]
+    expr: ctrl_word[8] == 1'b1
+```
+
+```bash
+# foreach + if 约束
+$ /usr/bin/python3 cli.py cvar tests/sv/constraint_foreach_if_solve.sv foreach_if_solve_pkg.foreach_if_basic.data
+
+变量 data 的约束 (1):
+
+  foreach_if_basic::c_foreach_if
+    context: foreach (...[i]) { if (mode == 0) { data[i] inside { 0:127 } } else { data[i] inside { 128:255 } } }
+    expr: if (mode == 0) { data[i] inside { 0:127 } } else { data[i] inside { 128:255 } }
+```
+
+### navisv ccons
+
+```bash
+$ /usr/bin/python3 cli.py ccons tests/sv/realworld_ethernet.sv ethernet_pkg.packet_bringup.C_bringup
+
+约束 C_bringup 影响的变量 (5):
+  mac_dst_addr
+  mac_src_addr
+  ether_type
+  payload
+  ipg
+```
+
+### navisv crel
+
+```bash
+$ /usr/bin/python3 cli.py crel tests/sv/realworld_ethernet.sv ethernet_pkg.packet.mac_dst_addr ethernet_pkg.packet.mac_src_addr
+
+变量关系:
+  mac_dst_addr <-> mac_src_addr
+  共享约束 (1):
+    - C_bringup
+```
+
 ## 架构
 
 ```
@@ -241,13 +377,15 @@ DesignDriver          # 统一入口，调用 slang 生成 AST/Netlist
 ┌────────────────────────────────┐
 │  Parsers                       │  ← AST/Netlist JSON 解析
 │    ├── ast_parser.py           │
-│    └── netlist_parser.py       │
+│    ├── netlist_parser.py       │
+│    └── constraint_parser.py    │  ← class/constraint 解析
 └────────────────────────────────┘
      ↓
 ┌────────────────────────────────┐
 │  Graph Layer                   │  ← NetworkX 图构建
 │    ├── graph_builder.py       │
-│    └── design_graph.py         │
+│    ├── design_graph.py         │  ← 信号/路径/时序
+│    └── constraint_graph.py     │  ← class/constraint 查询
 └────────────────────────────────┘
      ↓
 slang / slang-netlist            # 单一数据源
@@ -259,8 +397,8 @@ slang / slang-netlist            # 单一数据源
 |------|------|------|
 | 配置层 | `navisv/config.py` | 工具路径、环境变量 |
 | 驱动层 | `navisv/drivers/` | DesignDriver/SlangDriver/NetlistDriver |
-| 解析层 | `navisv/parsers/` | AST/Netlist JSON 解析 |
-| 图层 | `navisv/graph/` | 图构建、查询 API |
+| 解析层 | `navisv/parsers/` | AST/Netlist/Constraint/CoverGroup 解析 |
+| 图层 | `navisv/graph/` | DesignGraph + ConstraintGraph + CovergroupAnalyzer |
 
 ## 配置
 
@@ -283,11 +421,36 @@ navisv/
 │   ├── 01_signal_info.py
 │   ├── 02_registers.py
 │   └── 03_conditions.py
+├── tests/
+│   ├── conftest.py          # pytest fixtures
+│   ├── test_navisv.py       # DesignGraph 测试
+│   ├── test_constraint_graph.py  # ConstraintGraph 测试 (43 个)
+│   ├── test_covergroup.py       # CoverGroup 解析测试 (33 个)
+│   ├── test_cg_constraint_check.py  # bin-constraint 一致性测试 (12 个)
+│   ├── test_cg_quality.py       # coverage 质量评估测试 (9 个)
+│   └── sv/                  # 测试用 SV 文件
+│       ├── constraint_basic.sv
+│       ├── constraint_conditional.sv
+│       ├── constraint_edge.sv
+│       ├── constraint_foreach_solve.sv
+│       ├── constraint_foreach_if_solve.sv
+│       └── realworld_ethernet.sv
 └── navisv/
     ├── config.py            # 配置层
     ├── drivers/
+    │   ├── design_driver.py  # 统一入口 (含 ConstraintGraph 构建)
+    │   ├── slang_driver.py
+    │   └── netlist_driver.py
     ├── graph/
+    │   ├── design_graph.py   # DesignGraph (信号/路径/时序)
+    │   ├── constraint_graph.py  # ConstraintGraph (class/constraint)
+    │   ├── covergroup_analyzer.py  # CovergroupAnalyzer (coverage 分析)
+    │   └── graph_builder.py
     └── parsers/
+        ├── ast_parser.py
+        ├── netlist_parser.py
+        ├── constraint_parser.py  # class/constraint 解析
+        └── covergroup_parser.py  # covergroup/bins 解析
 ```
 
 ## 环境要求
@@ -333,12 +496,96 @@ navisv/
 | `export_to_dot(file_path, subgraph, include_timing, include_conditions)` | 导出 DOT 格式 |
 | `export_to_svg(file_path, subgraph, include_timing, include_conditions)` | 导出 SVG 格式 |
 
+### ConstraintGraph 核心方法
+
+> 通过 `dd.constraint_graph` 获取，基于 slang AST 解析 class/constraint 结构。
+
+#### 类与约束查询
+| 方法 | 说明 |
+|------|------|
+| `get_classes()` | 获取所有类 |
+| `get_variables_in_class(class_path)` | 获取类的所有变量 (含继承) |
+| `get_constraints_in_class(class_path)` | 获取类的所有约束 (含继承) |
+| `get_inheritance_chain(class_path)` | 获取继承链 |
+
+#### Q1: 变量在哪些 constraint 中
+| 方法 | 说明 |
+|------|------|
+| `get_constraints_for_variable(var_path, include_composition, max_depth)` | 变量在哪些约束中 |
+
+返回每条约束的 `constraint_name`、`class_name`、`constraint_body`、`direct_expr`、`context`、`bit_range`、`is_conditional`、`access_path`。
+
+#### Q2: 约束影响哪些变量
+| 方法 | 说明 |
+|------|------|
+| `get_variables_in_constraint(constraint_path)` | 约束引用了哪些变量 |
+
+#### Q3: 变量间约束关系
+| 方法 | 说明 |
+|------|------|
+| `get_constraint_relationship(var_a_path, var_b_path)` | 两变量间的共享约束 |
+
+#### 返回结构
+
+```python
+# get_constraints_for_variable 返回示例
+[
+  {
+    'constraint_name': 'C_ipg',
+    'constraint_path': 'ethernet_pkg.packet.C_ipg',
+    'class_name': 'ethernet_pkg.packet',
+    'constraint_body': 'ipg inside { 10:50 }',
+    'direct_exprs': ['ipg inside { 10:50 }'],
+    'bit_range': None,            # 全宽; [15,12] 表示部分位
+    'is_conditional': False,
+    'condition': '',
+    'context': '',                 # 条件约束时包含完整 if/else 上下文
+    'access_path': '',             # 组合穿透时如 'pkt.length'
+  },
+  ...
+]
+```
+
 #### SlangDriver 编译检查
 | 方法 | 说明 |
 |------|------|
 | `compile_check(files, ...)` | 快速语法检查（支持 files 或 filelist） |
 | `check_available()` | 检查 slang 是否可用 |
 | `get_version()` | 获取 slang 版本 |
+
+### CovergroupAnalyzer 核心方法
+
+> 通过 `dd.covergroups` 获取，基于 slang AST 解析 covergroup/coverpoint/bins 结构。
+
+#### 查询
+| 方法 | 说明 |
+|------|------|
+| `get_covergroups()` | 列出所有 covergroup |
+| `get_coverpoints(cg_name)` | 获取 covergroup 的 coverpoint 列表 |
+| `get_bins(cg_name, cp_name)` | 获取 coverpoint 的 bins |
+| `get_crosses(cg_name)` | 获取 cross 覆盖 |
+
+#### bin-constraint 一致性检查
+| 方法 | 说明 |
+|------|------|
+| `check_bin_constraint_consistency(var_path, cg_name, cp_name)` | 检查 bins 与 constraint 是否一致 |
+
+返回问题列表，类型：
+- `dead_bin`: bin 范围被 constraint 排除，永远无法 hit
+- `missing_bin`: constraint 允许但无 bin 覆盖
+- `missing_illegal_bin`: constraint 禁止但没标 illegal_bins
+
+#### coverage 质量评估
+| 方法 | 说明 |
+|------|------|
+| `check_coverage_quality(var_path, cg_name, cp_name, signal_type)` | coverpoint 级别质量评估 |
+| `check_cg_quality(cg_name)` | covergroup 级别综合评估 |
+
+`signal_type`:
+- `data`: 检查极值 bin (zero/max)、bin 粒度
+- `control`: 检查特殊值 bin、状态覆盖
+
+返回报告列表，类型：`info` / `warning` / `score`
 
 ### compile_check 参数说明
 
@@ -432,11 +679,79 @@ SlangDriver.compile_check(
 | CDC 检测 | ✅ 2 条 | 正确识别 APB 时钟域跨越 |
 | DOT 导出 | ✅ | 599 行 DOT (uart_tx 子图) |
 
+### ConstraintGraph 测试 (43 个)
+
+| 分类 | 测试数 | 说明 |
+|------|--------|------|
+| 基础类 | 6 | 变量属性、约束绑定、Q1 查询 |
+| 多层继承 | 5 | 3 层继承链、继承约束追溯 |
+| 组合关系 | 4 | class instance、access_path |
+| 深层组合 | 3 | 3 层穿透 (top_env -> wrapper -> eth_packet) |
+| 位精确度 | 5 | RangeSelect、ElementSelect |
+| 条件约束 | 6 | if/else、条件上下文、direct_expr |
+| 边界场景 | 8 | 无约束变量、同名覆盖、randc、soft、4 层继承 |
+| 变量关系 | 6 | Q3 共享约束、跨类关系 |
+
+### CoverGroup 测试 (54 个)
+
+| 分类 | 测试数 | 说明 |
+|------|--------|------|
+| CoverGroup 解析 | 33 | coverpoint/bins/cross/wildcard/default/option/class |
+| bin-constraint 一致性 | 12 | 死 bin/遗漏 bin/missing illegal/条件约束/部分重叠 |
+| coverage 质量评估 | 9 | data 极值/control 特殊值/cross/评分 |
+
+开源项目验证:
+
+| 项目 | 类 | 变量 | 约束 | 状态 |
+|------|----|------|------|------|
+| ethernet_10ge_mac_SV_UVM_tb | 8 | 13 | 11 | ✅ |
+| sv-tests 18.5.2 (继承) | 2 | 2 | 2 | ✅ |
+| sv-tests 18.5.7 (if-else) | 1 | 3 | 3 | ✅ |
+| sv-tests 18.5.14.1 (soft) | 2 | 1 | 3 | ✅ |
+
 ## 许可证
 
 MIT
 
 ---
+
+## 架构详解：语义 AST 与 Netlist 协作
+
+### navisv cg-list
+
+```bash
+$ /usr/bin/python3 cli.py cg-list tests/sv/realworld_ethernet.sv
+
+类 (8):
+  packet
+    变量 (7):
+      mac_dst_addr         Rand   [48b]
+      payload              Rand   [8b]
+```
+
+### navisv cg-check
+
+```bash
+$ /usr/bin/python3 cli.py cg-check tests/sv/covergroup_constraint_check.sv cg_check_pkg.dead_bin_cls.data dead_bin_cls.cg cp_data
+
+dead_bin_cls.data 的一致性检查:
+
+  ⚠️  dead_bin: bin [101:200] 被 constraint 排除, 永远无法 hit
+  ⚠️  dead_bin: bin [255:255] 被 constraint 排除, 永远无法 hit
+  ⚠️  missing_illegal_bin: constraint 禁止的取值没有标 illegal_bins
+```
+
+### navisv cg-quality
+
+```bash
+$ /usr/bin/python3 cli.py cg-quality tests/sv/covergroup_quality.sv cg_quality_pkg.data_bad_cls.data data_bad_cls.cg cp_data --type data
+
+data_bad_cls.data 的质量评估 (score=0.50):
+
+  ⚠️  缺少极值 bin: 建议添加 bins zero = {0}
+  ⚠️  缺少极值 bin: 建议添加 bins max = {255}
+  ⚠️  bin 数量较少 (2), 建议细化范围划分
+```
 
 ## 架构详解：语义 AST 与 Netlist 协作
 
@@ -733,4 +1048,104 @@ score = (
 2. **Netlist 边界**: 对于某些复杂赋值，可能无法正确建立边
 3. **符号冲突**: 同名信号在不同模块可能冲突（通过完整路径解决）
 4. **Timing 推断**: 只支持 `always @(posedge clk)` 和 `always @(negedge clk)`，不支持多时钟
+
+---
+
+## 架构详解：ConstraintGraph
+
+### 设计理念
+
+ConstraintGraph 从 slang AST 中提取 class/constraint 结构，回答三个核心问题：
+
+1. **Q1**: 变量在哪些 class 的哪些 constraint 中？
+2. **Q2**: constraint 能影响哪些变量？
+3. **Q3**: 两个变量之间是否存在约束关系？
+
+### 数据流
+
+```
+slang AST JSON
+     │
+     ▼
+ConstraintParser (parsers/constraint_parser.py)
+     │  遍历 ClassType → ClassProperty / ConstraintBlock
+     │  提取: 类、变量、约束、继承、组合
+     │
+     ▼
+ConstraintGraph (graph/constraint_graph.py)
+     │  构建 NetworkX MultiDiGraph
+     │  节点: Class / Variable / Constraint
+     │  边: has_var / has_constraint / binds / inherits / member_of
+     │
+     └──→ 查询 API
+```
+
+### 节点与边
+
+| 节点 | 属性 | 说明 |
+|------|------|------|
+| Class | name, full_path, is_abstract | class 定义 |
+| Variable | name, type_str, rand_mode, msb/lsb/bit_width, type_class | class 变量 |
+| Constraint | name, expr_count, has_soft, is_conditional, constraint_body | 约束块 |
+
+| 边 | 方向 | 说明 |
+|------|------|------|
+| has_var | Class → Variable | 类拥有变量 |
+| has_constraint | Class → Constraint | 类拥有约束 |
+| binds | Constraint → Variable | 约束引用变量 (带 access_path, bit_range, context) |
+| inherits | Class → Class | 继承关系 |
+| member_of | Variable → Class | 变量类型是另一个类 |
+
+### 继承处理
+
+slang 对继承变量使用不同地址。Parser 通过 `_addr_to_owning_classes` 跟踪所有拥有同名变量的类。查询时 `_normalize_var_path` 将变量规范化为约束实际引用的路径。
+
+```
+base_packet.length ←inherits─ mid_packet.length ←inherits─ eth_packet.length
+  (addr A)              (addr B)                 (addr C)
+
+约束引用 addr A (原始定义)
+→ _normalize_var_path('eth_packet.length') → 'base_packet.length'
+→ _find_all_var_paths → [base_packet.length, mid_packet.length, eth_packet.length]
+```
+
+### 组合穿透
+
+当约束引用跨类实例的变量时（如 `pkt.length`），Parser 通过 `MemberAccess` 节点提取：
+
+```
+AST MemberAccess:
+  value: NamedValue (symbol='pkt', type='eth_packet')
+  member: 'length'
+→ access_path='pkt.length', target_class='eth_packet'
+```
+
+查询时 `include_composition=True` 会查找所有通过 access_path 引用的约束。
+
+### 位精确度
+
+AST 中的 `RangeSelect` 和 `ElementSelect` 节点提供位选择信息：
+
+```
+RangeSelect: ctrl_word[15:12] → bit_range=[15, 12]
+ElementSelect: ctrl_word[8]   → bit_range=[8, 8]
+循环变量: data[i]            → bit_range=['i', 'i']
+```
+
+### 条件约束与上下文
+
+遍历约束表达式树时，维护 `parent_context` 和 `current_expr_str`：
+
+- 进入 `Conditional` 节点 → 构建 `if (cond) { body } else { body }` 上下文
+- 进入 `Foreach` 节点 → 构建 `foreach (...[i]) { body }` 上下文
+- 进入 `Expression` 节点 → 捕获表达式文本作为 `direct_expr`
+- 找到 `NamedValue` 引用 → 使用 `current_expr_str` 作为 `direct_expr`
+
+### 实现文件
+
+| 文件 | 行数 | 说明 |
+|------|------|------|
+| `parsers/constraint_parser.py` | ~700 | AST 解析: 类/变量/约束提取 |
+| `graph/constraint_graph.py` | ~300 | NetworkX 图构建 + 查询 API |
+| `tests/test_constraint_graph.py` | ~500 | 43 个金标准测试 |
 

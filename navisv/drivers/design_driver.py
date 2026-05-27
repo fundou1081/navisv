@@ -10,8 +10,8 @@ import tempfile
 from typing import List, Optional, Dict, Any
 
 from navisv.drivers import SlangDriver, NetlistDriver
-from navisv.parsers import ASTParser, NetlistParser
-from navisv.graph import GraphBuilder, DesignGraph
+from navisv.parsers import ASTParser, NetlistParser, ConstraintParser, CovergroupParser
+from navisv.graph import GraphBuilder, DesignGraph, ConstraintGraph, CovergroupAnalyzer
 
 
 class DesignDriver:
@@ -68,6 +68,14 @@ class DesignDriver:
         self._netlist_parser: Optional[NetlistParser] = None
         self._graph_builder: Optional[GraphBuilder] = None
         self._design_graph: Optional[DesignGraph] = None
+        
+        # ConstraintGraph 缓存
+        self._constraint_parser: Optional[ConstraintParser] = None
+        self._constraint_graph: Optional[ConstraintGraph] = None
+        
+        # CovergroupAnalyzer 缓存
+        self._covergroup_parser: Optional[CovergroupParser] = None
+        self._covergroup_analyzer: Optional[CovergroupAnalyzer] = None
         
         # 诊断信息
         self._diagnostics: List[Dict[str, Any]] = []
@@ -166,6 +174,40 @@ class DesignDriver:
                                                self._ast_json_path, self._source_files)
         graph = self._graph_builder.build()
         self._design_graph = DesignGraph(graph, self._graph_builder._signal_conditions, self._netlist_driver)
+        
+        # 构建 ConstraintGraph
+        self._build_constraint_graph()
+        
+        # 构建 CovergroupAnalyzer
+        self._build_covergroup_analyzer()
+    
+    def _build_constraint_graph(self):
+        """构建 ConstraintGraph"""
+        ast_json = os.path.join(self.output_dir, 'ast.json')
+        if os.path.exists(ast_json):
+            try:
+                self._constraint_parser = ConstraintParser(ast_json, self._source_files)
+                self._constraint_parser.parse()
+                self._constraint_graph = ConstraintGraph(self._constraint_parser)
+            except Exception as e:
+                import logging
+                logging.getLogger('navisv').warning(f'ConstraintGraph 构建失败: {e}')
+                self._constraint_graph = None
+    
+    def _build_covergroup_analyzer(self):
+        """构建 CovergroupAnalyzer"""
+        ast_json = os.path.join(self.output_dir, 'ast.json')
+        if os.path.exists(ast_json):
+            try:
+                self._covergroup_parser = CovergroupParser(ast_json)
+                self._covergroup_parser.parse()
+                self._covergroup_analyzer = CovergroupAnalyzer(
+                    self._covergroup_parser, self._constraint_graph
+                )
+            except Exception as e:
+                import logging
+                logging.getLogger('navisv').warning(f'CovergroupAnalyzer 构建失败: {e}')
+                self._covergroup_analyzer = None
     
     @property
     def design_graph(self) -> DesignGraph:
@@ -173,6 +215,20 @@ class DesignDriver:
         if self._design_graph is None:
             self.build()
         return self._design_graph
+    
+    @property
+    def constraint_graph(self) -> Optional[ConstraintGraph]:
+        """获取 ConstraintGraph"""
+        if self._constraint_graph is None and self._constraint_parser is None:
+            self.build()
+        return self._constraint_graph
+    
+    @property
+    def covergroups(self) -> Optional[CovergroupAnalyzer]:
+        """获取 CovergroupAnalyzer"""
+        if self._covergroup_analyzer is None and self._covergroup_parser is None:
+            self.build()
+        return self._covergroup_analyzer
     
     @property
     def graph(self):

@@ -31,7 +31,7 @@ navisv: 基于 slang + slang-netlist JSON 输出的语义导航中间件
 __version__ = "0.9.0"
 
 from navisv.drivers import SlangDriver, NetlistDriver, DesignDriver, from_files
-from navisv.graph import DesignGraph
+from navisv.graph import DesignGraph, ConstraintGraph
 
 __all__ = [
     'SlangDriver',
@@ -39,4 +39,5 @@ __all__ = [
     'DesignDriver',
     'from_files',
     'DesignGraph',
+    'ConstraintGraph',
 ]

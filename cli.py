@@ -27,6 +27,7 @@ import json
 import sys
 import tempfile
 import os
+import shutil
 
 from navisv import DesignDriver
 from navisv.config import check_tools
@@ -336,6 +337,49 @@ def main():
     p.add_argument('signal', help='信号路径')
     p.add_argument('--depth', '-d', type=int, help='深度 (默认 3)')
 
+    # navisv constraints <file>
+    p = sub.add_parser('constraints', help='列出所有 class 和 constraint')
+    p.add_argument('file', help='设计文件')
+    p.add_argument('--verbose', '-v', action='store_true', help='显示约束体内容')
+
+    # navisv cvar <file> <variable>
+    p = sub.add_parser('cvar', help='Q1: 变量在哪些 constraint 中')
+    p.add_argument('file', help='设计文件')
+    p.add_argument('variable', help='变量路径 (如 pkg.Class.var)')
+    p.add_argument('--composition', '-c', action='store_true', help='包含组合关系')
+    p.add_argument('--verbose', '-v', action='store_true', help='显示约束体')
+
+    # navisv ccons <file> <constraint>
+    p = sub.add_parser('ccons', help='Q2: 约束影响哪些变量')
+    p.add_argument('file', help='设计文件')
+    p.add_argument('constraint', help='约束路径 (如 pkg.Class.constraint)')
+
+    # navisv crel <file> <var1> <var2>
+    p = sub.add_parser('crel', help='Q3: 两变量间的约束关系')
+    p.add_argument('file', help='设计文件')
+    p.add_argument('var1', help='变量1路径')
+    p.add_argument('var2', help='变量2路径')
+
+    # navisv cg-list <file>
+    p = sub.add_parser('cg-list', help='列出所有 covergroup/coverpoint/bins')
+    p.add_argument('file', help='设计文件')
+    p.add_argument('--verbose', '-v', action='store_true', help='显示 bins 详情')
+
+    # navisv cg-check <file> <variable> <cg> <cp>
+    p = sub.add_parser('cg-check', help='bin-constraint 一致性检查')
+    p.add_argument('file', help='设计文件')
+    p.add_argument('variable', help='变量路径')
+    p.add_argument('cg', help='covergroup 名')
+    p.add_argument('cp', help='coverpoint 名')
+
+    # navisv cg-quality <file> <variable> <cg> <cp> [--type data|control]
+    p = sub.add_parser('cg-quality', help='coverage 质量评估')
+    p.add_argument('file', help='设计文件')
+    p.add_argument('variable', nargs='?', help='变量路径 (省略则 cg 级别评估)')
+    p.add_argument('cg', nargs='?', help='covergroup 名')
+    p.add_argument('cp', nargs='?', help='coverpoint 名')
+    p.add_argument('--type', '-t', choices=['data', 'control'], default='data', help='信号类型')
+
     args = parser.parse_args()
 
     try:
@@ -363,17 +407,22 @@ def main():
             run_dot(args)
         elif args.command == 'fanin-cone':
             run_fanin_cone(args)
+        elif args.command == 'constraints':
+            run_constraints(args)
+        elif args.command in ('cvar', 'ccons', 'crel'):
+            run_constraint_query(args)
+        elif args.command == 'cg-list':
+            run_cg_list(args)
+        elif args.command == 'cg-check':
+            run_cg_check(args)
+        elif args.command == 'cg-quality':
+            run_cg_quality(args)
     except Exception as e:
         print(f"错误: {e}", file=sys.stderr)
         if args.json:
             print(json.dumps({'error': str(e)}))
         sys.exit(1)
 
-
-if __name__ == '__main__':
-    main()
-
-# ========== 新增 CLI 命令 ==========
 
 def run_trace(args):
     """路径追踪"""
@@ -671,3 +720,283 @@ def run_fanin_cone(args):
 
 # 在 main() 函数的 subparsers 定义之后添加:
 
+
+def run_constraints(args):
+    """列出所有类和约束"""
+    output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
+    try:
+        dd = DesignDriver([args.file], output_dir=output_dir, include_dirs=args.include or [])
+        dd.build()
+        cg = dd.constraint_graph
+        if not cg:
+            print('错误: ConstraintGraph 未构建', file=sys.stderr)
+            return {'success': False}
+        
+        if args.json:
+            classes = cg.get_classes()
+            result = []
+            for cls in classes:
+                cons = cg.get_constraints_in_class(cls['full_path'])
+                vars_list = cg.get_variables_in_class(cls['full_path'])
+                result.append({
+                    'class': cls['name'],
+                    'full_path': cls['full_path'],
+                    'base_class': cls.get('base_class'),
+                    'variables': vars_list,
+                    'constraints': cons,
+                })
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+        else:
+            classes = cg.get_classes()
+            print(f'\n类 ({len(classes)}):')
+            for cls in classes:
+                chain = cg.get_inheritance_chain(cls['full_path'])
+                chain_str = ' -> '.join(c.split('.')[-1] for c in chain)
+                print(f'  {cls["name"]}')
+                if len(chain) > 1:
+                    print(f'    继承: {chain_str}')
+                
+                vars_list = cg.get_variables_in_class(cls['full_path'])
+                if vars_list:
+                    print(f'    变量 ({len(vars_list)}):')
+                    for v in vars_list:
+                        rm = v.get('rand_mode', 'none')
+                        bw = v.get('bit_width', '')
+                        bw_str = f' [{bw}b]' if bw else ''
+                        tc = v.get('type_class', '')
+                        tc_str = f' -> {tc.split(".")[-1]}' if tc else ''
+                        print(f'      {v["name"]:20s} {rm:6s}{bw_str}{tc_str}')
+                
+                cons = cg.get_constraints_in_class(cls['full_path'])
+                if cons:
+                    print(f'    约束 ({len(cons)}):')
+                    for c in cons:
+                        flags = []
+                        if c.get('has_soft'):
+                            flags.append('soft')
+                        if c.get('is_conditional'):
+                            flags.append('cond')
+                        flag_str = f' [{",".join(flags)}]' if flags else ''
+                        print(f'      {c["name"]}{flag_str}')
+                        if args.verbose:
+                            body = c.get('constraint_body', '')
+                            for line in body.split('; '):
+                                print(f'        {line}')
+        
+        return {'success': True}
+    finally:
+        shutil.rmtree(output_dir, ignore_errors=True)
+
+
+def run_constraint_query(args):
+    """Q1: 变量在哪些约束中 / Q2: 约束影响哪些变量 / Q3: 变量关系"""
+    output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
+    try:
+        dd = DesignDriver([args.file], output_dir=output_dir, include_dirs=args.include or [])
+        dd.build()
+        cg = dd.constraint_graph
+        if not cg:
+            print('错误: ConstraintGraph 未构建', file=sys.stderr)
+            return {'success': False}
+        
+        if args.command == 'cvar':
+            # Q1: 变量在哪些约束中
+            cons = cg.get_constraints_for_variable(
+                args.variable,
+                include_composition=args.composition,
+            )
+            if args.json:
+                print(json.dumps(cons, indent=2, ensure_ascii=False))
+            else:
+                var_name = args.variable.split('.')[-1]
+                print(f'\n变量 {var_name} 的约束 ({len(cons)}):')
+                for c in cons:
+                    cls = c['class_name'].split('.')[-1]
+                    acc = f' via {c["access_path"]}' if c.get('access_path') else ''
+                    br = c.get('bit_range')
+                    br_str = f' [{br[0]}:{br[1]}]' if br else ''
+                    cond = ' [cond]' if c.get('is_conditional') else ''
+                    print(f'\n  {cls}::{c["constraint_name"]}{br_str}{cond}{acc}')
+                    if c.get('context'):
+                        print(f'    context: {c["context"]}')
+                    if c.get('direct_exprs'):
+                        for expr in c['direct_exprs']:
+                            print(f'    expr: {expr}')
+                    if args.verbose and c.get('constraint_body'):
+                        print(f'    body: {c["constraint_body"]}')
+        
+        elif args.command == 'ccons':
+            # Q2: 约束影响哪些变量
+            vars_list = cg.get_variables_in_constraint(args.constraint)
+            if args.json:
+                print(json.dumps(vars_list, indent=2, ensure_ascii=False))
+            else:
+                cons_name = args.constraint.split('.')[-1]
+                print(f'\n约束 {cons_name} 影响的变量 ({len(vars_list)}):')
+                for v in vars_list:
+                    acc = f' via {v["access_path"]}' if v.get('access_path') else ''
+                    br = v.get('bit_range')
+                    br_str = f' [{br[0]}:{br[1]}]' if br else ''
+                    print(f'  {v["name"]}{br_str}{acc}')
+        
+        elif args.command == 'crel':
+            # Q3: 变量关系
+            rel = cg.get_constraint_relationship(args.var1, args.var2)
+            if args.json:
+                print(json.dumps(rel, indent=2, ensure_ascii=False))
+            else:
+                shared = rel['shared_constraints']
+                print(f'\n变量关系:')
+                print(f'  {args.var1.split(".")[-1]} <-> {args.var2.split(".")[-1]}')
+                if shared:
+                    print(f'  共享约束 ({len(shared)}):')
+                    for name in shared:
+                        print(f'    - {name}')
+                else:
+                    print(f'  无共享约束')
+        
+        return {'success': True}
+    finally:
+        shutil.rmtree(output_dir, ignore_errors=True)
+
+
+def run_cg_list(args):
+    """列出所有 covergroup/coverpoint/bins"""
+    output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
+    try:
+        dd = DesignDriver([args.file], output_dir=output_dir, include_dirs=args.include or [])
+        dd.build()
+        cg = dd.covergroups
+        if not cg:
+            print('错误: CovergroupAnalyzer 未构建', file=sys.stderr)
+            return {'success': False}
+        
+        if args.json:
+            cgs = cg.get_covergroups()
+            result = []
+            for info in cgs:
+                cps = cg.get_coverpoints(info['name'])
+                cp_data = []
+                for cp in cps:
+                    bins = cg.get_bins(info['name'], cp['name'])
+                    cp_data.append({**cp, 'bins': bins})
+                crosses = cg.get_crosses(info['name'])
+                result.append({**info, 'coverpoints': cp_data, 'crosses': crosses})
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+        else:
+            cgs = cg.get_covergroups()
+            print(f'\nCoverGroup ({len(cgs)}):')
+            for info in cgs:
+                print(f'  {info["name"]} (loc={info["location"]})')
+                cps = cg.get_coverpoints(info['name'])
+                for cp in cps:
+                    bins = cg.get_bins(info['name'], cp['name'])
+                    print(f'    {cp["name"]}: {len(bins)} bins')
+                    if args.verbose:
+                        for b in bins:
+                            kind_str = f' [{b["kind"]}]' if b['kind'] != 'Bins' else ''
+                            wild = ' [wildcard]' if b.get('is_wildcard') else ''
+                            deflt = ' [default]' if b.get('is_default') else ''
+                            vals = ', '.join(f'{lo}:{hi}' if lo != hi else str(lo) for lo, hi in b.get('values', []))
+                            print(f'      {b["name"]}{kind_str}{wild}{deflt} = {vals}')
+                crosses = cg.get_crosses(info['name'])
+                for c in crosses:
+                    print(f'    cross {c["name"]}: {" x ".join(c["targets"])}')
+                    if args.verbose and c.get('bins'):
+                        for b in c['bins']:
+                            print(f'      {b["name"]} [{b["kind"]}]')
+        
+        return {'success': True}
+    finally:
+        shutil.rmtree(output_dir, ignore_errors=True)
+
+
+def run_cg_check(args):
+    """bin-constraint 一致性检查"""
+    output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
+    try:
+        dd = DesignDriver([args.file], output_dir=output_dir, include_dirs=args.include or [])
+        dd.build()
+        cg = dd.covergroups
+        if not cg:
+            print('错误: CovergroupAnalyzer 未构建', file=sys.stderr)
+            return {'success': False}
+        
+        result = cg.check_bin_constraint_consistency(args.variable, args.cg, args.cp)
+        
+        if args.json:
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+        else:
+            var_name = args.variable.split('.')[-1]
+            print(f'\n{var_name} 的一致性检查:')
+            if not result:
+                print('  ✅ 无问题')
+            for r in result:
+                icon = '⚠️ ' if r['type'] != 'info' else 'ℹ️ '
+                print(f'  {icon} {r["type"]}: {r["reason"]}')
+                if r.get('range'):
+                    lo, hi = r['range']
+                    print(f'      range: [{lo}:{hi}]')
+                if r.get('uncovered_range'):
+                    ranges = ', '.join(f'[{lo}:{hi}]' for lo, hi in r['uncovered_range'])
+                    print(f'      uncovered: {ranges}')
+                if r.get('forbidden_range'):
+                    ranges = ', '.join(f'[{lo}:{hi}]' for lo, hi in r['forbidden_range'])
+                    print(f'      forbidden: {ranges}')
+        
+        return {'success': True}
+    finally:
+        shutil.rmtree(output_dir, ignore_errors=True)
+
+
+def run_cg_quality(args):
+    """coverage 质量评估"""
+    output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
+    try:
+        dd = DesignDriver([args.file], output_dir=output_dir, include_dirs=args.include or [])
+        dd.build()
+        cg = dd.covergroups
+        if not cg:
+            print('错误: CovergroupAnalyzer 未构建', file=sys.stderr)
+            return {'success': False}
+        
+        if args.variable and args.cg and args.cp:
+            # coverpoint 级别
+            result = cg.check_coverage_quality(
+                args.variable, args.cg, args.cp, signal_type=args.type
+            )
+            if args.json:
+                print(json.dumps(result, indent=2, ensure_ascii=False))
+            else:
+                var_name = args.variable.split('.')[-1]
+                score = next((r for r in result if r['type'] == 'score'), {})
+                print(f'\n{var_name} 的质量评估 (score={score.get("value", "?")})')
+                for r in result:
+                    if r['type'] == 'warning':
+                        print(f'  ⚠️  {r["reason"]}')
+                    elif r['type'] == 'info':
+                        print(f'  ℹ️  {r["reason"]}')
+        elif args.cg:
+            # covergroup 级别
+            result = cg.check_cg_quality(args.cg)
+            if args.json:
+                print(json.dumps(result, indent=2, ensure_ascii=False))
+            else:
+                score = next((r for r in result if r['type'] == 'score'), {})
+                print(f'\n{args.cg} 的质量评估 (score={score.get("value", "?")})')
+                for r in result:
+                    if r['type'] == 'warning':
+                        print(f'  ⚠️  {r["reason"]}')
+                    elif r['type'] == 'info':
+                        print(f'  ℹ️  {r["reason"]}')
+        else:
+            print('错误: 需要指定 cg 名称', file=sys.stderr)
+            return {'success': False}
+        
+        return {'success': True}
+    finally:
+        shutil.rmtree(output_dir, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,5 +1,69 @@
 # navisv Feature Plan
 
+## P1: Covergroup 分析
+
+### 痛点
+
+1. **bin 与 constraint 一致性**: coverage 中的 bin 定义是否与 constraint 约束一致？是否漏定义了 illegal bin？
+2. **coverage 质量评估**: RTL 收集的 coverage 是否合理？
+   - sample 条件是否合适
+   - bin 定义是否反映信号特性
+     - data 类信号: 关心数值范围、极值
+     - control 类信号: 关心 cross、大小关系、特殊值
+   - 涉及的相关信号是否被覆盖（需要图来描述数据关系）
+
+### 功能设计
+
+#### 1. bin-constraint 一致性检查
+- 输入: covergroup 定义 + 对应 class 的 constraint
+- 输出: 一致性报告
+  - 哪些 bin 的取值范围与 constraint 冲突（永远 hit 不到的 bin）
+  - 哪些 constraint 约束的取值范围没有对应的 bin（遗漏覆盖）
+  - 哪些 illegal bin 缺失（constraint 允许但不应该出现的值）
+- 依赖: ConstraintGraph
+
+#### 2. coverage 质量评估
+- 输入: covergroup 定义 + RTL 信号信息 (DesignGraph)
+- 输出: 质量报告
+  - sample 条件分析: 采样时机是否合理
+  - bin 策略评估:
+    - data 类信号: 是否覆盖范围边界、极值、典型值
+    - control 类信号: 是否有 cross 覆盖、特殊值覆盖
+  - 关联信号覆盖: 基于 DesignGraph 的信号关系，检查相关信号是否被联合覆盖
+
+#### 3. 图的关系
+- ConstraintGraph: 提供变量约束关系 → 判断 bin 合法性
+- DesignGraph: 提供信号驱动/负载关系 → 判断关联信号覆盖
+- 需要新增: CoverGroup 解析 → 提取 bin/sample/cross 定义
+
+### 实现思路
+
+```
+CoverGroupParser (新增)
+  ↓ 解析 covergroup 定义
+  ├── bins 定义 (名称、范围、条件)
+  ├── illegal_bins 定义
+  ├── ignore_bins 定义
+  ├── cross 覆盖
+  └── sample 事件/条件
+       ↓
+CoverGroupAnalyzer (新增)
+  ├── bin_constraint_check()  ← 对比 ConstraintGraph
+  ├── coverage_quality_check() ← 对比 DesignGraph
+  └── related_signal_check()  ← 基于图的关系追踪
+```
+
+### 优先级
+
+| 功能 | 优先级 | 依赖 | 状态 |
+|------|--------|------|------|
+| CoverGroup 解析 (AST) | P0 | slang AST | ✅ 完成 (33 测试) |
+| bin-constraint 一致性 | P0 | ConstraintGraph | ✅ 完成 (12 测试) |
+| coverage 质量评估 | P1 | DesignGraph | ✅ 完成 (9 测试) |
+| 关联信号覆盖 | P1 | DesignGraph + ConstraintGraph | 待做 |
+
+---
+
 ## P2: 高级分析功能
 
 ### 1. fan-out 分析增强
