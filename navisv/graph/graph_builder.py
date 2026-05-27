@@ -311,9 +311,9 @@ class GraphBuilder:
 
     def _add_edges(self):
         """从 Netlist 添加边"""
-        # 先收集所有 Assignment 节点的入边和出边信息
-        # 用于处理连续赋值的中间节点
-        assignment_edges_info = {}  # assignment_id -> {'in': [(src_path, symbol)], 'out': [(tgt_path, symbol)]}
+        # 收集所有无 path 的 Assignment/Conditional 节点的入边和出边信息
+        # 用于跳过中间节点，直接连接源信号到目标信号
+        intermediate_info = {}  # node_id -> {'in': [(src_path, symbol)], 'out': [(tgt_path, symbol)]}
         
         for edge in self.netlist.edges:
             src_node = self.netlist.get_node_by_id(edge.source)
@@ -322,24 +322,24 @@ class GraphBuilder:
             if not src_node or not tgt_node:
                 continue
 
-            # 收集 Assignment 相关边的信息
-            if tgt_node.kind == 'Assignment' and not tgt_node.path:
-                if tgt_node.id not in assignment_edges_info:
-                    assignment_edges_info[tgt_node.id] = {'in': [], 'out': []}
+            # 收集无 path 的 Assignment/Conditional 节点信息
+            if tgt_node.kind in ('Assignment', 'Conditional', 'Case', 'Merge') and not tgt_node.path:
+                if tgt_node.id not in intermediate_info:
+                    intermediate_info[tgt_node.id] = {'in': [], 'out': [], 'kind': tgt_node.kind}
                 src_path = src_node.path if src_node.path else ''
                 if not src_path and edge.symbol and edge.symbol.get('path'):
                     src_path = edge.symbol['path']
                 if src_path:
-                    assignment_edges_info[tgt_node.id]['in'].append((src_path, edge.symbol))
+                    intermediate_info[tgt_node.id]['in'].append((src_path, edge.symbol))
             
-            if src_node.kind == 'Assignment' and not src_node.path:
-                if src_node.id not in assignment_edges_info:
-                    assignment_edges_info[src_node.id] = {'in': [], 'out': []}
+            if src_node.kind in ('Assignment', 'Conditional', 'Case', 'Merge') and not src_node.path:
+                if src_node.id not in intermediate_info:
+                    intermediate_info[src_node.id] = {'in': [], 'out': [], 'kind': src_node.kind}
                 tgt_path = tgt_node.path if tgt_node.path else ''
                 if not tgt_path and edge.symbol and edge.symbol.get('path'):
                     tgt_path = edge.symbol['path']
                 if tgt_path:
-                    assignment_edges_info[src_node.id]['out'].append((tgt_path, edge.symbol))
+                    intermediate_info[src_node.id]['out'].append((tgt_path, edge.symbol))
 
         # 处理边
         for edge in self.netlist.edges:
@@ -364,20 +364,17 @@ class GraphBuilder:
                 if symbol_path and symbol_path != src_path:
                     tgt_path = symbol_path
 
-            # 如果 target 是没有 path 的 Assignment，尝试从出边获取目标路径
-            if tgt_node.kind == 'Assignment' and not tgt_node.path and tgt_path:
-                # 检查 Assignment 是否有多条出边，尝试找到对应的出边 symbol
-                # 对于连续赋值的中间节点，入边的 symbol 是源信号，出边的 symbol 是目标信号
-                # 但这里我们直接使用 symbol.path 作为 tgt_path
-                pass
+            # 如果 target 是中间节点且没有有效 path，从出边获取目标路径
+            if not tgt_path and tgt_node.kind in ('Assignment', 'Conditional', 'Case', 'Merge'):
+                info = intermediate_info.get(tgt_node.id)
+                if info and info['out']:
+                    tgt_path, _ = info['out'][0]
 
-            # 如果 target 是没有 path 的 Assignment 且没有有效的 symbol.path
-            # 尝试通过 assignment_edges_info 找到出边的目标路径
-            if tgt_node.kind == 'Assignment' and not tgt_path:
-                asn_info = assignment_edges_info.get(tgt_node.id)
-                if asn_info and asn_info['out']:
-                    # 使用第一条出边的目标路径
-                    tgt_path, _ = asn_info['out'][0]
+            # 如果 source 是中间节点且没有有效 path，从入边获取源路径
+            if not src_path and src_node.kind in ('Assignment', 'Conditional', 'Case', 'Merge'):
+                info = intermediate_info.get(src_node.id)
+                if info and info['in']:
+                    src_path, _ = info['in'][0]
 
             # 跳过没有有效路径的边
             if not src_path or not tgt_path:
@@ -401,12 +398,11 @@ class GraphBuilder:
 
             self._edge_attrs[(src_path, tgt_path, key)] = attr
 
-            # 如果 target 是没有 path 的 Assignment，处理出边
-            if tgt_node.kind == 'Assignment' and not tgt_node.path:
-                asn_info = assignment_edges_info.get(tgt_node.id)
-                if asn_info and len(asn_info['out']) > 1:
-                    # 有多条出边，需要为每条出边创建对应的边
-                    for out_tgt_path, out_symbol in asn_info['out'][1:]:
+            # 如果 target 是中间节点，为每条出边创建从 source 到 target 的边
+            if tgt_node.kind in ('Assignment', 'Conditional', 'Case', 'Merge') and not tgt_node.path:
+                info = intermediate_info.get(tgt_node.id)
+                if info and len(info['out']) > 1:
+                    for out_tgt_path, out_symbol in info['out'][1:]:
                         if out_tgt_path and out_tgt_path != src_path:
                             out_attr = EdgeAttr(
                                 edge_kind=edge.edge_kind,
@@ -1427,6 +1423,103 @@ class GraphBuilder:
                         self.graph[src][dst][key]['condition'] = attr.condition
                         self.graph[src][dst][key]['condition_kind'] = attr.condition_kind
                         self.graph[src][dst][key]['condition_signals'] = attr.condition_signals
+
+        # 补充: 用 AST 条件信息创建缺失的边
+        # 如果条件信号到目标信号之间没有边，创建一条
+        for target_path, conditions in self._signal_conditions.items():
+            if not target_path in self.graph:
+                continue
+            for cond_info in conditions:
+                cond_signal = cond_info.get('condition', '')
+                if cond_signal and cond_signal in self.graph:
+                    if not self.graph.has_edge(cond_signal, target_path):
+                        attr = EdgeAttr(
+                            edge_kind='None',
+                            bounds=(0, 0),
+                            condition=cond_signal,
+                            condition_kind=cond_info.get('kind', ''),
+                            condition_signals=[cond_signal],
+                        )
+                        key = self.graph.add_edge(
+                            cond_signal,
+                            target_path,
+                            **attr.to_dict()
+                        )
+                        self._edge_attrs[(cond_signal, target_path, key)] = attr
+
+        # 补充: 从 AST 中提取拼接表达式的数据路径
+        self._extract_concat_edges_from_ast()
+
+    def _extract_concat_edges_from_ast(self):
+        """从 AST 提取拼接表达式的数据依赖边"""
+        if not self.ast_json_path or not os.path.exists(self.ast_json_path):
+            return
+        import json as json_mod
+        try:
+            with open(self.ast_json_path) as f:
+                ast_data = json_mod.load(f)
+        except (json_mod.JSONDecodeError, IOError):
+            return
+        self._walk_ast_for_concat(ast_data)
+
+    def _walk_ast_for_concat(self, node: Any):
+        """遍历 AST 找拼接赋值"""
+        if isinstance(node, dict):
+            kind = node.get('kind', '')
+            if kind == 'ExpressionStatement':
+                expr = node.get('expr', {})
+                if expr.get('kind') == 'Assignment':
+                    left = expr.get('left', {})
+                    right = expr.get('right', {})
+                    if right.get('kind') == 'Conversion':
+                        right = right.get('operand', {})
+                    if right.get('kind') == 'Concatenation':
+                        self._process_concat_assignment(left, right)
+            for v in node.values():
+                self._walk_ast_for_concat(v)
+        elif isinstance(node, list):
+            for item in node:
+                self._walk_ast_for_concat(item)
+
+    def _process_concat_assignment(self, left: dict, right: dict):
+        """处理拼接赋值: left <= {a, b, c}"""
+        left_symbol = left.get('symbol', '')
+        if not left_symbol:
+            return
+        _, target_name = self._parse_ast_symbol(left_symbol)
+        if not target_name:
+            return
+        target_path = None
+        for path in self.graph.nodes:
+            if path.endswith(f'.{target_name}') or path == target_name:
+                target_path = path
+                break
+        if not target_path:
+            return
+        operands = right.get('operands', [])
+        for op in operands:
+            if op.get('kind') == 'NamedValue':
+                sym = op.get('symbol', '')
+                _, op_name = self._parse_ast_symbol(sym)
+                if op_name:
+                    op_path = None
+                    for path in self.graph.nodes:
+                        if path.endswith(f'.{op_name}') or path == op_name:
+                            op_path = path
+                            break
+                    if op_path and not self.graph.has_edge(op_path, target_path):
+                        attr = EdgeAttr(edge_kind='None', bounds=(0, 0))
+                        key = self.graph.add_edge(op_path, target_path, **attr.to_dict())
+                        self._edge_attrs[(op_path, target_path, key)] = attr
+
+    def _parse_ast_symbol(self, symbol: str) -> tuple:
+        """解析 AST symbol: 'addr name' -> (addr, name)"""
+        if not symbol:
+            return '', ''
+        parts = symbol.strip().split(' ', 1)
+        if len(parts) == 2:
+            return parts[0], parts[1]
+        return '', symbol
 
     def _classify_timing(self):
         """
