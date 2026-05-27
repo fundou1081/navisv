@@ -252,7 +252,10 @@ class GraphBuilder:
         # 6. 标注 true_condition
         self._annotate_true_conditions()
 
-        # 7. 计算 bit_mapping
+        # 7. 提取 interface 信息
+        self._extract_interface_info()
+
+        # 8. 计算 bit_mapping
         self._calculate_bit_mapping()
 
         return self.graph
@@ -1669,6 +1672,64 @@ class GraphBuilder:
         except (json_mod.JSONDecodeError, IOError):
             return
         self._walk_ast_for_true_cond(ast_data, [], [])
+
+    def _extract_interface_info(self):
+        """从图节点推断 interface/modport 信息"""
+        if not self.ast_json_path or not os.path.exists(self.ast_json_path):
+            return
+        import json as json_mod
+        try:
+            with open(self.ast_json_path) as f:
+                ast_data = json_mod.load(f)
+        except (json_mod.JSONDecodeError, IOError):
+            return
+
+        # 从 AST 提取 modport 定义
+        modport_defs = self._collect_modport_defs(ast_data)
+        if not modport_defs:
+            return
+
+        # 找 interface 相关节点并标注
+        for path, data in self.graph.nodes(data=True):
+            kind = data.get('kind', '')
+            if kind in ('', '?'):
+                data['is_interface_signal'] = True
+                for addr, modports in modport_defs.items():
+                    if modports:
+                        data.setdefault('modports', modports)
+                        break
+
+    def _collect_modport_defs(self, ast_data: dict) -> dict:
+        """从 AST 收集所有 modport 定义"""
+        result = {}
+
+        def walk(node):
+            if isinstance(node, dict):
+                if node.get('kind') == 'InstanceBody':
+                    members = node.get('members', [])
+                    modports = {}
+                    for m in members:
+                        if m.get('kind') == 'Modport':
+                            mp_name = m.get('name', '')
+                            ports = []
+                            for mp in m.get('members', []):
+                                if mp.get('kind') == 'ModportPort':
+                                    ports.append({
+                                        'name': mp.get('name', ''),
+                                        'direction': mp.get('direction', ''),
+                                    })
+                            if mp_name:
+                                modports[mp_name] = ports
+                    if modports:
+                        result[str(node.get('addr', ''))] = modports
+                for v in node.values():
+                    walk(v)
+            elif isinstance(node, list):
+                for item in node:
+                    walk(item)
+
+        walk(ast_data)
+        return result
 
     def _walk_ast_for_true_cond(self, node: Any, cond_stack: list, neg_stack: list):
         """

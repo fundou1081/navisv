@@ -10,8 +10,8 @@ import tempfile
 from typing import List, Optional, Dict, Any
 
 from navisv.drivers import SlangDriver, NetlistDriver
-from navisv.parsers import ASTParser, NetlistParser, ConstraintParser, CovergroupParser
-from navisv.graph import GraphBuilder, DesignGraph, ConstraintGraph, CovergroupAnalyzer
+from navisv.parsers import ASTParser, NetlistParser, ConstraintParser, CovergroupParser, SVAParser
+from navisv.graph import GraphBuilder, DesignGraph, ConstraintGraph, CovergroupAnalyzer, SVAGenerator
 
 
 class DesignDriver:
@@ -76,6 +76,9 @@ class DesignDriver:
         # CovergroupAnalyzer 缓存
         self._covergroup_parser: Optional[CovergroupParser] = None
         self._covergroup_analyzer: Optional[CovergroupAnalyzer] = None
+        
+        # SVA 缓存
+        self._sva_parser: Optional[SVAParser] = None
         
         # 诊断信息
         self._diagnostics: List[Dict[str, Any]] = []
@@ -180,6 +183,9 @@ class DesignDriver:
         
         # 构建 CovergroupAnalyzer
         self._build_covergroup_analyzer()
+        
+        # 构建 SVAParser
+        self._build_sva_parser()
     
     def _build_constraint_graph(self):
         """构建 ConstraintGraph"""
@@ -209,6 +215,18 @@ class DesignDriver:
                 logging.getLogger('navisv').warning(f'CovergroupAnalyzer 构建失败: {e}')
                 self._covergroup_analyzer = None
     
+    def _build_sva_parser(self):
+        """构建 SVAParser"""
+        ast_json = os.path.join(self.output_dir, 'ast.json')
+        if os.path.exists(ast_json):
+            try:
+                self._sva_parser = SVAParser(ast_json)
+                self._sva_parser.parse()
+            except Exception as e:
+                import logging
+                logging.getLogger('navisv').warning(f'SVAParser 构建失败: {e}')
+                self._sva_parser = None
+    
     @property
     def design_graph(self) -> DesignGraph:
         """获取 DesignGraph"""
@@ -229,6 +247,20 @@ class DesignDriver:
         if self._covergroup_analyzer is None and self._covergroup_parser is None:
             self.build()
         return self._covergroup_analyzer
+    
+    @property
+    def sva_generator(self) -> Optional[SVAGenerator]:
+        """获取 SVAGenerator"""
+        if self._design_graph is None:
+            self.build()
+        return SVAGenerator(self._design_graph, self._constraint_graph, self._covergroup_analyzer)
+    
+    @property
+    def sva(self) -> Optional[SVAParser]:
+        """获取 SVAParser (SVA 原始数据)"""
+        if self._sva_parser is None:
+            self.build()
+        return self._sva_parser
     
     @property
     def graph(self):
