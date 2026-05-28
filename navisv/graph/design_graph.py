@@ -102,11 +102,22 @@ class DesignGraph:
         获取驱动该信号的源节点列表
 
         Args:
-            signal: 信号路径 (如 'top.cpu.alu.result')
+            signal: 信号路径或通配符模式 (如 'top.cpu.*')
 
         Returns:
             驱动该信号的源节点列表
         """
+        import fnmatch
+        
+        if '*' in signal or '?' in signal:
+            # 通配符模式: 合并所有匹配节点的驱动
+            drivers = set()
+            for n in self.graph.nodes():
+                if fnmatch.fnmatch(n, signal):
+                    for src, _, _ in self.graph.in_edges(n, data=True):
+                        drivers.add(src)
+            return list(drivers)
+        
         if not self.graph.has_node(signal):
             return []
 
@@ -121,11 +132,22 @@ class DesignGraph:
         获取该信号驱动的负载节点列表
 
         Args:
-            signal: 信号路径
+            signal: 信号路径或通配符模式 (如 'top.cpu.*')
 
         Returns:
             被该信号驱动的节点列表
         """
+        import fnmatch
+        
+        if '*' in signal or '?' in signal:
+            # 通配符模式: 合并所有匹配节点的负载
+            loads = set()
+            for n in self.graph.nodes():
+                if fnmatch.fnmatch(n, signal):
+                    for _, dst, _ in self.graph.out_edges(n, data=True):
+                        loads.add(dst)
+            return list(loads)
+        
         if not self.graph.has_node(signal):
             return []
 
@@ -515,26 +537,34 @@ class DesignGraph:
         return None
 
     def resolve_signal_path(self, signal: str) -> List[str]:
-        """解析信号路径，支持精确、前缀、短名称匹配
+        """解析信号路径，支持精确、前缀、短名称、通配符匹配
         
         Args:
-            signal: 信号路径（可以是完整路径、前缀或短名称）
+            signal: 信号路径（可以是完整路径、前缀、短名称或通配符模式）
             
         Returns:
             匹配的完整路径列表（可能多个）
         """
+        import fnmatch
         matches = []
         
         # 1. 精确匹配
         if signal in self.__signal_conditions:
             return [signal]
         
-        # 2. 前缀匹配
+        # 2. 通配符匹配
+        if '*' in signal or '?' in signal:
+            wildcard_matches = [k for k in self.__signal_conditions 
+                              if fnmatch.fnmatch(k, signal)]
+            if wildcard_matches:
+                return wildcard_matches
+        
+        # 3. 前缀匹配
         prefix_matches = [k for k in self.__signal_conditions if k.startswith(signal + '.')]
         if prefix_matches:
             matches.extend(prefix_matches)
         
-        # 3. 短名称匹配
+        # 4. 短名称匹配
         short_name = signal.split('.')[-1]
         if not prefix_matches or '.' not in signal:
             short_matches = [k for k in self.__signal_conditions 
