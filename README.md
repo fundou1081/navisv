@@ -314,6 +314,74 @@ agt.mon.ap -> sb.imp
 agt.mon.ap -> cov.imp
 ```
 
+### 示例 10: OpenTitan UART 分析 (真实 IP)
+
+分析 OpenTitan 的 UART IP 模块（40 个依赖文件，2290 节点）：
+
+```python
+from navisv import DesignDriver
+import tempfile, os, glob
+
+ot = os.path.expanduser('~/my_dv_proj/opentitan/hw/')
+include_dirs = [
+    ot + 'ip/prim/rtl/',
+    ot + 'ip/prim_generic/rtl/',
+    ot + 'ip/tlul/rtl/',
+    ot + 'ip/uart/rtl/',
+    ot + 'top_earlgrey/rtl/',
+    ot + 'top_earlgrey/rtl/autogen/',
+    ot + 'vendor/lowrisc_ibex/rtl/',
+    ot + 'ip/prim_xilinx/rtl/',
+]
+
+# 自动收集依赖 (OpenTitan 依赖链 40+ 文件)
+def collect_deps(top_file, include_dirs):
+    file_index = {}
+    for d in include_dirs:
+        if os.path.isdir(d):
+            for f in glob.glob(d + '*.sv'):
+                base = os.path.basename(f).replace('.sv', '')
+                file_index.setdefault(base, []).append(f)
+    files = [file_index['prim_flop_macros'][0], top_file]
+    import re
+    for _ in range(20):
+        with tempfile.TemporaryDirectory() as od:
+            dd = DesignDriver(files, output_dir=od, include_dirs=include_dirs)
+            dd.build()
+            errors = [d for d in dd._diagnostics if d['severity'] == 'error']
+            if not errors:
+                return files
+            missing = set()
+            for d in errors:
+                m = re.search(r"unknown (?:class or package|module|macro) '(\w+)'", d['message'])
+                if m: missing.add(m.group(1))
+            added = False
+            for name in missing:
+                if name in file_index:
+                    p = file_index[name][0]
+                    if p not in files:
+                        files.insert(0, p)
+                        added = True
+            if not added: break
+    return files
+
+files = collect_deps(ot + 'ip/uart/rtl/uart.sv', include_dirs)
+
+with tempfile.TemporaryDirectory() as od:
+    dd = DesignDriver(files, output_dir=od, include_dirs=include_dirs)
+    dd.build()
+    dg = dd.design_graph
+
+    print(f'节点: {len(dg.graph.nodes)}')  # 2290
+    print(f'寄存器: {len(dg.get_registers())}')  # 112
+
+    # 路径追踪: UART RX → FIFO
+    r = dg.trace_full_path('uart.cio_rx_i', 'uart.uart_core.rx_fifo_data')
+    print(f'status={r["status"]} path={len(r["path"])} 跳')  # found, 15 跳
+```
+
+> 完整示例见 `examples/opentitan_example.py`
+
 ---
 
 ## API 参考
