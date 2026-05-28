@@ -12,6 +12,7 @@ PathTracer - 信号路径追踪
 import subprocess
 import os
 import tempfile
+import networkx as nx
 from typing import Dict, List, Any, Optional, Tuple
 
 
@@ -24,8 +25,10 @@ class PathTracer:
             graph: DesignGraph 实例
             netlist_driver: NetlistDriver 实例
         """
-        self.graph = graph
+        self._dg = graph
+        self._graph = graph.graph if hasattr(graph, "graph") else graph
         self.netlist_driver = netlist_driver
+        self._signal_conditions = graph._DesignGraph__signal_conditions if hasattr(graph, '_DesignGraph__signal_conditions') else {}
 
     def trace_path(self, from_signal: str, to_signal: str, enrich: bool = True) -> Dict[str, Any]:
         """
@@ -53,11 +56,11 @@ class PathTracer:
         path_nodes = self._parse_path_trace(result['stdout'])
 
         # 用 AST conditions 增强(只增强终点,即 to_signal)
-        if enrich and to_signal in self.__signal_conditions:
+        if enrich and to_signal in self._signal_conditions:
             # 找到 to_signal 对应的节点并附加条件
             for node in path_nodes:
                 if node['path'] == to_signal:
-                    conds = self.__signal_conditions[to_signal]
+                    conds = self._signal_conditions[to_signal]
                     if conds:
                         # 取第一个条件及其信息
                         c = conds[0]
@@ -120,7 +123,7 @@ class PathTracer:
         """
         # 1. 尝试 networkx shortest_path (时序边: clk/rst_n → register)
         try:
-            nx_path = nx.shortest_path(self.graph, src, dst)
+            nx_path = nx.shortest_path(self._graph, src, dst)
             return self._build_trace_result(nx_path, src, dst)
         except (nx.NodeNotFound, nx.NetworkXNoPath):
             pass
@@ -132,8 +135,8 @@ class PathTracer:
                 return self._build_trace_from_netlist(result['stdout'], src, dst)
 
         # 3. 路径不存在 - 检查原因
-        src_exists = src in self.graph
-        dst_exists = dst in self.graph
+        src_exists = src in self._graph
+        dst_exists = dst in self._graph
         
         if not src_exists and not dst_exists:
             status = 'not_found'
@@ -217,8 +220,8 @@ class PathTracer:
             timing = {'clock_domain': None, 'reset_kind': None, 'target_kind': None}
             is_register = False
 
-            if signal in self.__signal_conditions:
-                conds = self.__signal_conditions[signal]
+            if signal in self._signal_conditions:
+                conds = self._signal_conditions[signal]
                 if conds:
                     c = conds[0]
                     timing['clock_domain'] = c.get('clock_domain')
@@ -232,8 +235,8 @@ class PathTracer:
 
             # 获取位置信息
             location = ''
-            if signal in self.__signal_conditions and self.__signal_conditions[signal]:
-                loc = self.__signal_conditions[signal][0].get('location', {})
+            if signal in self._signal_conditions and self._signal_conditions[signal]:
+                loc = self._signal_conditions[signal][0].get('location', {})
                 if loc:
                     file_name = loc.get('file', '')
                     if '/' in file_name:
@@ -250,8 +253,8 @@ class PathTracer:
 
             if i > 0:
                 prev_signal = path[i - 1]
-                if self.graph.has_edge(prev_signal, signal):
-                    edge_data = self.graph.get_edge_data(prev_signal, signal)
+                if self._graph.has_edge(prev_signal, signal):
+                    edge_data = self._graph.get_edge_data(prev_signal, signal)
                     # 获取第一条边的属性 (MultiDiGraph 可能有多个边)
                     if edge_data:
                         first_key = next(iter(edge_data))
@@ -451,8 +454,8 @@ class PathTracer:
             is_register = False
 
             # 优先从 _signal_conditions 获取 (AST 分析结果)
-            if signal in self.__signal_conditions:
-                conds = self.__signal_conditions[signal]
+            if signal in self._signal_conditions:
+                conds = self._signal_conditions[signal]
                 if conds:
                     c = conds[0]
                     timing['clock_domain'] = c.get('clock_domain')
@@ -470,7 +473,7 @@ class PathTracer:
                 reset_kind = None
                 target_kind = 'register_output'
 
-                for src, dst, edge_data in self.graph.edges(data=True):
+                for src, dst, edge_data in self._graph.edges(data=True):
                     if dst != signal:
                         continue
                     src_short = src.split('.')[-1] if '.' in src else src
@@ -488,8 +491,8 @@ class PathTracer:
                     clocks_seen.add(clock_domain)
 
             location = ''
-            if signal in self.__signal_conditions and self.__signal_conditions[signal]:
-                loc = self.__signal_conditions[signal][0].get('location', {})
+            if signal in self._signal_conditions and self._signal_conditions[signal]:
+                loc = self._signal_conditions[signal][0].get('location', {})
                 if loc:
                     file_name = loc.get('file', '')
                     if '/' in file_name:
@@ -570,7 +573,7 @@ class PathTracer:
                 }
             }
         """
-        path = self.get_path(src, dst)
+        path = self._dg.get_path(src, dst)
         if not path:
             return {
                 'from': src,
@@ -589,8 +592,8 @@ class PathTracer:
             timing_info = {'clock_domain': None, 'reset_kind': None, 'target_kind': None}
             is_register = False
 
-            if signal in self.__signal_conditions:
-                conds = self.__signal_conditions[signal]
+            if signal in self._signal_conditions:
+                conds = self._signal_conditions[signal]
                 if conds:
                     # 从第一个条件获取时序属性
                     c = conds[0]
@@ -607,8 +610,8 @@ class PathTracer:
 
             # 获取位置信息
             location = ''
-            if signal in self.__signal_conditions and self.__signal_conditions[signal]:
-                loc = self.__signal_conditions[signal][0].get('location', {})
+            if signal in self._signal_conditions and self._signal_conditions[signal]:
+                loc = self._signal_conditions[signal][0].get('location', {})
                 if loc:
                     file_name = loc.get('file', '')
                     if '/' in file_name:
@@ -670,7 +673,7 @@ class PathTracer:
         cross_clock_paths = []
 
         # 按时钟域分组
-        for sig, conds in self.__signal_conditions.items():
+        for sig, conds in self._signal_conditions.items():
             if not conds:
                 continue
             clk = conds[0].get('clock_domain')
@@ -694,15 +697,15 @@ class PathTracer:
                 clock_domains_data[clk_short]['signals'].append(sig)
 
         # 收集跨时钟域和异步路径
-        for sig in self.graph.nodes():
-            loads = self.get_loads_with_timing(sig)
+        for sig in self._graph.nodes():
+            loads = self._dg.get_loads_with_timing(sig)
             for l in loads:
                 if l.get('cross_clock'):
                     cross_clock_paths.append({
                         'source': sig,
                         'target': l['signal'],
                         'source_clock': l['timing'].get('clock_domain', '').split('.')[-1],
-                        'target_clock': next((c['clock_domain'].split('.')[-1] for c in self.__signal_conditions.get(sig, []) if c.get('clock_domain')), '')
+                        'target_clock': next((c['clock_domain'].split('.')[-1] for c in self._signal_conditions.get(sig, []) if c.get('clock_domain')), '')
                     })
                 if l.get('async_path'):
                     async_paths.append({'source': sig, 'target': l['signal']})
@@ -715,8 +718,8 @@ class PathTracer:
         report_lines.append("")
         report_lines.append("SUMMARY")
         report_lines.append("-" * 70)
-        total_signals = len(self.graph.nodes())
-        signals_with_timing = sum(1 for s, c in self.__signal_conditions.items() if c)
+        total_signals = len(self._graph.nodes())
+        signals_with_timing = sum(1 for s, c in self._signal_conditions.items() if c)
         report_lines.append(f"  Total signals:          {total_signals}")
         report_lines.append(f"  Signals with timing:    {signals_with_timing}")
         report_lines.append(f"  Clock domains:          {len(clock_domains_data)}")

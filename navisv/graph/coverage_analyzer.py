@@ -64,12 +64,12 @@ class CoverageAnalyzer:
             'warnings': []
         }
 
-        condition_key = self._find_condition_key(signal)
+        condition_key = self.graph._find_condition_key(signal)
         if not condition_key:
             result['warnings'].append(f"Signal '{signal}' has no conditions")
             return result
 
-        conds = self.__signal_conditions[condition_key]
+        conds = self.graph._DesignGraph__signal_conditions[condition_key]
         result['total_conditions'] = len(conds)
 
         # 统计条件类型
@@ -166,7 +166,7 @@ class CoverageAnalyzer:
             }
         """
         if signals is None:
-            signals = [s for s, c in self.__signal_conditions.items() if c]
+            signals = [s for s, c in self.graph._DesignGraph__signal_conditions.items() if c]
 
         results = {}
         signals_with_redundancy = 0

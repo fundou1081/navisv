@@ -252,7 +252,7 @@ class DesignDriver:
             ast_json = None
         
         # 保存 ast_json 路径供 GraphBuilder 使用
-        self._ast_json_path = ast_json if os.path.exists(ast_json) else None
+        self._ast_json_path = ast_json if ast_json and os.path.exists(ast_json) else None
         # 源文件列表（用于读取源码）
         self._source_files = self.files
         
