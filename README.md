@@ -12,17 +12,21 @@ navisv 将 RTL 设计转化为结构化查询，让 AI Agent 能够直接回答�
 ### 1. 安装依赖
 
 ```bash
+# 前置条件: cmake, C++ 编译器
+# macOS: xcode-select --install
+# Ubuntu: apt install cmake g++
+
 # Python 依赖
 pip install networkx
 
 # 编译 slang (SystemVerilog 前端)
 git clone https://github.com/MikePopoloski/slang.git
-cd slang && cmake -B build && cmake --build build
-export NAVISV_SLANG_BIN=$(pwd)/build/bin/slang
+cd slang && cmake -B build && cmake --build build -j$(nproc)
+export NAVISV_SLANG_BIN=$(pwd)/slang  # 可执行文件在项目根目录
 
 # 编译 slang-netlist (网表提取, DesignGraph 需要)
 git clone https://github.com/MikePopoloski/slang-netlist.git
-cd slang-netlist && cmake -B build && cmake --build build
+cd slang-netlist && cmake -B build && cmake --build build -j$(nproc)
 export NAVISV_NETLIST_BIN=$(pwd)/build/tools/driver/slang-netlist
 ```
 
