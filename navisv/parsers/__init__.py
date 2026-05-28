@@ -5,6 +5,7 @@ from navisv.parsers.netlist_parser import NetlistParser, NetlistNode, NetlistEdg
 from navisv.parsers.constraint_parser import ConstraintParser
 from navisv.parsers.covergroup_parser import CovergroupParser
 from navisv.parsers.sva_parser import SVAParser
+from navisv.parsers.call_graph_parser import CallGraphParser
 
 __all__ = [
     'ASTParser',
@@ -17,4 +18,5 @@ __all__ = [
     'ConstraintParser',
     'CovergroupParser',
     'SVAParser',
+    'CallGraphParser',
 ]

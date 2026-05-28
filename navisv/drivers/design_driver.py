@@ -10,8 +10,8 @@ import tempfile
 from typing import List, Optional, Dict, Any
 
 from navisv.drivers import SlangDriver, NetlistDriver
-from navisv.parsers import ASTParser, NetlistParser, ConstraintParser, CovergroupParser, SVAParser
-from navisv.graph import GraphBuilder, DesignGraph, ConstraintGraph, CovergroupAnalyzer, SVAGenerator
+from navisv.parsers import ASTParser, NetlistParser, ConstraintParser, CovergroupParser, SVAParser, CallGraphParser
+from navisv.graph import GraphBuilder, DesignGraph, ConstraintGraph, CovergroupAnalyzer, SVAGenerator, CallGraph
 
 
 class DesignDriver:
@@ -79,6 +79,10 @@ class DesignDriver:
         
         # SVA 缓存
         self._sva_parser: Optional[SVAParser] = None
+        
+        # CallGraph 缓存
+        self._call_graph_parser: Optional[CallGraphParser] = None
+        self._call_graph: Optional[CallGraph] = None
         
         # 诊断信息
         self._diagnostics: List[Dict[str, Any]] = []
@@ -186,6 +190,9 @@ class DesignDriver:
         
         # 构建 SVAParser
         self._build_sva_parser()
+        
+        # 构建 CallGraph
+        self._build_call_graph()
     
     def _build_constraint_graph(self):
         """构建 ConstraintGraph"""
@@ -227,6 +234,19 @@ class DesignDriver:
                 logging.getLogger('navisv').warning(f'SVAParser 构建失败: {e}')
                 self._sva_parser = None
     
+    def _build_call_graph(self):
+        """构建 CallGraph"""
+        ast_json = os.path.join(self.output_dir, 'ast.json')
+        if os.path.exists(ast_json):
+            try:
+                self._call_graph_parser = CallGraphParser(ast_json)
+                self._call_graph_parser.parse()
+                self._call_graph = CallGraph(self._call_graph_parser)
+            except Exception as e:
+                import logging
+                logging.getLogger('navisv').warning(f'CallGraph 构建失败: {e}')
+                self._call_graph = None
+    
     @property
     def design_graph(self) -> DesignGraph:
         """获取 DesignGraph"""
@@ -261,6 +281,13 @@ class DesignDriver:
         if self._sva_parser is None:
             self.build()
         return self._sva_parser
+    
+    @property
+    def call_graph(self) -> Optional[CallGraph]:
+        """获取 CallGraph"""
+        if self._call_graph is None and self._call_graph_parser is None:
+            self.build()
+        return self._call_graph
     
     @property
     def graph(self):
