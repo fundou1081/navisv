@@ -209,6 +209,54 @@ fork ['task_a', 'task_b'] join_any
 
 Agent 用这个能力回答：“这个 sequence 的执行流程是什么？哪里有 randomize？”
 
+### 示例 9: 完整 UVM Testbench 分析 (真实 UVM 宏)
+
+以 `tests/sv/uvm_full_test.sv` 为例，使用真实 `uvm_component_utils`、`uvm_config_db`、`$value$plusargs`：
+
+```python
+dd = DesignDriver(['uvm_full_test.sv'])
+dd.build()
+uvm = dd.uvm_tb
+
+# 组件层级
+for c in uvm.get_components():
+    print(f'{c["name"]:20s} type={c["uvm_type"]}')
+
+# config_db 配置流
+for f in uvm.get_config_flows():
+    print(f'{f["field"]:15s} {f["setter"]} -> {f["getter"]} = {f["value"]}')
+
+# 端口连接
+for conn in uvm.get_port_connections():
+    print(f'{conn["source"]} -> {conn["target"]}')
+```
+
+```
+=== 组件 ===
+axi_driver       type=uvm_driver
+axi_monitor      type=uvm_monitor
+axi_scoreboard   type=uvm_scoreboard
+axi_agent        type=uvm_agent
+my_env           type=uvm_env
+
+=== 层级 ===
+axi_agent -> [drv, mon, sqr]
+my_env    -> [agt, sb, cov]
+
+=== config_db 配置流 ===
+max_retries    my_test -> my_driver = 3
+sample_count   my_test -> my_monitor = 100
+
+=== plusargs ===
+test:  VERBOSE         -> driver
+value: RETRY=%d        -> max_retries
+
+=== Port Connections ===
+drv.seq_item_port -> sqr.seq_item_export
+agt.mon.ap -> sb.imp
+agt.mon.ap -> cov.imp
+```
+
 ---
 
 ## API 参考
