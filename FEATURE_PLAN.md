@@ -95,25 +95,21 @@ Benchmark: 94% (75/79, 剩余 4 个是 pipeline 跨域路径)
 
 ---
 
-## P3: 函数调用图 (Call Graph)
+## P3: 函数调用图 (Call Graph) ✅
 
 ### 目标
 生成 class 内的函数调用图，理解 UVM testbench/sequence/driver 行为。
 
 ### 功能
-1. **函数/任务调用图**: function → function / function → task 调用关系
-2. **fork/join 建模**: 区分 fork...join / fork...join_any / fork...join_none
-3. **randomize 标记**: 标记 randomize() 调用位置和对象
-4. **super 调用**: 继承链上的调用追踪
-5. **UVM phase**: run_phase / main_phase 等入口识别
+1. **函数/任务调用图**: function → function / function → task 调用关系 ✅
+2. **fork/join 建模**: 区分 fork...join / fork...join_any / fork...join_none ✅
+3. **randomize 标记**: 标记 randomize() 调用位置和对象 ✅
+4. **super 调用**: 继承链上的调用追踪 ✅
+5. **UVM phase**: run_phase / main_phase 等入口识别 ✅
+6. **DOT/Mermaid 导出**: 可视化输出 ✅
 
-### 使用场景
-- Agent 读 UVM testbench 时快速理解 sequence 执行流程
-- 定位 randomize 行为（哪些变量在哪被随机化）
-- 理解 fork 并发结构
-
-### 依赖
-- slang AST (FunctionDeclaration / TaskDeclaration / Call / ForkStatement)
+### 测试
+17 个
 
 ---
 

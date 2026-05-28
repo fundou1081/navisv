@@ -32,6 +32,9 @@ python3 cli.py cg-list design.sv                        # 列出 covergroup
 | **信号分析** | `info` | fan-in/fan-out/条件列表 |
 | **约束查询** | `cvar` / `ccons` / `crel` | 变量↔约束关系 |
 | **CoverGroup 分析** | `cg-list` / `cg-check` / `cg-quality` | bins 一致性 + 质量评估 |
+| **SVA 提取** | (Python API) | 从 AST 提取 assert/assume/cover/restrict |
+| **调用图** | (Python API) | 函数调用图、fork、randomize 标记 |
+| **SVA 生成** | (Python API) | 从信号关系生成 assert property |
 | **编译检查** | `check` | 快速语法检查 |
 | **时序分析** | `timing` / `fanout` | 时钟域/CDC 分析 |
 
@@ -143,6 +146,68 @@ $ python3 cli.py crel tests/sv/realworld_ethernet.sv \
     - C_bringup
 ```
 
+### 示例 7: SVA 提取 (从 AST 直接解析)
+
+```python
+from navisv import DesignDriver
+
+dd = DesignDriver(['design.sv'])
+dd.build()
+sva = dd.sva
+
+for a in sva.assertions:
+    print(f'{a.kind:15s} clk={a.clock} expr={a.expression}')
+    if a.disable_condition:
+        print(f'  disable iff ({a.disable_condition})')
+```
+
+```
+Assert          clk=clk  expr: valid |-> ##1 ready
+Assume          clk=clk  expr: valid |-> ##[1:3] ready
+Assert          clk=clk  expr: valid |-> data != 8'd0
+  disable iff (!rst_n)
+Assert          clk=clk  prop=p_data_stable  expr: valid |-> ##1 $stable(data)
+Restrict        clk=clk  expr: data != 8'hFF
+```
+
+Agent 用这个能力回答：“这个模块有哪些 assertion？涉及哪些信号？”
+
+### 示例 8: 调用图 (UVM testbench 分析)
+
+```python
+cg = dd.call_graph
+
+# 调用关系
+for cls in ['my_pkg.my_seq']:
+    for m in cg.get_methods(cls):
+        calls = cg.get_calls_from(m['full_path'])
+        for c in calls:
+            flags = []
+            if c['is_randomize']: flags.append('randomize')
+            if c['is_constructor']: flags.append('new')
+            if c['is_super']: flags.append('super')
+            print(f'{m["name"]} -> {c["callee"]} {flags}')
+
+# fork 块
+for f in cg.get_forks('my_pkg.my_seq'):
+    print(f'fork {[b["callee"] for b in f["branches"]]} {f["join_type"]}')
+
+# 导出
+print(cg.to_mermaid())
+```
+
+```
+body -> body [super]
+body -> do_tag []
+do_send -> randomize [randomize]
+run_phase -> new [new]
+run_phase -> body []
+
+fork ['task_a', 'task_b'] join_any
+```
+
+Agent 用这个能力回答：“这个 sequence 的执行流程是什么？哪里有 randomize？”
+
 ---
 
 ## API 参考
@@ -211,6 +276,47 @@ for issue in issues:
 
 # 质量评估
 report = cg.check_coverage_quality('pkg.Class.var', 'cg_name', 'cp_name', signal_type='data')
+```
+
+### SVAParser (SVA 提取)
+
+```python
+sva = dd.sva
+
+# 列出所有 assertion
+for a in sva.assertions:
+    print(f'{a.kind} clk={a.clock} expr={a.expression}')
+    if a.disable_condition:
+        print(f'  disable iff ({a.disable_condition})')
+
+# 列出 property/sequence 定义
+for name, prop in sva.properties.items():
+    print(f'property {name}')
+for name, seq in sva.sequences.items():
+    print(f'sequence {name}')
+```
+
+### CallGraph (调用图)
+
+```python
+cg = dd.call_graph
+
+# 方法列表 (含继承)
+methods = cg.get_methods('pkg.my_class')
+
+# 调用关系
+calls = cg.get_calls_from('pkg.my_class.body')
+for c in calls:
+    print(f'{c["callee"]} super={c["is_super"]} randomize={c["is_randomize"]} new={c["is_constructor"]}')
+
+# fork 块
+forks = cg.get_forks('pkg.my_class')
+for f in forks:
+    print(f'fork {f["join_type"]}: {[b["callee"] for b in f["branches"]]}')
+
+# 导出
+dot = cg.to_dot()
+mermaid = cg.to_mermaid()
 ```
 
 ---
@@ -294,9 +400,12 @@ slang / slang-netlist
 | bin-constraint 一致性 | 12 | ✅ |
 | coverage 质量评估 | 9 | ✅ |
 | true_condition | 9 | ✅ |
+| SVA Parser | 17 | ✅ |
+| SVA Generator | 6 | ✅ |
+| CallGraph | 17 | ✅ |
 | DesignGraph (UART) | 10/10 | ✅ |
 | DesignGraph (benchmark) | 75/79 | ✅ (94%) |
-| **总计** | **129** | ✅ |
+| **总计** | **169** | ✅ |
 
 ### DesignGraph 路径追踪详情
 
