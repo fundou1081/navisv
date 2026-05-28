@@ -394,6 +394,12 @@ def main():
     p.add_argument('--min-latency', '-l', type=int, default=1, help='最小延迟级数')
     p.add_argument('--limit', '-n', type=int, default=20, help='显示数量')
 
+    # navisv verify-map <file>
+    p = sub.add_parser('verify-map', help='模块验证覆盖率地图')
+    p.add_argument('file', help='设计文件')
+    p.add_argument('--module', '-m', help='模块前缀 (省略则自动检测)')
+    p.add_argument('--limit', '-n', type=int, default=50, help='未覆盖信号显示数量')
+
     args = parser.parse_args()
 
     try:
@@ -435,6 +441,8 @@ def main():
             run_temporal(args)
         elif args.command == 'sva-align':
             run_sva_align(args)
+        elif args.command == 'verify-map':
+            run_verify_map(args)
     except Exception as e:
         print(f"错误: {e}", file=sys.stderr)
         if args.json:
@@ -1544,6 +1552,125 @@ def run_sva_align(args):
     finally:
         shutil.rmtree(output_dir, ignore_errors=True)
 
+
+
+
+def run_verify_map(args):
+    """模块验证覆盖率地图"""
+    from navisv.graph.verify_mapper import VerifyMapper, export_verify_json, export_verify_dot, export_verify_mermaid
+    from navisv.graph.temporal_analyzer import TemporalAnalyzer
+    
+    errors = check_tools()
+    if errors:
+        for e in errors:
+            print(f"错误: {e}", file=sys.stderr)
+        return {'success': False}
+    
+    output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
+    try:
+        dd = DesignDriver([args.file], output_dir=output_dir, include_dirs=args.include or [])
+        dd.build()
+        dg = dd.design_graph
+        
+        # 加载 SVA
+        sva_parser = None
+        sva_file = args.file.replace('.sv', '_sva.sv')
+        if os.path.exists(sva_file):
+            from navisv.parsers.sva_parser import SVAParser
+            sva_parser = SVAParser(sva_file).parse()
+        
+        # 加载 CoverGroup
+        cg_analyzer = dd._covergroup_analyzer
+        
+        # 创建 TemporalAnalyzer
+        ta = TemporalAnalyzer(dg)
+        
+        # 创建 VerifyMapper
+        mapper = VerifyMapper(dg, sva_parser, cg_analyzer, ta)
+        
+        # 确定模块前缀
+        module_prefix = args.module
+        if not module_prefix:
+            # 自动检测: 取第一个模块
+            for n in dg.graph.nodes:
+                parts = n.split('.')
+                if len(parts) >= 2:
+                    module_prefix = parts[0]
+                    break
+        
+        # 分析
+        report = mapper.analyze(module_prefix)
+        fmt = _resolve_format(args)
+        
+        json_data = export_verify_json(report)
+        dot_content = export_verify_dot(report)
+        mermaid_content = export_verify_mermaid(report)
+        
+        if fmt == 'all':
+            _write_multi_output(json_data, mermaid_content, dot_content, args, 'verify_map')
+        elif fmt == 'json':
+            print(json.dumps(json_data, indent=2, ensure_ascii=False))
+        elif fmt == 'dot':
+            _write_output(dot_content, args)
+        elif fmt == 'mermaid':
+            _write_output(mermaid_content, args)
+        else:
+            # text
+            summary = json_data['summary']
+            print(f"\n{'='*60}")
+            print(f"模块验证覆盖率地图: {report.module}")
+            print(f"{'='*60}")
+            print(f"  总信号: {summary['total_signals']}")
+            print(f"  SVA 覆盖: {summary['sva_covered']}")
+            print(f"  Coverage 覆盖: {summary['coverage_covered']}")
+            print(f"  双覆盖: {summary['both_covered']}")
+            print(f"  未覆盖: {summary['neither_covered']}")
+            print(f"  验证率: {summary['verify_rate']}%")
+            
+            # 按等级分组显示
+            full = [s for s in report.signals if s.verify_level == 'full']
+            sva_only = [s for s in report.signals if s.has_sva and not s.has_coverage]
+            cov_only = [s for s in report.signals if s.has_coverage and not s.has_sva]
+            none_list = [s for s in report.signals if s.verify_level == 'none']
+            
+            if full:
+                print(f"\n✅ 双覆盖 ({len(full)}):")
+                for s in full[:10]:
+                    print(f"  {s.signal.split('.')[-1]:30s}  SVA={s.sva_properties}  CG={s.covergroups}")
+            
+            if sva_only:
+                print(f"\n⚠️  仅SVA ({len(sva_only)}):")
+                for s in sva_only[:10]:
+                    print(f"  {s.signal.split('.')[-1]:30s}  SVA={s.sva_properties}")
+            
+            if cov_only:
+                print(f"\n⚠️  仅Coverage ({len(cov_only)}):")
+                for s in cov_only[:10]:
+                    print(f"  {s.signal.split('.')[-1]:30s}  CG={s.covergroups}")
+            
+            if none_list:
+                print(f"\n❌ 未覆盖 ({len(none_list)}):")
+                for s in none_list[:args.limit]:
+                    kind_icon = {'Port': '📌', 'State': '📦', 'Net': '🔗'}.get(s.kind, '?')
+                    print(f"  {kind_icon} {s.signal.split('.')[-1]:30s}  {s.kind}  {s.timing}")
+                if len(none_list) > args.limit:
+                    print(f"  ... 还有 {len(none_list) - args.limit} 个")
+            
+            # SVA 属性列表
+            if report.sva_properties:
+                print(f"\nSVA 属性 ({len(report.sva_properties)}):")
+                for p in report.sva_properties[:10]:
+                    print(f"  {p['name']:30s}  signals={p.get('signals', [])[:3]}")
+            
+            # CoverGroup 列表
+            if report.covergroups:
+                print(f"\nCoverGroup ({len(report.covergroups)}):")
+                for cg in report.covergroups:
+                    print(f"  {cg['name']:30s}  cp={cg.get('coverpoint_count', 0)}  cx={cg.get('cross_count', 0)}")
+        
+        return {'success': True}
+    finally:
+        shutil.rmtree(output_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":
