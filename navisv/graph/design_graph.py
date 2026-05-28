@@ -996,7 +996,7 @@ class DesignGraph:
                 input=dot_content,
                 capture_output=True,
                 text=True,
-                timeout=30
+                timeout=120
             )
             
             return result.returncode == 0

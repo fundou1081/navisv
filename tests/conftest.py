@@ -141,19 +141,28 @@ def test_filelist_file(tmp_path_factory, test_filelist_content):
 
 
 # 提供旧路径作为后备（用于向后兼容某些测试）
-@pytest.fixture(scope='session')
-def legacy_test_signal_attrs():
+@pytest.fixture(scope='session', autouse=True)
+def legacy_test_signal_attrs(test_signal_attrs_content):
     """Legacy path for test_signal_attrs.sv"""
-    return '/tmp/test_signal_attrs.sv'
+    path = '/tmp/test_signal_attrs.sv'
+    with open(path, 'w') as f:
+        f.write(test_signal_attrs_content)
+    yield path
 
 
-@pytest.fixture(scope='session')
-def legacy_test_apb_uart():
+@pytest.fixture(scope='session', autouse=True)
+def legacy_test_apb_uart(test_apb_uart_content):
     """Legacy path for test_apb_uart.sv"""
-    return '/tmp/test_apb_uart.sv'
+    path = '/tmp/test_apb_uart.sv'
+    with open(path, 'w') as f:
+        f.write(test_apb_uart_content)
+    yield path
 
 
-@pytest.fixture(scope='session')
-def legacy_test_filelist():
+@pytest.fixture(scope='session', autouse=True)
+def legacy_test_filelist(test_filelist_content):
     """Legacy path for filelist"""
-    return '/tmp/test_filelist.f'
+    path = '/tmp/test_filelist.f'
+    with open(path, 'w') as f:
+        f.write(test_filelist_content)
+    yield path
