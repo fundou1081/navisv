@@ -380,6 +380,19 @@ def main():
     p.add_argument('cp', nargs='?', help='coverpoint 名')
     p.add_argument('--type', '-t', choices=['data', 'control'], default='data', help='信号类型')
 
+    # navisv temporal <file> <src> <dst>
+    p = sub.add_parser('temporal', help='时序关系分析')
+    p.add_argument('file', help='设计文件')
+    p.add_argument('src', nargs='?', help='源信号 (省略则批量分析)')
+    p.add_argument('dst', nargs='?', help='目标信号')
+    p.add_argument('--depth', '-d', type=int, default=3, help='寄存器链深度')
+
+    # navisv sva-align <file>
+    p = sub.add_parser('sva-align', help='SVA 时序对齐检查')
+    p.add_argument('file', help='设计文件')
+    p.add_argument('--min-latency', '-l', type=int, default=1, help='最小延迟级数')
+    p.add_argument('--limit', '-n', type=int, default=20, help='显示数量')
+
     args = parser.parse_args()
 
     try:
@@ -417,6 +430,10 @@ def main():
             run_cg_check(args)
         elif args.command == 'cg-quality':
             run_cg_quality(args)
+        elif args.command == 'temporal':
+            run_temporal(args)
+        elif args.command == 'sva-align':
+            run_sva_align(args)
     except Exception as e:
         print(f"错误: {e}", file=sys.stderr)
         if args.json:
@@ -992,6 +1009,197 @@ def run_cg_quality(args):
         else:
             print('错误: 需要指定 cg 名称', file=sys.stderr)
             return {'success': False}
+        
+        return {'success': True}
+    finally:
+        shutil.rmtree(output_dir, ignore_errors=True)
+
+
+def run_temporal(args):
+    """时序关系分析"""
+    from navisv.graph.temporal_analyzer import TemporalAnalyzer
+    
+    errors = check_tools()
+    if errors:
+        for e in errors:
+            print(f"错误: {e}", file=sys.stderr)
+        return {'success': False}
+    
+    output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
+    try:
+        dd = DesignDriver([args.file], output_dir=output_dir, include_dirs=args.include or [])
+        dd.build()
+        dg = dd.design_graph
+        ta = TemporalAnalyzer(dg)
+        
+        if args.src and args.dst:
+            # 单对信号分析
+            if not dg.has_node(args.src):
+                print(f"错误: 信号 '{args.src}' 不存在", file=sys.stderr)
+                return {'success': False}
+            if not dg.has_node(args.dst):
+                print(f"错误: 信号 '{args.dst}' 不存在", file=sys.stderr)
+                return {'success': False}
+            
+            rel = ta.get_temporal_relation(args.src, args.dst)
+            
+            if args.json:
+                print(json.dumps({
+                    'source': rel.source,
+                    'target': rel.target,
+                    'relation': rel.relation,
+                    'latency': rel.latency,
+                    'clock_domain': rel.clock_domain,
+                    'condition': rel.condition,
+                    'path': rel.path,
+                }, indent=2, ensure_ascii=False))
+            else:
+                src_name = rel.source.split('.')[-1]
+                dst_name = rel.target.split('.')[-1]
+                rel_icon = {'combinational': '⚡', 'conditional': '🔀'}.get(rel.relation, '⏱️')
+                
+                print(f"\n{rel_icon} {src_name} → {dst_name}")
+                print(f"  关系: {rel.relation}")
+                print(f"  延迟: {rel.latency} 个时钟周期")
+                if rel.clock_domain:
+                    print(f"  时钟域: {rel.clock_domain.split('.')[-1]}")
+                if rel.condition:
+                    print(f"  条件: {rel.condition.split('.')[-1]}")
+                if rel.path and len(rel.path) <= 10:
+                    path_names = [p.split('.')[-1] for p in rel.path]
+                    print(f"  路径: {' → '.join(path_names)}")
+                
+                # 寄存器链
+                chains = ta.find_register_chains(args.src, max_depth=args.depth)
+                if chains:
+                    print(f"\n  寄存器链 (从 {src_name}):")
+                    for chain in chains[:10]:
+                        names = [c.split('.')[-1] for c in chain]
+                        print(f"    {' → '.join(names)} ({len(chain)-1} 级)")
+        
+        elif args.src:
+            # 单信号画像
+            if not dg.has_node(args.src):
+                print(f"错误: 信号 '{args.src}' 不存在", file=sys.stderr)
+                return {'success': False}
+            
+            profile = ta.get_signal_profile(args.src)
+            
+            if args.json:
+                print(json.dumps({
+                    'signal': profile.signal,
+                    'kind': profile.kind,
+                    'timing': profile.timing,
+                    'clock_domain': profile.clock_domain,
+                    'is_register': profile.is_register,
+                    'drivers': profile.drivers,
+                    'loads': profile.loads,
+                }, indent=2, ensure_ascii=False))
+            else:
+                kind_icon = {'Port': '📌', 'State': '📦', 'Net': '🔗'}.get(profile.kind, '?')
+                timing_icon = {'sequential': '⏱️', 'combinational': '⚡'}.get(profile.timing, '?')
+                
+                print(f"\n{kind_icon} {args.src.split('.')[-1]}")
+                print(f"  类型: {profile.kind}")
+                print(f"  时序: {timing_icon} {profile.timing}")
+                if profile.clock_domain:
+                    print(f"  时钟域: {profile.clock_domain.split('.')[-1]}")
+                print(f"  驱动: {len(profile.drivers)}")
+                for d in sorted(profile.drivers)[:5]:
+                    print(f"    ← {d.split('.')[-1]}")
+                print(f"  负载: {len(profile.loads)}")
+                for l in sorted(profile.loads)[:5]:
+                    print(f"    → {l.split('.')[-1]}")
+                
+                # 寄存器链
+                chains = ta.find_register_chains(args.src, max_depth=args.depth)
+                if chains:
+                    print(f"\n  寄存器链:")
+                    for chain in chains[:10]:
+                        names = [c.split('.')[-1] for c in chain]
+                        print(f"    {' → '.join(names)} ({len(chain)-1} 级)")
+        
+        else:
+            # 批量分析: 显示所有寄存器的时序关系
+            registers = dg.get_registers()
+            
+            if args.json:
+                result = []
+                for reg in registers[:20]:
+                    profile = ta.get_signal_profile(reg)
+                    result.append({
+                        'signal': reg.split('.')[-1],
+                        'timing': profile.timing,
+                        'clock_domain': profile.clock_domain,
+                        'drivers': len(profile.drivers),
+                        'loads': len(profile.loads),
+                    })
+                print(json.dumps(result, indent=2, ensure_ascii=False))
+            else:
+                print(f"\n寄存器时序画像 ({len(registers)} 个):")
+                for reg in sorted(registers):
+                    profile = ta.get_signal_profile(reg)
+                    clock = profile.clock_domain.split('.')[-1] if profile.clock_domain else '-'
+                    print(f"  {reg.split('.')[-1]:30s}  clock={clock:20s}  drivers={len(profile.drivers)}  loads={len(profile.loads)}")
+        
+        return {'success': True}
+    finally:
+        shutil.rmtree(output_dir, ignore_errors=True)
+
+
+def run_sva_align(args):
+    """SVA 时序对齐检查"""
+    from navisv.graph.temporal_analyzer import TemporalAnalyzer
+    from navisv.graph.sva_aligner import SVAAligner
+    
+    errors = check_tools()
+    if errors:
+        for e in errors:
+            print(f"错误: {e}", file=sys.stderr)
+        return {'success': False}
+    
+    output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
+    try:
+        dd = DesignDriver([args.file], output_dir=output_dir, include_dirs=args.include or [])
+        dd.build()
+        dg = dd.design_graph
+        
+        # 尝试加载已有 SVA
+        sva_parser = None
+        sva_file = args.file.replace('.sv', '_sva.sv')
+        if os.path.exists(sva_file):
+            from navisv.parsers.sva_parser import SVAParser
+
+
+            sva_parser = SVAParser(sva_file).parse()
+        
+        aligner = SVAAligner(dg, sva_parser)
+        
+        # 找未覆盖的时序路径
+        uncovered = aligner.find_uncovered_temporal_paths(min_latency=args.min_latency)
+        
+        if args.json:
+            print(json.dumps({
+                'total_uncovered': len(uncovered),
+                'paths': uncovered[:args.limit],
+            }, indent=2, ensure_ascii=False))
+        else:
+            print(f"\n未覆盖的时序路径 (延迟>={args.min_latency}级, 共 {len(uncovered)} 条):")
+            print()
+            for p in uncovered[:args.limit]:
+                src = p['source'].split('.')[-1]
+                dst = p['target'].split('.')[-1]
+                print(f"  {src:30s} → {dst:30s}  latency={p['latency']}  {p['relation']}")
+            
+            if len(uncovered) > args.limit:
+                print(f"\n  ... 还有 {len(uncovered) - args.limit} 条")
+            
+            # 生成 SVA 建议
+            print(f"\nSVA 建议:")
+            for p in uncovered[:5]:
+                result = aligner.check_signal_pair(p['source'], p['target'])
+                for s in result['suggestions']:
+                    print(f"  {s['property_template']}")
         
         return {'success': True}
     finally:
