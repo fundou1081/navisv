@@ -877,11 +877,30 @@ class DesignGraph:
             if result['success']:
                 return self._build_trace_from_netlist(result['stdout'], src, dst)
 
-        # 3. 路径不存在
+        # 3. 路径不存在 - 检查原因
+        src_exists = src in self.graph
+        dst_exists = dst in self.graph
+        
+        if not src_exists and not dst_exists:
+            status = 'not_found'
+            error = f'source "{src}" and target "{dst}" not found in graph'
+        elif not src_exists:
+            status = 'not_found'
+            error = f'source "{src}" not found in graph'
+        elif not dst_exists:
+            status = 'not_found'
+            error = f'target "{dst}" not found in graph'
+        else:
+            # 两个节点都存在但无路径 - 可能是图不完整
+            status = 'uncertain'
+            error = 'no path found (graph may be incomplete due to slang-netlist limitations)'
+        
         return {
             'from': src,
             'to': dst,
             'success': False,
+            'status': status,
+            'error': error,
             'path': [],
             'summary': {
                 'reset_safe': False,
@@ -1016,6 +1035,7 @@ class DesignGraph:
             'from': src,
             'to': dst,
             'success': True,
+            'status': 'found',
             'path': path_info,
             'summary': {
                 'reset_safe': reset_safe,
@@ -1250,6 +1270,7 @@ class DesignGraph:
 
         return {
             'from': src, 'to': dst, 'success': True,
+            'status': 'found',
             'path': path_info,
             'summary': {
                 'reset_safe': reset_safe, 'cross_clock': cross_clock,
@@ -1362,6 +1383,7 @@ class DesignGraph:
             'to': dst,
             'path': path_info,
             'success': True,
+            'status': 'found',
             'summary': {
                 'reset_safe': reset_safe,
                 'cross_clock': cross_clock,
