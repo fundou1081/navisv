@@ -9,20 +9,72 @@ navisv 将 RTL 设计转化为结构化查询，让 AI Agent 能够直接回答�
 
 ## 快速上手
 
+### 1. 安装依赖
+
 ```bash
-# 安装依赖
+# Python 依赖
 pip install networkx
 
-# 设置工具路径
-export NAVISV_SLANG_BIN=/path/to/slang
-export NAVISV_NETLIST_BIN=/path/to/slang-netlist
+# 编译 slang (SystemVerilog 前端)
+git clone https://github.com/MikePopoloski/slang.git
+cd slang && cmake -B build && cmake --build build
+export NAVISV_SLANG_BIN=$(pwd)/build/bin/slang
 
-# 开始使用
-python3 cli.py constraints design.sv                    # 列出所有 class/constraint
-python3 cli.py cvar design.sv pkg.Class.var             # 变量在哪些约束中
-python3 cli.py trace design.sv src_signal dst_signal    # 信号路径追踪
-python3 cli.py cg-list design.sv                        # 列出 covergroup
+# 编译 slang-netlist (网表提取, DesignGraph 需要)
+git clone https://github.com/MikePopoloski/slang-netlist.git
+cd slang-netlist && cmake -B build && cmake --build build
+export NAVISV_NETLIST_BIN=$(pwd)/build/tools/driver/slang-netlist
 ```
+
+### 2. 5 分钟上手
+
+```bash
+# 信号路径追踪: 这个信号从哪来？
+python3 cli.py trace design.sv top.src top.dst
+
+# 约束查询: 这个变量被哪些约束限制？
+python3 cli.py cvar design.sv pkg.Class.var
+
+# covergroup 检查: bin 和 constraint 一致吗？
+python3 cli.py cg-check design.sv pkg.Class.var cg_name cp_name
+
+# 语法检查
+python3 cli.py check design.sv
+```
+
+### 3. Python API (推荐 Agent 使用)
+
+```python
+from navisv import DesignDriver
+
+dd = DesignDriver(['design.sv'])
+dd.build()
+
+# 信号路径
+dg = dd.design_graph
+dg.trace_full_path('top.src', 'top.dst')
+
+# 约束查询
+cg = dd.constraint_graph
+cg.get_constraints_for_variable('pkg.Class.var')
+
+# SVA 提取
+sva = dd.sva
+for a in sva.assertions:
+    print(f'{a.kind}: {a.expression}')
+
+# UVM 结构
+uvm = dd.uvm_tb
+uvm.get_port_connections()
+
+# 调用图
+call = dd.call_graph
+call.to_mermaid()
+```
+
+## 能力总览
+
+navisv 提供 9 大能力模块，覆盖 RTL 设计分析的完整链路：
 
 ## 功能一览
 
