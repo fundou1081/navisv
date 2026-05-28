@@ -35,7 +35,8 @@ class SlangDriver:
                  params: Optional[Dict[str, str]] = None,
                  source_info: bool = False,
                  detailed_types: bool = False,
-                 scope: Optional[str] = None):
+                 scope: Optional[str] = None,
+                 single_unit: bool = False):
         """
         Args:
             files: 要分析的文件列表
@@ -48,6 +49,7 @@ class SlangDriver:
             source_info: 是否包含源码位置信息
             detailed_types: 是否包含详细类型信息
             scope: 限制 AST 作用域到指定路径
+            single_unit: 是否将所有文件视为同一编译单元
         """
         self.files = files
         self.output_dir = output_dir or f'/tmp/navisv_slang_{os.getpid()}'
@@ -59,6 +61,7 @@ class SlangDriver:
         self.source_info = source_info
         self.detailed_types = detailed_types
         self.scope = scope
+        self.single_unit = single_unit
     
     def _build_cmd(self) -> List[str]:
         """构建命令"""
@@ -66,6 +69,10 @@ class SlangDriver:
         
         # 语言标准
         cmd.extend(['--std', self.std])
+        
+        # 单元模式
+        if self.single_unit:
+            cmd.append('--single-unit')
         
         # Include 路径
         for inc_dir in self.include_dirs:

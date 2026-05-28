@@ -41,6 +41,7 @@ class DesignDriver:
         params: Optional[Dict[str, str]] = None,
         output_dir: Optional[str] = None,
         std: str = '1800-2017',
+        single_unit: bool = False,
     ):
         """
         Args:
@@ -51,6 +52,7 @@ class DesignDriver:
             params: 参数覆盖
             output_dir: 输出目录（默认使用临时目录）
             std: 语言标准
+            single_unit: 是否将所有文件视为同一编译单元
         """
         self.files = files
         self.top = top
@@ -59,6 +61,7 @@ class DesignDriver:
         self.params = params or {}
         self.output_dir = output_dir or tempfile.mkdtemp(prefix='navisv_')
         self.std = std
+        self.single_unit = single_unit
         
         # 自动发现同目录文件
         self.files = self._auto_discover_files(files)
@@ -221,6 +224,7 @@ class DesignDriver:
             defines=self.defines,
             top=self.top,
             source_info=True,
+            single_unit=self.single_unit,
         )
         result = self._slang_driver.run()
         
