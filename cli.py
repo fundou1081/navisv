@@ -386,12 +386,16 @@ def main():
     p.add_argument('src', nargs='?', help='源信号 (省略则批量分析)')
     p.add_argument('dst', nargs='?', help='目标信号')
     p.add_argument('--depth', '-d', type=int, default=3, help='寄存器链深度')
+    p.add_argument('--format', '-f', choices=['text', 'json', 'dot', 'mermaid'], default='text', help='输出格式')
+    p.add_argument('--output', '-o', help='输出文件路径')
 
     # navisv sva-align <file>
     p = sub.add_parser('sva-align', help='SVA 时序对齐检查')
     p.add_argument('file', help='设计文件')
     p.add_argument('--min-latency', '-l', type=int, default=1, help='最小延迟级数')
     p.add_argument('--limit', '-n', type=int, default=20, help='显示数量')
+    p.add_argument('--format', '-f', choices=['text', 'json', 'dot', 'mermaid'], default='text', help='输出格式')
+    p.add_argument('--output', '-o', help='输出文件路径')
 
     args = parser.parse_args()
 
@@ -1015,6 +1019,231 @@ def run_cg_quality(args):
         shutil.rmtree(output_dir, ignore_errors=True)
 
 
+def _export_temporal_dot(dg, relations, title='temporal'):
+    """生成时序关系 DOT 图"""
+    lines = []
+    lines.append(f'digraph {title} {{')
+    lines.append('  rankdir=LR;')
+    lines.append('  node [shape=box, style=filled, fontname="Helvetica"];')
+    lines.append('  edge [fontname="Helvetica", fontsize=10];')
+    lines.append('')
+    
+    # 节点分类
+    ports = set()
+    regs = set()
+    nets = set()
+    for r in relations:
+        src, dst = r['source'].split('.')[-1], r['target'].split('.')[-1]
+        if r.get('source_kind') == 'Port':
+            ports.add(src)
+        elif r.get('source_kind') == 'State':
+            regs.add(src)
+        else:
+            nets.add(src)
+        if r.get('target_kind') == 'Port':
+            ports.add(dst)
+        elif r.get('target_kind') == 'State':
+            regs.add(dst)
+        else:
+            nets.add(dst)
+    
+    for n in sorted(ports):
+        lines.append(f'  "{n}" [fillcolor=lightblue, shape=parallelogram];')
+    for n in sorted(regs):
+        lines.append(f'  "{n}" [fillcolor=lightyellow];')
+    for n in sorted(nets):
+        lines.append(f'  "{n}" [fillcolor=lightgray];')
+    lines.append('')
+    
+    # 边
+    seen = set()
+    for r in relations:
+        src = r['source'].split('.')[-1]
+        dst = r['target'].split('.')[-1]
+        rel = r['relation']
+        edge_key = (src, dst, rel)
+        if edge_key in seen:
+            continue
+        seen.add(edge_key)
+        
+        if 'sequential' in rel:
+            color = 'red'
+            style = 'bold'
+            label = f"seq#{r.get('latency',1)}"
+        elif rel == 'combinational':
+            color = 'blue'
+            style = 'dashed'
+            label = 'comb'
+        elif rel == 'conditional':
+            color = 'orange'
+            style = 'bold'
+            label = f"cond#{r.get('latency',1)}"
+        else:
+            color = 'gray'
+            style = 'solid'
+            label = rel
+        
+        lines.append(f'  "{src}" -> "{dst}" [color={color}, style={style}, label="{label}"];')
+    
+    lines.append('}')
+    return '\n'.join(lines)
+
+
+def _export_temporal_mermaid(dg, relations, title='temporal'):
+    """生成时序关系 Mermaid 图"""
+    lines = []
+    lines.append('graph LR')
+    lines.append('')
+    
+    # 节点分类
+    ports = set()
+    regs = set()
+    for r in relations:
+        src, dst = r['source'].split('.')[-1], r['target'].split('.')[-1]
+        if r.get('source_kind') == 'Port':
+            ports.add(src)
+        else:
+            regs.add(src)
+        if r.get('target_kind') == 'Port':
+            ports.add(dst)
+        else:
+            regs.add(dst)
+    
+    lines.append('  %% 输入端口')
+    for n in sorted(ports):
+        lines.append(f'  {n}[/{n}/]')
+    lines.append('')
+    lines.append('  %% 寄存器/内部信号')
+    for n in sorted(regs - ports):
+        lines.append(f'  {n}[{n}]')
+    lines.append('')
+    
+    # 组合路径
+    comb_edges = [(r['source'].split('.')[-1], r['target'].split('.')[-1], r.get('condition',''))
+                  for r in relations if r['relation'] == 'combinational']
+    if comb_edges:
+        lines.append('  %% 组合路径 (0周期)')
+        for src, dst, cond in comb_edges:
+            label = f'comb [{cond.split(".")[-1]}]' if cond else 'comb'
+            lines.append(f'  {src} -.->|{label}| {dst}')
+        lines.append('')
+    
+    # 条件路径
+    cond_edges = [(r['source'].split('.')[-1], r['target'].split('.')[-1], r.get('condition',''), r.get('latency',1))
+                  for r in relations if r['relation'] == 'conditional']
+    if cond_edges:
+        lines.append('  %% 条件路径')
+        for src, dst, cond, lat in cond_edges:
+            label = f'cond#{lat} [{cond.split(".")[-1]}]' if cond else f'cond#{lat}'
+            lines.append(f'  {src} ==>|{label}| {dst}')
+        lines.append('')
+    
+    # 寄存器路径
+    seq_edges = [(r['source'].split('.')[-1], r['target'].split('.')[-1], r.get('latency',1))
+                 for r in relations if 'sequential' in r['relation']]
+    if seq_edges:
+        lines.append('  %% 寄存器路径 (N周期)')
+        for src, dst, lat in seq_edges:
+            lines.append(f'  {src} ==>|seq#{lat}| {dst}')
+    
+    return '\n'.join(lines)
+
+
+def _export_sva_align_dot(uncovered, suggestions):
+    """生成 SVA 对齐检查 DOT 图"""
+    lines = []
+    lines.append('digraph sva_alignment {')
+    lines.append('  rankdir=LR;')
+    lines.append('  node [shape=box, style=filled, fontname="Helvetica"];')
+    lines.append('  edge [fontname="Helvetica", fontsize=10];')
+    lines.append('')
+    
+    # 节点
+    all_nodes = set()
+    for p in uncovered:
+        all_nodes.add(p['source'].split('.')[-1])
+        all_nodes.add(p['target'].split('.')[-1])
+    
+    for n in sorted(all_nodes):
+        lines.append(f'  "{n}" [fillcolor=lightyellow];')
+    lines.append('')
+    
+    # 边 (标记未覆盖)
+    seen = set()
+    for p in uncovered:
+        src = p['source'].split('.')[-1]
+        dst = p['target'].split('.')[-1]
+        edge_key = (src, dst)
+        if edge_key in seen:
+            continue
+        seen.add(edge_key)
+        
+        rel = p['relation']
+        lat = p['latency']
+        if 'sequential' in rel:
+            label = f"seq#{lat} ❌"
+            color = 'red'
+        elif rel == 'conditional':
+            label = f"cond#{lat} ❌"
+            color = 'orange'
+        else:
+            label = f"{rel} ❌"
+            color = 'gray'
+        
+        lines.append(f'  "{src}" -> "{dst}" [color={color}, style=bold, label="{label}"];')
+    
+    lines.append('}')
+    return '\n'.join(lines)
+
+
+def _export_sva_align_mermaid(uncovered, suggestions):
+    """生成 SVA 对齐检查 Mermaid 图"""
+    lines = []
+    lines.append('graph LR')
+    lines.append('')
+    
+    # 节点
+    all_nodes = set()
+    for p in uncovered:
+        all_nodes.add(p['source'].split('.')[-1])
+        all_nodes.add(p['target'].split('.')[-1])
+    
+    for n in sorted(all_nodes):
+        lines.append(f'  {n}[{n}]')
+    lines.append('')
+    
+    # 边
+    seen = set()
+    for p in uncovered:
+        src = p['source'].split('.')[-1]
+        dst = p['target'].split('.')[-1]
+        edge_key = (src, dst)
+        if edge_key in seen:
+            continue
+        seen.add(edge_key)
+        
+        rel = p['relation']
+        lat = p['latency']
+        if 'sequential' in rel:
+            lines.append(f'  {src} ==>|seq#{lat} ❌| {dst}')
+        elif rel == 'conditional':
+            lines.append(f'  {src} ==>|cond#{lat} ❌| {dst}')
+        else:
+            lines.append(f'  {src} -->|{rel} ❌| {dst}')
+    
+    return '\n'.join(lines)
+
+
+def _write_output(content, args, default_ext='.txt'):
+    """写输出到文件或标准输出"""
+    if hasattr(args, 'output') and args.output:
+        with open(args.output, 'w') as f:
+            f.write(content)
+        print(f"已保存到: {args.output}")
+    else:
+        print(content)
+
+
 def run_temporal(args):
     """时序关系分析"""
     from navisv.graph.temporal_analyzer import TemporalAnalyzer
@@ -1031,6 +1260,7 @@ def run_temporal(args):
         dd.build()
         dg = dd.design_graph
         ta = TemporalAnalyzer(dg)
+        fmt = args.format if hasattr(args, 'format') else 'text'
         
         if args.src and args.dst:
             # 单对信号分析
@@ -1043,7 +1273,7 @@ def run_temporal(args):
             
             rel = ta.get_temporal_relation(args.src, args.dst)
             
-            if args.json:
+            if fmt == 'json':
                 print(json.dumps({
                     'source': rel.source,
                     'target': rel.target,
@@ -1053,6 +1283,22 @@ def run_temporal(args):
                     'condition': rel.condition,
                     'path': rel.path,
                 }, indent=2, ensure_ascii=False))
+            elif fmt in ('dot', 'mermaid'):
+                src_attr = dg.node_attr(args.src)
+                dst_attr = dg.node_attr(args.dst)
+                relations = [{
+                    'source': rel.source,
+                    'target': rel.target,
+                    'relation': rel.relation,
+                    'latency': rel.latency,
+                    'condition': rel.condition,
+                    'source_kind': src_attr.get('kind', ''),
+                    'target_kind': dst_attr.get('kind', ''),
+                }]
+                if fmt == 'dot':
+                    _write_output(_export_temporal_dot(dg, relations), args, '.dot')
+                else:
+                    _write_output(_export_temporal_mermaid(dg, relations), args, '.mmd')
             else:
                 src_name = rel.source.split('.')[-1]
                 dst_name = rel.target.split('.')[-1]
@@ -1085,7 +1331,7 @@ def run_temporal(args):
             
             profile = ta.get_signal_profile(args.src)
             
-            if args.json:
+            if fmt == 'json':
                 print(json.dumps({
                     'signal': profile.signal,
                     'kind': profile.kind,
@@ -1095,6 +1341,33 @@ def run_temporal(args):
                     'drivers': profile.drivers,
                     'loads': profile.loads,
                 }, indent=2, ensure_ascii=False))
+            elif fmt in ('dot', 'mermaid'):
+                # 为该信号生成关系图
+                relations = []
+                for d in profile.drivers:
+                    d_attr = dg.node_attr(d)
+                    rel = ta.get_temporal_relation(d, args.src)
+                    relations.append({
+                        'source': d, 'target': args.src,
+                        'relation': rel.relation, 'latency': rel.latency,
+                        'condition': rel.condition,
+                        'source_kind': d_attr.get('kind', ''),
+                        'target_kind': profile.kind,
+                    })
+                for l in profile.loads:
+                    l_attr = dg.node_attr(l)
+                    rel = ta.get_temporal_relation(args.src, l)
+                    relations.append({
+                        'source': args.src, 'target': l,
+                        'relation': rel.relation, 'latency': rel.latency,
+                        'condition': rel.condition,
+                        'source_kind': profile.kind,
+                        'target_kind': l_attr.get('kind', ''),
+                    })
+                if fmt == 'dot':
+                    _write_output(_export_temporal_dot(dg, relations), args, '.dot')
+                else:
+                    _write_output(_export_temporal_mermaid(dg, relations), args, '.mmd')
             else:
                 kind_icon = {'Port': '📌', 'State': '📦', 'Net': '🔗'}.get(profile.kind, '?')
                 timing_icon = {'sequential': '⏱️', 'combinational': '⚡'}.get(profile.timing, '?')
@@ -1123,7 +1396,7 @@ def run_temporal(args):
             # 批量分析: 显示所有寄存器的时序关系
             registers = dg.get_registers()
             
-            if args.json:
+            if fmt == 'json':
                 result = []
                 for reg in registers[:20]:
                     profile = ta.get_signal_profile(reg)
@@ -1135,6 +1408,27 @@ def run_temporal(args):
                         'loads': len(profile.loads),
                     })
                 print(json.dumps(result, indent=2, ensure_ascii=False))
+            elif fmt in ('dot', 'mermaid'):
+                # 为寄存器之间的关系生成图
+                relations = []
+                for reg in registers:
+                    profile = ta.get_signal_profile(reg)
+                    for l in profile.loads:
+                        if l in registers:
+                            l_attr = dg.node_attr(l)
+                            rel = ta.get_temporal_relation(reg, l)
+                            if rel.relation != 'unrelated':
+                                relations.append({
+                                    'source': reg, 'target': l,
+                                    'relation': rel.relation, 'latency': rel.latency,
+                                    'condition': rel.condition,
+                                    'source_kind': 'State',
+                                    'target_kind': 'State',
+                                })
+                if fmt == 'dot':
+                    _write_output(_export_temporal_dot(dg, relations), args, '.dot')
+                else:
+                    _write_output(_export_temporal_mermaid(dg, relations), args, '.mmd')
             else:
                 print(f"\n寄存器时序画像 ({len(registers)} 个):")
                 for reg in sorted(registers):
@@ -1169,20 +1463,31 @@ def run_sva_align(args):
         sva_file = args.file.replace('.sv', '_sva.sv')
         if os.path.exists(sva_file):
             from navisv.parsers.sva_parser import SVAParser
-
-
             sva_parser = SVAParser(sva_file).parse()
         
         aligner = SVAAligner(dg, sva_parser)
+        fmt = args.format if hasattr(args, 'format') else 'text'
         
         # 找未覆盖的时序路径
         uncovered = aligner.find_uncovered_temporal_paths(min_latency=args.min_latency)
         
-        if args.json:
+        if fmt == 'json':
             print(json.dumps({
                 'total_uncovered': len(uncovered),
                 'paths': uncovered[:args.limit],
             }, indent=2, ensure_ascii=False))
+        elif fmt == 'dot':
+            suggestions = []
+            for p in uncovered[:5]:
+                result = aligner.check_signal_pair(p['source'], p['target'])
+                suggestions.extend(result['suggestions'])
+            _write_output(_export_sva_align_dot(uncovered[:args.limit], suggestions), args, '.dot')
+        elif fmt == 'mermaid':
+            suggestions = []
+            for p in uncovered[:5]:
+                result = aligner.check_signal_pair(p['source'], p['target'])
+                suggestions.extend(result['suggestions'])
+            _write_output(_export_sva_align_mermaid(uncovered[:args.limit], suggestions), args, '.mmd')
         else:
             print(f"\n未覆盖的时序路径 (延迟>={args.min_latency}级, 共 {len(uncovered)} 条):")
             print()
