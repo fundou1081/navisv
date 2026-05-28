@@ -95,6 +95,22 @@ Benchmark: 94% (75/79, 剩余 4 个是 pipeline 跨域路径)
 
 ---
 
+## P3: UVM Testbench 静态结构提取
+
+### 目标
+从代码中提取 UVM testbench 的静态组成结构，构建组件关系图。
+
+### 依赖
+- UVM 特定用法：`uvm_component_utils`、`uvm_sequence_utils`、`new()`、`build_phase` 中的 `create` 等
+- 需要识别 UVM 组件继承关系 (extends uvm_driver / uvm_monitor / uvm_scoreboard 等)
+
+### 待讨论
+- 具体 spec 和输出格式
+- 覆盖哪些 UVM 组件类型
+- 与 CallGraph 的关系
+
+---
+
 ## P3: 函数调用图 (Call Graph) ✅
 
 ### 目标

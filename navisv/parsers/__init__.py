@@ -6,6 +6,7 @@ from navisv.parsers.constraint_parser import ConstraintParser
 from navisv.parsers.covergroup_parser import CovergroupParser
 from navisv.parsers.sva_parser import SVAParser
 from navisv.parsers.call_graph_parser import CallGraphParser
+from navisv.parsers.uvm_tb_parser import UVMTestbenchParser
 
 __all__ = [
     'ASTParser',
@@ -19,4 +20,5 @@ __all__ = [
     'CovergroupParser',
     'SVAParser',
     'CallGraphParser',
+    'UVMTestbenchParser',
 ]

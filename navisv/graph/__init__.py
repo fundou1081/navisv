@@ -6,5 +6,6 @@ from navisv.graph.constraint_graph import ConstraintGraph
 from navisv.graph.covergroup_analyzer import CovergroupAnalyzer
 from navisv.graph.sva_generator import SVAGenerator
 from navisv.graph.call_graph import CallGraph
+from navisv.graph.uvm_tb import UVMTestbench
 
-__all__ = ['GraphBuilder', 'NodeAttr', 'EdgeAttr', 'DesignGraph', 'ConstraintGraph', 'CovergroupAnalyzer', 'SVAGenerator', 'CallGraph']
+__all__ = ['GraphBuilder', 'NodeAttr', 'EdgeAttr', 'DesignGraph', 'ConstraintGraph', 'CovergroupAnalyzer', 'SVAGenerator', 'CallGraph', 'UVMTestbench']

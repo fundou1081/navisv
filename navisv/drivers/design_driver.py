@@ -10,8 +10,8 @@ import tempfile
 from typing import List, Optional, Dict, Any
 
 from navisv.drivers import SlangDriver, NetlistDriver
-from navisv.parsers import ASTParser, NetlistParser, ConstraintParser, CovergroupParser, SVAParser, CallGraphParser
-from navisv.graph import GraphBuilder, DesignGraph, ConstraintGraph, CovergroupAnalyzer, SVAGenerator, CallGraph
+from navisv.parsers import ASTParser, NetlistParser, ConstraintParser, CovergroupParser, SVAParser, CallGraphParser, UVMTestbenchParser
+from navisv.graph import GraphBuilder, DesignGraph, ConstraintGraph, CovergroupAnalyzer, SVAGenerator, CallGraph, UVMTestbench
 
 
 class DesignDriver:
@@ -83,6 +83,10 @@ class DesignDriver:
         # CallGraph 缓存
         self._call_graph_parser: Optional[CallGraphParser] = None
         self._call_graph: Optional[CallGraph] = None
+        
+        # UVM Testbench 缓存
+        self._uvm_tb_parser: Optional[UVMTestbenchParser] = None
+        self._uvm_tb: Optional[UVMTestbench] = None
         
         # 诊断信息
         self._diagnostics: List[Dict[str, Any]] = []
@@ -193,6 +197,9 @@ class DesignDriver:
         
         # 构建 CallGraph
         self._build_call_graph()
+        
+        # 构建 UVM Testbench
+        self._build_uvm_tb()
     
     def _build_constraint_graph(self):
         """构建 ConstraintGraph"""
@@ -247,6 +254,19 @@ class DesignDriver:
                 logging.getLogger('navisv').warning(f'CallGraph 构建失败: {e}')
                 self._call_graph = None
     
+    def _build_uvm_tb(self):
+        """构建 UVM Testbench"""
+        ast_json = os.path.join(self.output_dir, 'ast.json')
+        if os.path.exists(ast_json):
+            try:
+                self._uvm_tb_parser = UVMTestbenchParser(ast_json)
+                self._uvm_tb_parser.parse()
+                self._uvm_tb = UVMTestbench(self._uvm_tb_parser)
+            except Exception as e:
+                import logging
+                logging.getLogger('navisv').warning(f'UVMTestbench 构建失败: {e}')
+                self._uvm_tb = None
+    
     @property
     def design_graph(self) -> DesignGraph:
         """获取 DesignGraph"""
@@ -288,6 +308,13 @@ class DesignDriver:
         if self._call_graph is None and self._call_graph_parser is None:
             self.build()
         return self._call_graph
+    
+    @property
+    def uvm_tb(self) -> Optional[UVMTestbench]:
+        """获取 UVMTestbench"""
+        if self._uvm_tb is None and self._uvm_tb_parser is None:
+            self.build()
+        return self._uvm_tb
     
     @property
     def graph(self):
