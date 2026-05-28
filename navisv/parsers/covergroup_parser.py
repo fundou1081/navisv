@@ -192,6 +192,19 @@ class CovergroupParser:
                 cross = self._process_cover_cross(member, cg_info.name)
                 cg_info.crosses.append(cross)
         
+        # 从 options 字段解析实际赋值 (如 option.per_instance = 1, option.at_least = 2)
+        for opt in node.get('options', []):
+            expr = opt.get('expr', {})
+            if expr.get('kind') == 'Assignment':
+                left = expr.get('left', {})
+                if left.get('kind') == 'MemberAccess':
+                    member = left.get('member', '')
+                    if ' ' in member:
+                        member = member.split(' ')[-1]
+                    value = self._extract_option_value(expr)
+                    if value is not None:
+                        cg_info.options[member] = value
+        
         # 提取 sample 事件 (如果有 Definition -> Instance -> InstanceBody -> SignalEvent)
         # 需要从更外层查找
     
@@ -216,6 +229,19 @@ class CovergroupParser:
             elif kind == 'CoverageBin':
                 bin_info = self._process_bin(member)
                 cp.bins.append(bin_info)
+        
+        # 从 options 字段解析实际赋值 (如 option.at_least = 3)
+        for opt in node.get('options', []):
+            expr = opt.get('expr', {})
+            if expr.get('kind') == 'Assignment':
+                left = expr.get('left', {})
+                if left.get('kind') == 'MemberAccess':
+                    member = left.get('member', '')
+                    if ' ' in member:
+                        member = member.split(' ')[-1]
+                    value = self._extract_option_value(expr)
+                    if value is not None:
+                        cp.options[member] = value
         
         return cp
     
@@ -348,10 +374,50 @@ class CovergroupParser:
     
     def _parse_option(self, node: dict) -> Dict[str, Any]:
         """解析 option ClassProperty"""
-        # option 的值在 type 字段中以 struct 定义
-        # 实际赋值需要从更上层获取
-        # 这里先返回空, 后续从 Assignment 节点获取
-        return {}
+        # 从 options 字段解析实际赋值
+        options = {}
+        for opt in node.get('options', []):
+            expr = opt.get('expr', {})
+            if expr.get('kind') == 'Assignment':
+                left = expr.get('left', {})
+                if left.get('kind') == 'MemberAccess':
+                    # 提取 member 名 (如 'at_least', 'per_instance')
+                    member = left.get('member', '')
+                    if ' ' in member:
+                        member = member.split(' ')[-1]
+                    # 提取值
+                    value = self._extract_option_value(expr)
+                    if value is not None:
+                        options[member] = value
+        return options
+    
+    def _extract_option_value(self, node: dict):
+        """提取 option 值"""
+        kind = node.get('kind', '')
+        if kind == 'IntegerLiteral':
+            val = node.get('value', node.get('constant', ''))
+            try:
+                return int(val)
+            except (ValueError, TypeError):
+                return val
+        elif kind == 'BoolLiteral':
+            return node.get('value', False)
+        elif kind == 'StringLiteral':
+            return node.get('literal', node.get('value', ''))
+        elif kind == 'Conversion':
+            operand = node.get('operand', node.get('expression', {}))
+            return self._extract_option_value(operand)
+        elif kind == 'UnaryOp':
+            operand = node.get('operand', {})
+            val = self._extract_option_value(operand)
+            op = node.get('op', '')
+            if op == 'Minus' and isinstance(val, (int, float)):
+                return -val
+            return val
+        elif kind == 'Assignment':
+            right = node.get('right', {})
+            return self._extract_option_value(right)
+        return None
     
     def _parse_cross_select(self, node: dict) -> Dict:
         """解析 crossSelect 条件"""
