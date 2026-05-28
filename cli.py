@@ -268,7 +268,10 @@ def main():
         prog='navisv',
         description='navisv - SystemVerilog 语义导航工具',
     )
-    parser.add_argument('--json', '-j', action='store_true', help='输出 JSON 格式')
+    parser.add_argument('--json', '-j', action='store_true', help='输出 JSON 格式 (等价于 --format json)')
+    parser.add_argument('--format', '-f', choices=['text', 'json', 'dot', 'mermaid', 'all'],
+                       help='输出格式: text(默认), json, dot, mermaid, all(同时生成json+图)')
+    parser.add_argument('--output', '-o', help='输出文件路径 (all 模式下为目录或前缀)')
     parser.add_argument('--include', '-I', action='append', help='include 目录')
     
     sub = parser.add_subparsers(dest='command', required=True)
@@ -305,7 +308,6 @@ def main():
     # navisv timing <file>
     p = sub.add_parser('timing', help='时序报告')
     p.add_argument('file', help='设计文件')
-    p.add_argument('--format', '-f', choices=['text', 'markdown', 'json'], help='输出格式')
 
     # navisv fanout <file> <signal>
     p = sub.add_parser('fanout', help='Fan-out 时序分析')
@@ -321,7 +323,6 @@ def main():
     p = sub.add_parser('dot', help='DOT 导出')
     p.add_argument('file', help='设计文件')
     p.add_argument('--subgraph', '-s', help='子图过滤模式 (如 module.*)')
-    p.add_argument('--output', '-o', help='输出文件路径')
 
     # navisv check <file> or <filelist>
     p = sub.add_parser('check', help='检查源码编译状态')
@@ -386,16 +387,12 @@ def main():
     p.add_argument('src', nargs='?', help='源信号 (省略则批量分析)')
     p.add_argument('dst', nargs='?', help='目标信号')
     p.add_argument('--depth', '-d', type=int, default=3, help='寄存器链深度')
-    p.add_argument('--format', '-f', choices=['text', 'json', 'dot', 'mermaid'], default='text', help='输出格式')
-    p.add_argument('--output', '-o', help='输出文件路径')
 
     # navisv sva-align <file>
     p = sub.add_parser('sva-align', help='SVA 时序对齐检查')
     p.add_argument('file', help='设计文件')
     p.add_argument('--min-latency', '-l', type=int, default=1, help='最小延迟级数')
     p.add_argument('--limit', '-n', type=int, default=20, help='显示数量')
-    p.add_argument('--format', '-f', choices=['text', 'json', 'dot', 'mermaid'], default='text', help='输出格式')
-    p.add_argument('--output', '-o', help='输出文件路径')
 
     args = parser.parse_args()
 
@@ -1019,6 +1016,75 @@ def run_cg_quality(args):
         shutil.rmtree(output_dir, ignore_errors=True)
 
 
+def _resolve_format(args):
+    """解析输出格式 (统一处理 --json 和 --format)"""
+    if hasattr(args, 'format') and args.format:
+        return args.format
+    if hasattr(args, 'json') and args.json:
+        return 'json'
+    return 'text'
+
+
+def _write_multi_output(json_data, mermaid_content, dot_content, args, prefix='navisv'):
+    """同时输出 JSON + 图文件
+    
+    Args:
+        json_data: dict/list JSON 数据
+        mermaid_content: Mermaid 图内容
+        dot_content: DOT 图内容
+        args: 命令行参数
+        prefix: 文件名前缀
+    """
+    import os
+    
+    output = getattr(args, 'output', None)
+    
+    if output:
+        # 指定了输出路径
+        if os.path.isdir(output):
+            # 目录模式: 在目录下生成多个文件
+            base = os.path.join(output, prefix)
+        else:
+            # 前缀模式
+            base = output
+        
+        json_path = base + '.json'
+        mmd_path = base + '.mmd'
+        dot_path = base + '.dot'
+        
+        with open(json_path, 'w') as f:
+            json.dump(json_data, f, indent=2, ensure_ascii=False, default=str)
+        with open(mmd_path, 'w') as f:
+            f.write(mermaid_content)
+        with open(dot_path, 'w') as f:
+            f.write(dot_content)
+        
+        print(f'JSON:     {json_path}')
+        print(f'Mermaid:  {mmd_path}')
+        print(f'DOT:      {dot_path}')
+    else:
+        # 无输出路径: JSON 打印到 stdout，图打印到 stdout
+        print('=== JSON ===')
+        print(json.dumps(json_data, indent=2, ensure_ascii=False, default=str))
+        print()
+        print('=== Mermaid ===')
+        print(mermaid_content)
+        print()
+        print('=== DOT ===')
+        print(dot_content)
+
+
+def _write_output(content, args, default_ext='.txt'):
+    """写输出到文件或标准输出"""
+    output = getattr(args, 'output', None)
+    if output:
+        with open(output, 'w') as f:
+            f.write(content)
+        print(f"已保存到: {output}")
+    else:
+        print(content)
+
+
 def _export_temporal_dot(dg, relations, title='temporal'):
     """生成时序关系 DOT 图"""
     lines = []
@@ -1260,7 +1326,7 @@ def run_temporal(args):
         dd.build()
         dg = dd.design_graph
         ta = TemporalAnalyzer(dg)
-        fmt = args.format if hasattr(args, 'format') else 'text'
+        fmt = _resolve_format(args)
         
         if args.src and args.dst:
             # 单对信号分析
@@ -1272,41 +1338,38 @@ def run_temporal(args):
                 return {'success': False}
             
             rel = ta.get_temporal_relation(args.src, args.dst)
+            src_attr = dg.node_attr(args.src)
+            dst_attr = dg.node_attr(args.dst)
             
-            if fmt == 'json':
-                print(json.dumps({
-                    'source': rel.source,
-                    'target': rel.target,
-                    'relation': rel.relation,
-                    'latency': rel.latency,
-                    'clock_domain': rel.clock_domain,
-                    'condition': rel.condition,
-                    'path': rel.path,
-                }, indent=2, ensure_ascii=False))
-            elif fmt in ('dot', 'mermaid'):
-                src_attr = dg.node_attr(args.src)
-                dst_attr = dg.node_attr(args.dst)
-                relations = [{
-                    'source': rel.source,
-                    'target': rel.target,
-                    'relation': rel.relation,
-                    'latency': rel.latency,
-                    'condition': rel.condition,
-                    'source_kind': src_attr.get('kind', ''),
-                    'target_kind': dst_attr.get('kind', ''),
-                }]
-                if fmt == 'dot':
-                    _write_output(_export_temporal_dot(dg, relations), args, '.dot')
-                else:
-                    _write_output(_export_temporal_mermaid(dg, relations), args, '.mmd')
+            json_data = {
+                'source': rel.source, 'target': rel.target,
+                'relation': rel.relation, 'latency': rel.latency,
+                'clock_domain': rel.clock_domain, 'condition': rel.condition,
+                'path': rel.path,
+            }
+            relations = [{
+                'source': rel.source, 'target': rel.target,
+                'relation': rel.relation, 'latency': rel.latency,
+                'condition': rel.condition,
+                'source_kind': src_attr.get('kind', ''),
+                'target_kind': dst_attr.get('kind', ''),
+            }]
+            
+            if fmt == 'all':
+                _write_multi_output(json_data, _export_temporal_mermaid(dg, relations),
+                    _export_temporal_dot(dg, relations), args, 'temporal_pair')
+            elif fmt == 'json':
+                print(json.dumps(json_data, indent=2, ensure_ascii=False))
+            elif fmt == 'dot':
+                _write_output(_export_temporal_dot(dg, relations), args)
+            elif fmt == 'mermaid':
+                _write_output(_export_temporal_mermaid(dg, relations), args)
             else:
                 src_name = rel.source.split('.')[-1]
                 dst_name = rel.target.split('.')[-1]
                 rel_icon = {'combinational': '⚡', 'conditional': '🔀'}.get(rel.relation, '⏱️')
-                
                 print(f"\n{rel_icon} {src_name} → {dst_name}")
-                print(f"  关系: {rel.relation}")
-                print(f"  延迟: {rel.latency} 个时钟周期")
+                print(f"  关系: {rel.relation}  延迟: {rel.latency} 个时钟周期")
                 if rel.clock_domain:
                     print(f"  时钟域: {rel.clock_domain.split('.')[-1]}")
                 if rel.condition:
@@ -1314,8 +1377,6 @@ def run_temporal(args):
                 if rel.path and len(rel.path) <= 10:
                     path_names = [p.split('.')[-1] for p in rel.path]
                     print(f"  路径: {' → '.join(path_names)}")
-                
-                # 寄存器链
                 chains = ta.find_register_chains(args.src, max_depth=args.depth)
                 if chains:
                     print(f"\n  寄存器链 (从 {src_name}):")
@@ -1324,57 +1385,44 @@ def run_temporal(args):
                         print(f"    {' → '.join(names)} ({len(chain)-1} 级)")
         
         elif args.src:
-            # 单信号画像
             if not dg.has_node(args.src):
                 print(f"错误: 信号 '{args.src}' 不存在", file=sys.stderr)
                 return {'success': False}
-            
             profile = ta.get_signal_profile(args.src)
+            json_data = {
+                'signal': profile.signal, 'kind': profile.kind,
+                'timing': profile.timing, 'clock_domain': profile.clock_domain,
+                'is_register': profile.is_register,
+                'drivers': profile.drivers, 'loads': profile.loads,
+            }
+            relations = []
+            for d in profile.drivers:
+                d_attr = dg.node_attr(d)
+                rel = ta.get_temporal_relation(d, args.src)
+                relations.append({'source': d, 'target': args.src, 'relation': rel.relation,
+                    'latency': rel.latency, 'condition': rel.condition,
+                    'source_kind': d_attr.get('kind', ''), 'target_kind': profile.kind})
+            for l in profile.loads:
+                l_attr = dg.node_attr(l)
+                rel = ta.get_temporal_relation(args.src, l)
+                relations.append({'source': args.src, 'target': l, 'relation': rel.relation,
+                    'latency': rel.latency, 'condition': rel.condition,
+                    'source_kind': profile.kind, 'target_kind': l_attr.get('kind', '')})
             
-            if fmt == 'json':
-                print(json.dumps({
-                    'signal': profile.signal,
-                    'kind': profile.kind,
-                    'timing': profile.timing,
-                    'clock_domain': profile.clock_domain,
-                    'is_register': profile.is_register,
-                    'drivers': profile.drivers,
-                    'loads': profile.loads,
-                }, indent=2, ensure_ascii=False))
-            elif fmt in ('dot', 'mermaid'):
-                # 为该信号生成关系图
-                relations = []
-                for d in profile.drivers:
-                    d_attr = dg.node_attr(d)
-                    rel = ta.get_temporal_relation(d, args.src)
-                    relations.append({
-                        'source': d, 'target': args.src,
-                        'relation': rel.relation, 'latency': rel.latency,
-                        'condition': rel.condition,
-                        'source_kind': d_attr.get('kind', ''),
-                        'target_kind': profile.kind,
-                    })
-                for l in profile.loads:
-                    l_attr = dg.node_attr(l)
-                    rel = ta.get_temporal_relation(args.src, l)
-                    relations.append({
-                        'source': args.src, 'target': l,
-                        'relation': rel.relation, 'latency': rel.latency,
-                        'condition': rel.condition,
-                        'source_kind': profile.kind,
-                        'target_kind': l_attr.get('kind', ''),
-                    })
-                if fmt == 'dot':
-                    _write_output(_export_temporal_dot(dg, relations), args, '.dot')
-                else:
-                    _write_output(_export_temporal_mermaid(dg, relations), args, '.mmd')
+            if fmt == 'all':
+                _write_multi_output(json_data, _export_temporal_mermaid(dg, relations),
+                    _export_temporal_dot(dg, relations), args, f'temporal_{args.src.split(".")[-1]}')
+            elif fmt == 'json':
+                print(json.dumps(json_data, indent=2, ensure_ascii=False))
+            elif fmt == 'dot':
+                _write_output(_export_temporal_dot(dg, relations), args)
+            elif fmt == 'mermaid':
+                _write_output(_export_temporal_mermaid(dg, relations), args)
             else:
                 kind_icon = {'Port': '📌', 'State': '📦', 'Net': '🔗'}.get(profile.kind, '?')
                 timing_icon = {'sequential': '⏱️', 'combinational': '⚡'}.get(profile.timing, '?')
-                
                 print(f"\n{kind_icon} {args.src.split('.')[-1]}")
-                print(f"  类型: {profile.kind}")
-                print(f"  时序: {timing_icon} {profile.timing}")
+                print(f"  类型: {profile.kind}  时序: {timing_icon} {profile.timing}")
                 if profile.clock_domain:
                     print(f"  时钟域: {profile.clock_domain.split('.')[-1]}")
                 print(f"  驱动: {len(profile.drivers)}")
@@ -1383,8 +1431,6 @@ def run_temporal(args):
                 print(f"  负载: {len(profile.loads)}")
                 for l in sorted(profile.loads)[:5]:
                     print(f"    → {l.split('.')[-1]}")
-                
-                # 寄存器链
                 chains = ta.find_register_chains(args.src, max_depth=args.depth)
                 if chains:
                     print(f"\n  寄存器链:")
@@ -1393,42 +1439,34 @@ def run_temporal(args):
                         print(f"    {' → '.join(names)} ({len(chain)-1} 级)")
         
         else:
-            # 批量分析: 显示所有寄存器的时序关系
             registers = dg.get_registers()
+            json_data = []
+            for reg in registers:
+                profile = ta.get_signal_profile(reg)
+                json_data.append({'signal': reg.split('.')[-1], 'full_path': reg,
+                    'timing': profile.timing, 'clock_domain': profile.clock_domain,
+                    'drivers': len(profile.drivers), 'loads': len(profile.loads)})
+            relations = []
+            for reg in registers:
+                profile = ta.get_signal_profile(reg)
+                for l in profile.loads:
+                    if l in registers:
+                        l_attr = dg.node_attr(l)
+                        rel = ta.get_temporal_relation(reg, l)
+                        if rel.relation != 'unrelated':
+                            relations.append({'source': reg, 'target': l, 'relation': rel.relation,
+                                'latency': rel.latency, 'condition': rel.condition,
+                                'source_kind': 'State', 'target_kind': 'State'})
             
-            if fmt == 'json':
-                result = []
-                for reg in registers[:20]:
-                    profile = ta.get_signal_profile(reg)
-                    result.append({
-                        'signal': reg.split('.')[-1],
-                        'timing': profile.timing,
-                        'clock_domain': profile.clock_domain,
-                        'drivers': len(profile.drivers),
-                        'loads': len(profile.loads),
-                    })
-                print(json.dumps(result, indent=2, ensure_ascii=False))
-            elif fmt in ('dot', 'mermaid'):
-                # 为寄存器之间的关系生成图
-                relations = []
-                for reg in registers:
-                    profile = ta.get_signal_profile(reg)
-                    for l in profile.loads:
-                        if l in registers:
-                            l_attr = dg.node_attr(l)
-                            rel = ta.get_temporal_relation(reg, l)
-                            if rel.relation != 'unrelated':
-                                relations.append({
-                                    'source': reg, 'target': l,
-                                    'relation': rel.relation, 'latency': rel.latency,
-                                    'condition': rel.condition,
-                                    'source_kind': 'State',
-                                    'target_kind': 'State',
-                                })
-                if fmt == 'dot':
-                    _write_output(_export_temporal_dot(dg, relations), args, '.dot')
-                else:
-                    _write_output(_export_temporal_mermaid(dg, relations), args, '.mmd')
+            if fmt == 'all':
+                _write_multi_output(json_data, _export_temporal_mermaid(dg, relations),
+                    _export_temporal_dot(dg, relations), args, 'temporal_registers')
+            elif fmt == 'json':
+                print(json.dumps(json_data, indent=2, ensure_ascii=False))
+            elif fmt == 'dot':
+                _write_output(_export_temporal_dot(dg, relations), args)
+            elif fmt == 'mermaid':
+                _write_output(_export_temporal_mermaid(dg, relations), args)
             else:
                 print(f"\n寄存器时序画像 ({len(registers)} 个):")
                 for reg in sorted(registers):
@@ -1458,7 +1496,6 @@ def run_sva_align(args):
         dd.build()
         dg = dd.design_graph
         
-        # 尝试加载已有 SVA
         sva_parser = None
         sva_file = args.file.replace('.sv', '_sva.sv')
         if os.path.exists(sva_file):
@@ -1466,28 +1503,30 @@ def run_sva_align(args):
             sva_parser = SVAParser(sva_file).parse()
         
         aligner = SVAAligner(dg, sva_parser)
-        fmt = args.format if hasattr(args, 'format') else 'text'
-        
-        # 找未覆盖的时序路径
+        fmt = _resolve_format(args)
         uncovered = aligner.find_uncovered_temporal_paths(min_latency=args.min_latency)
         
-        if fmt == 'json':
-            print(json.dumps({
-                'total_uncovered': len(uncovered),
-                'paths': uncovered[:args.limit],
-            }, indent=2, ensure_ascii=False))
+        json_data = {
+            'total_uncovered': len(uncovered),
+            'paths': uncovered[:args.limit],
+        }
+        
+        # 生成 SVA 建议
+        suggestions = []
+        for p in uncovered[:5]:
+            result = aligner.check_signal_pair(p['source'], p['target'])
+            suggestions.extend(result['suggestions'])
+        json_data['suggestions'] = suggestions
+        
+        if fmt == 'all':
+            _write_multi_output(json_data, _export_sva_align_mermaid(uncovered[:args.limit], suggestions),
+                _export_sva_align_dot(uncovered[:args.limit], suggestions), args, 'sva_alignment')
+        elif fmt == 'json':
+            print(json.dumps(json_data, indent=2, ensure_ascii=False))
         elif fmt == 'dot':
-            suggestions = []
-            for p in uncovered[:5]:
-                result = aligner.check_signal_pair(p['source'], p['target'])
-                suggestions.extend(result['suggestions'])
-            _write_output(_export_sva_align_dot(uncovered[:args.limit], suggestions), args, '.dot')
+            _write_output(_export_sva_align_dot(uncovered[:args.limit], suggestions), args)
         elif fmt == 'mermaid':
-            suggestions = []
-            for p in uncovered[:5]:
-                result = aligner.check_signal_pair(p['source'], p['target'])
-                suggestions.extend(result['suggestions'])
-            _write_output(_export_sva_align_mermaid(uncovered[:args.limit], suggestions), args, '.mmd')
+            _write_output(_export_sva_align_mermaid(uncovered[:args.limit], suggestions), args)
         else:
             print(f"\n未覆盖的时序路径 (延迟>={args.min_latency}级, 共 {len(uncovered)} 条):")
             print()
@@ -1495,20 +1534,16 @@ def run_sva_align(args):
                 src = p['source'].split('.')[-1]
                 dst = p['target'].split('.')[-1]
                 print(f"  {src:30s} → {dst:30s}  latency={p['latency']}  {p['relation']}")
-            
             if len(uncovered) > args.limit:
                 print(f"\n  ... 还有 {len(uncovered) - args.limit} 条")
-            
-            # 生成 SVA 建议
             print(f"\nSVA 建议:")
-            for p in uncovered[:5]:
-                result = aligner.check_signal_pair(p['source'], p['target'])
-                for s in result['suggestions']:
-                    print(f"  {s['property_template']}")
+            for s in suggestions[:10]:
+                print(f"  {s['property_template']}")
         
         return {'success': True}
     finally:
         shutil.rmtree(output_dir, ignore_errors=True)
+
 
 
 if __name__ == "__main__":
