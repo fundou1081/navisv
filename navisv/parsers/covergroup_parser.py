@@ -10,7 +10,6 @@ covergroup_parser.py - 从 slang AST JSON 提取 covergroup 信息
 """
 
 import json
-import re
 from typing import Dict, List, Optional, Any, Tuple, Set
 from dataclasses import dataclass, field
 

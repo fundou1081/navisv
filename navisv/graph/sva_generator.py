@@ -10,7 +10,6 @@ sva_generator.py - 从 DesignGraph 生成 SVA (SystemVerilog Assertions)
 """
 
 from typing import List, Dict, Any, Optional
-import re
 
 
 class SVAGenerator:
@@ -83,7 +82,7 @@ class SVAGenerator:
                     continue
 
                 prop_name = f'p_{dst_name}_{src_name}_{len(props)}'
-                prop_name = re.sub(r'[^a-zA-Z0-9_]', '_', prop_name)
+                prop_name = ''.join(c if c.isalnum() or c == '_' else '_' for c in prop_name)
 
                 disable_str = f' disable iff ({disable})' if disable else ''
                 declaration = f'  property {prop_name};'
@@ -113,19 +112,19 @@ class SVAGenerator:
                 # 检查是否有 inside 约束
                 cons = self.cg.get_constraints_for_variable(var_path)
                 for c in cons:
-                    body = c.get('constraint_body', '')
-                    inside_match = re.search(r'inside\s*\{([^}]+)\}', body)
-                    if not inside_match:
+                    # 优先使用结构化字段
+                    inside_ranges = c.get('inside_ranges', [])
+                    if not inside_ranges:
                         continue
                     
-                    range_str = inside_match.group(1).strip()
+                    range_str = ','.join(f'{lo}:{hi}' for lo, hi in inside_ranges)
                     key = f'{var_name}:{range_str}'
                     if key in seen:
                         continue
                     seen.add(key)
                     
                     prop_name = f'p_{var_name}_range'
-                    prop_name = re.sub(r'[^a-zA-Z0-9_]', '_', prop_name)
+                    prop_name = ''.join(c if c.isalnum() or c == '_' else '_' for c in prop_name)
                     
                     declaration = f'  property {prop_name};'
                     body_str = f'    @(posedge clk) {var_name} inside {{ {range_str} }};'

@@ -143,8 +143,7 @@ def find_target_paths(ast, target_signal):
 
 
 def simplify_conditions(results):
-    """简化和去重条件"""
-    import re
+    """简化和去重条件 (用 AST 遍历代替正则)"""
     seen = set()
     unique = []
     for r in results:
@@ -152,8 +151,27 @@ def simplify_conditions(results):
         # 多轮简化双重否定
         for _ in range(5):
             old = cond
-            # !(!(x)) → x
-            cond = re.sub(r"!\(!\((\w+)\)\)", r"\1", cond)
+            # !(!(x)) → x  (手动解析，不用正则)
+            while True:
+                idx = cond.find('!(!(')
+                if idx < 0:
+                    break
+                # 找到匹配的 ))
+                depth = 0
+                start = idx + 4
+                end = start
+                for i in range(start, len(cond)):
+                    if cond[i] == '(':
+                        depth += 1
+                    elif cond[i] == ')':
+                        if depth == 0:
+                            end = i
+                            break
+                        depth -= 1
+                inner = cond[start:end]
+                # 确认后面是 ))
+                if cond[end:end+2] == '))':
+                    cond = cond[:idx] + inner + cond[end+2:]
             if cond == old:
                 break
         r = dict(r, condition=cond)

@@ -11,7 +11,6 @@ constraint_parser.py - 从 slang AST JSON 提取 class/constraint 信息
 """
 
 import json
-import re
 from typing import Dict, List, Optional, Any, Tuple, Set
 from dataclasses import dataclass, field
 
@@ -65,6 +64,7 @@ class ConstraintInfo:
     expr_count: int = 0          # 表达式数量
     source_text: str = ''        # 原始源码
     constraint_body: str = ''    # 约束体内容 (可读)
+    inside_ranges: List[Tuple[int, int]] = field(default_factory=list)  # inside {lo:hi} 范围
     has_soft: bool = False
     is_conditional: bool = False
     bound_vars: List[VarRef] = field(default_factory=list)
@@ -157,10 +157,10 @@ class ConstraintParser:
         base_str = node.get('baseClass', '')
         if base_str:
             # baseClass 格式: "6338699674504 base_packet"
-            match = re.match(r'(\d+)\s+(\w+)', str(base_str))
-            if match:
-                base_class_addr = match.group(1)
-                base_cls_name = match.group(2)
+            parts = str(base_str).strip().split(' ', 1)
+            if len(parts) == 2:
+                base_class_addr = parts[0]
+                base_cls_name = parts[1].strip()
                 # 查找父类 full_path
                 if base_class_addr in self._addr_to_class:
                     base_class = self._addr_to_class[base_class_addr]
@@ -228,27 +228,67 @@ class ConstraintParser:
         )
         self.variables[full_path] = info
     
-    def _parse_type(self, type_str: str) -> Tuple[Optional[int], Optional[int], Optional[int], bool]:
-        """解析类型字符串, 提取位宽信息"""
+    def _parse_type(self, type_info) -> Tuple[Optional[int], Optional[int], Optional[int], bool]:
+        """解析类型, 提取位宽信息
+        
+        支持:
+        - dict: AST 结构化 type 字段 (优先)
+        - str: 类型字符串 (回退)
+        """
+        # 结构化字段 (来自 AST)
+        if isinstance(type_info, dict):
+            kind = type_info.get('kind', '')
+            is_dynamic = kind == 'DynamicArrayType'
+            
+            range_str = type_info.get('range', '')
+            if range_str and range_str.startswith('[') and ':' in range_str:
+                # [7:0] 格式
+                parts = range_str[1:-1].split(':')
+                try:
+                    msb, lsb = int(parts[0]), int(parts[1])
+                    return msb, lsb, abs(msb - lsb) + 1, is_dynamic
+                except (ValueError, IndexError):
+                    pass
+            elif range_str and range_str.startswith('['):
+                # [3] 格式
+                try:
+                    w = int(range_str[1:-1])
+                    return w, 0, w + 1, is_dynamic
+                except ValueError:
+                    pass
+            
+            # 从 elementType 递归
+            elem = type_info.get('elementType')
+            if isinstance(elem, dict):
+                return self._parse_type(elem)
+            
+            return None, None, None, is_dynamic
+        
+        # 字符串回退
+        type_str = str(type_info)
         is_dynamic = '$[]' in type_str or '[]' in type_str
         
         # bit[N:0] 或 logic[N:0]
-        m = re.search(r'(?:bit|logic|reg|wire)\[(\d+):(\d+)\]', type_str)
-        if m:
-            msb = int(m.group(1))
-            lsb = int(m.group(2))
-            width = abs(msb - lsb) + 1
-            return msb, lsb, width, is_dynamic
-        
-        # bit[N] (单维度)
-        m = re.search(r'(?:bit|logic|reg|wire)\[(\d+)\]', type_str)
-        if m:
-            w = int(m.group(1))
-            return w, 0, w + 1, is_dynamic
+        bracket_idx = type_str.find('[')
+        if bracket_idx >= 0:
+            inner = type_str[bracket_idx+1:]
+            colon_idx = inner.find(':')
+            if colon_idx >= 0:
+                try:
+                    msb = int(inner[:colon_idx])
+                    lsb = int(inner[colon_idx+1:].rstrip(']'))
+                    return msb, lsb, abs(msb - lsb) + 1, is_dynamic
+                except ValueError:
+                    pass
+            elif inner.endswith(']'):
+                try:
+                    w = int(inner[:-1])
+                    return w, 0, w + 1, is_dynamic
+                except ValueError:
+                    pass
         
         # int, byte, shortint, longint
-        width_map = {'byte': 8, 'shortint': 16, 'int': 32, 'longint': 64, 'integer': 32}
-        for kw, w in width_map.items():
+        for kw, w in [('byte', 8), ('shortint', 16), ('int', 32), ('longint', 64), ('integer', 32)]:
             if kw in type_str:
                 return w - 1, 0, w, is_dynamic
         
@@ -257,10 +297,10 @@ class ConstraintParser:
     def _resolve_type_class(self, type_str: str) -> Optional[str]:
         """如果类型是 class instance, 返回类 full_path"""
         # type_str 格式: "6338699682424 eth_packet"
-        m = re.match(r'(\d+)\s+(\w+)', type_str)
-        if m:
-            addr = m.group(1)
-            cls_name = m.group(2)
+        parts = str(type_str).strip().split(' ', 1)
+        if len(parts) == 2:
+            addr = parts[0]
+            cls_name = parts[1].strip()
             if addr in self._addr_to_class:
                 return self._addr_to_class[addr]
             # 可能是同一个包内的类
@@ -330,6 +370,7 @@ class ConstraintParser:
             is_conditional=is_conditional,
             bound_vars=var_refs,
             constraint_body=constraint_body,
+            inside_ranges=self._extract_inside_ranges(node),
         )
         self.constraints[full_path] = info
     
@@ -386,6 +427,37 @@ class ConstraintParser:
         
         return refs
     
+    def _extract_inside_ranges(self, node: Any) -> List[Tuple[int, int]]:
+        """从约束 AST 中提取 inside {lo:hi} 范围 (结构化字段访问)"""
+        ranges = []
+        if isinstance(node, dict):
+            kind = node.get('kind', '')
+            
+            if kind == 'Inside':
+                range_list = node.get('rangeList', [])
+                for r in range_list:
+                    r_kind = r.get('kind', '')
+                    if r_kind == 'ValueRange':
+                        lo = self._extract_int_literal(r.get('left', {}))
+                        hi = self._extract_int_literal(r.get('right', {}))
+                        if lo is not None and hi is not None:
+                            ranges.append((min(lo, hi), max(lo, hi)))
+                    else:
+                        val = self._extract_int_literal(r)
+                        if val is not None:
+                            ranges.append((val, val))
+            
+            # 递归遍历子节点
+            for v in node.values():
+                if isinstance(v, (dict, list)):
+                    ranges.extend(self._extract_inside_ranges(v))
+        
+        elif isinstance(node, list):
+            for item in node:
+                ranges.extend(self._extract_inside_ranges(item))
+        
+        return ranges
+
     def _constraint_to_string(self, node: Any) -> str:
         """将约束表达式子树转换为可读字符串"""
         if not node:

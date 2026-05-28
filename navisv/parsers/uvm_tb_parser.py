@@ -11,7 +11,6 @@ uvm_tb_parser.py - 从 slang AST 提取 UVM testbench 静态结构
 """
 
 import json
-import re
 from typing import Dict, List, Any, Optional, Set, Tuple
 from dataclasses import dataclass, field
 
@@ -180,12 +179,13 @@ class UVMTestbenchParser:
         base_addr = ''
         base_str = node.get('baseClass', '')
         if base_str:
-            match = re.match(r'(\d+)\s+(.+)', str(base_str))
-            if match:
-                base_addr = match.group(1)
-                base_name = match.group(2).strip()
+            parts = str(base_str).strip().split(' ', 1)
+            if len(parts) == 2:
+                base_addr = parts[0]
+                base_name = parts[1].strip()
                 # 处理泛型: uvm_sequence#(my_transaction) -> uvm_sequence
-                base_name_clean = re.sub(r'#\(.*\)', '', base_name)
+                hash_idx = base_name.find('#(')
+                base_name_clean = base_name[:hash_idx] if hash_idx >= 0 else base_name
                 base_class = self._addr_to_class.get(base_addr, base_name_clean)
         
         # 判断组件类型
@@ -194,9 +194,13 @@ class UVMTestbenchParser:
         # 提取 sequence_item 类型 (如果是 uvm_sequence#(T))
         seq_item_type = ''
         if 'uvm_sequence' in base_class and '#' in str(base_str):
-            match = re.search(r'#\(\d+\s+(\w+)', str(base_str))
-            if match:
-                seq_item_type = match.group(1)
+            # 从 'addr ClassName#(Type)' 中提取 Type
+            hash_idx = str(base_str).find('#(')
+            if hash_idx >= 0:
+                after_hash = str(base_str)[hash_idx+2:]
+                type_parts = after_hash.strip().split(' ', 1)
+                if len(type_parts) >= 1:
+                    seq_item_type = type_parts[0].rstrip(')')
         
         # 创建组件/序列
         if uvm_type in ('uvm_env', 'uvm_test', 'uvm_driver', 'uvm_monitor',
@@ -506,11 +510,12 @@ class UVMTestbenchParser:
         """解析类型地址为类 full_path"""
         if not type_str:
             return ''
-        match = re.match(r'(\d+)\s+(.+)', str(type_str))
-        if match:
-            addr = match.group(1)
-            name = match.group(2).strip()
-            name = re.sub(r'#\(.*\)', '', name)
+        parts = str(type_str).strip().split(' ', 1)
+        if len(parts) == 2:
+            addr = parts[0]
+            name = parts[1].strip()
+            hash_idx = name.find('#(')
+            name = name[:hash_idx] if hash_idx >= 0 else name
             return self._addr_to_class.get(addr, name)
         return type_str
     
@@ -623,13 +628,3 @@ class UVMTestbenchParser:
                 return sym.split(' ')[1]
             return sym
         return ''
-        if not type_str:
-            return ''
-        match = re.match(r'(\d+)\s+(.+)', str(type_str))
-        if match:
-            addr = match.group(1)
-            name = match.group(2).strip()
-            # 去掉泛型参数
-            name = re.sub(r'#\(.*\)', '', name)
-            return self._addr_to_class.get(addr, name)
-        return type_str

@@ -185,13 +185,10 @@ def main():
                 constraint_conditions = []
                 for c in related_constraints:
                     body = c.get('constraint_body', '')
-                    # 解析 inside {lo:hi}
-                    if 'inside' in body:
-                        import re
-                        m = re.search(r'\{\s*(\d+)\s*:\s*(\d+)\s*\}', body)
-                        if m:
-                            lo, hi = int(m.group(1)), int(m.group(2))
-                            constraint_ranges.append((lo, hi))
+                    # 使用结构化字段获取 inside 范围
+                    inside_ranges = c.get('inside_ranges', [])
+                    if inside_ranges:
+                        constraint_ranges.extend(inside_ranges)
                     # 解析条件约束
                     if c.get('is_conditional'):
                         constraint_conditions.append(body)

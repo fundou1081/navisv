@@ -252,6 +252,7 @@ class ConstraintGraph:
                         'has_soft': info.has_soft,
                         'is_conditional': info.is_conditional,
                         'constraint_body': info.constraint_body,
+                        'inside_ranges': info.inside_ranges,
                     })
         
         return result
@@ -454,6 +455,7 @@ class ConstraintGraph:
             'constraint_path': cinfo.full_path,
             'class_name': cinfo.class_name,
             'constraint_body': cinfo.constraint_body,
+            'inside_ranges': cinfo.inside_ranges,
             'bit_range': ref.bit_range,
             'is_conditional': ref.is_conditional,
             'condition': ref.condition,

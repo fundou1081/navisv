@@ -11,7 +11,6 @@ sva_parser.py - 从 slang AST 提取 SVA (SystemVerilog Assertions)
 """
 
 import json
-import re
 from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass, field
 

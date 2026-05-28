@@ -117,13 +117,12 @@ class CallGraphParser:
         base_class = None
         base_str = node.get('baseClass', '')
         if base_str:
-            import re
-            match = re.match(r'(\d+)\s+(\w+)', str(base_str))
-            if match:
-                base_addr = match.group(1)
+            parts = str(base_str).strip().split(' ', 1)
+            if len(parts) == 2:
+                base_addr = parts[0]
                 base_class = self._addr_to_class.get(base_addr)
                 if not base_class:
-                    base_name = match.group(2)
+                    base_name = parts[1].strip()
                     base_class = f"{self._current_pkg}.{base_name}" if self._current_pkg else base_name
         
         self._class_info[full_path] = {'base_class': base_class}

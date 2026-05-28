@@ -213,10 +213,14 @@ class CovergroupAnalyzer:
         
         ranges = []
         for c in cons:
-            body = c.get('constraint_body', '')
-            parsed = self._parse_inside_range(body)
-            if parsed:
-                ranges.extend(parsed)
+            # 优先使用结构化字段
+            if hasattr(c, 'inside_ranges') and c.inside_ranges:
+                ranges.extend(c.inside_ranges)
+            else:
+                body = c.get('constraint_body', '') if isinstance(c, dict) else getattr(c, 'constraint_body', '')
+                parsed = self._parse_inside_range(body)
+                if parsed:
+                    ranges.extend(parsed)
         
         return ranges
     
