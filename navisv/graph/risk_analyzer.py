@@ -1,7 +1,7 @@
 """
 RiskAnalyzer - 基于图拓扑的信号风险/复杂度分析
 
-利用有向图的拓扑指标，评估每个信号的风险等级：
+利用有向图的拓扑指标,评估每个信号的风险等级:
 - 入度/出度 (收敛/发散)
 - Fan-in/Fan-out 锥大小
 - Betweenness centrality (关键路径)
@@ -31,10 +31,19 @@ class NodeRiskMetrics:
     closeness: float = 0.0   # 接近中心性
     pagerank: float = 0.0    # PageRank
 
-    # 风险评分
-    complexity_score: float = 0.0   # 复杂度得分
+    # 功能逻辑复杂度
+    func_complexity: float = 0.0    # 功能复杂度得分 (0-100)
+    func_factors: List[str] = field(default_factory=list)
+
+    # 时序复杂度
+    timing_complexity: float = 0.0  # 时序复杂度得分 (0-100)
+    timing_factors: List[str] = field(default_factory=list)
+    reg_chain_depth: int = 0        # 寄存器链深度
+    clock_domain_count: int = 0     # 时钟域数量
+
+    # 综合风险
     risk_level: str = 'low'         # low/medium/high/critical
-    risk_factors: List[str] = field(default_factory=list)
+    total_score: float = 0.0        # 综合得分 (func + timing)
 
 
 @dataclass
@@ -79,7 +88,7 @@ class RiskAnalyzer:
         # 1. 计算全局图指标
         report.graph_metrics = self._compute_graph_metrics(nodes)
 
-        # 2. 预计算 betweenness centrality (较慢，只算一次)
+        # 2. 预计算 betweenness centrality (较慢,只算一次)
         subgraph = self.G.subgraph(nodes) if self.module_prefix else self.G
         try:
             bc = nx.betweenness_centrality(subgraph)
@@ -111,7 +120,7 @@ class RiskAnalyzer:
                 report.low_risk_nodes += 1
 
         # 按复杂度排序
-        report.nodes.sort(key=lambda x: x.complexity_score, reverse=True)
+        report.nodes.sort(key=lambda x: x.total_score, reverse=True)
 
         return report
 
@@ -138,18 +147,31 @@ class RiskAnalyzer:
         fanout = len(nx.descendants(self.G, node))
 
         # 计算风险评分
-        score, factors = self._calculate_risk_score(
+        func_score, timing_score, func_factors, timing_factors = self._calculate_risk_score(
             node, kind, timing, bit_width, clock_domain,
             in_deg, out_deg, fanin, fanout,
             bc.get(node, 0), cc.get(node, 0), pr.get(node, 0)
         )
-
+        
+        # 寄存器链深度
+        reg_depth = self._estimate_reg_depth(node)
+        
+        # 时钟域数量
+        clock_domains = set()
+        for src, _, data in self.G.in_edges(node, data=True):
+            ek = data.get('edge_kind', '')
+            if ek in ('PosEdge', 'NegEdge'):
+                clock_domains.add(src)
+        
+        # 综合得分 = max(功能, 时序) + 0.3 * min(功能, 时序)
+        total = max(func_score, timing_score) + 0.3 * min(func_score, timing_score)
+        
         # 确定风险等级
-        if score >= 80:
+        if total >= 80:
             level = 'critical'
-        elif score >= 60:
+        elif total >= 60:
             level = 'high'
-        elif score >= 40:
+        elif total >= 40:
             level = 'medium'
         else:
             level = 'low'
@@ -167,102 +189,182 @@ class RiskAnalyzer:
             betweenness=bc.get(node, 0),
             closeness=cc.get(node, 0),
             pagerank=pr.get(node, 0),
-            complexity_score=score,
+            func_complexity=func_score,
+            func_factors=func_factors,
+            timing_complexity=timing_score,
+            timing_factors=timing_factors,
+            reg_chain_depth=reg_depth,
+            clock_domain_count=len(clock_domains),
             risk_level=level,
-            risk_factors=factors,
+            total_score=round(total, 1),
         )
 
     def _calculate_risk_score(self, node, kind, timing, bit_width, clock_domain,
-                               in_deg, out_deg, fanin, fanout, bc, cc, pr) -> Tuple[float, List[str]]:
-        """计算风险评分 (0-100)"""
-        score = 0.0
-        factors = []
+                               in_deg, out_deg, fanin, fanout, bc, cc, pr) -> Tuple[float, float, List[str], List[str]]:
+        """计算风险评分 (0-100)
 
-        # 1. 度数风险 (0-25分)
-        # 高入度 = 多源竞争
+        Returns:
+            (func_score, timing_score, func_factors, timing_factors)
+        """
+        # ============================================
+        # 功能逻辑复杂度 (0-100)
+        # ============================================
+        func_score = 0.0
+        func_factors = []
+
+        # 1. 度数风险 (0-30分)
+        # 高入度 = 多源竞争 = 逻辑复杂
         if in_deg >= 10:
-            score += 15
-            factors.append(f'高入度({in_deg})')
+            func_score += 15
+            func_factors.append(f'高入度({in_deg})')
         elif in_deg >= 5:
-            score += 10
-            factors.append(f'中入度({in_deg})')
+            func_score += 10
+            func_factors.append(f'中入度({in_deg})')
         elif in_deg >= 3:
-            score += 5
+            func_score += 5
 
-        # 高出度 = 影响面大
+        # 高出度 = 影响面大 = 功能重要
         if out_deg >= 10:
-            score += 10
-            factors.append(f'高出度({out_deg})')
+            func_score += 10
+            func_factors.append(f'高出度({out_deg})')
         elif out_deg >= 5:
-            score += 5
-            factors.append(f'中出度({out_deg})')
+            func_score += 5
+            func_factors.append(f'中出度({out_deg})')
 
-        # 2. Fan-in/Fan-out 风险 (0-20分)
+        # 2. Fan-in/Fan-out 风险 (0-25分)
         if fanin >= 50:
-            score += 10
-            factors.append(f'大Fan-in锥({fanin})')
+            func_score += 12
+            func_factors.append(f'大Fan-in锥({fanin})')
         elif fanin >= 20:
-            score += 5
+            func_score += 6
 
         if fanout >= 50:
-            score += 10
-            factors.append(f'大Fan-out锥({fanout})')
+            func_score += 13
+            func_factors.append(f'大Fan-out锥({fanout})')
         elif fanout >= 20:
-            score += 5
+            func_score += 6
 
         # 3. 关键路径风险 (0-15分)
         if bc >= 0.1:
-            score += 15
-            factors.append(f'关键路径(BC={bc:.3f})')
+            func_score += 15
+            func_factors.append(f'关键路径(BC={bc:.3f})')
         elif bc >= 0.05:
-            score += 10
-            factors.append(f'重要路径(BC={bc:.3f})')
+            func_score += 10
+            func_factors.append(f'重要路径(BC={bc:.3f})')
         elif bc >= 0.02:
-            score += 5
+            func_score += 5
 
-        # 4. 时序风险 (0-15分)
-        if timing == 'sequential':
-            score += 5
-            if clock_domain:
-                # 检查是否跨时钟域
-                other_clocks = set()
-                for src, _, data in self.G.in_edges(node, data=True):
-                    ek = data.get('edge_kind', '')
-                    if ek in ('PosEdge', 'NegEdge') and src != clock_domain:
-                        other_clocks.add(src)
-                if other_clocks:
-                    score += 10
-                    factors.append(f'跨时钟域({len(other_clocks)+1}个)')
-
-        # 5. 位宽风险 (0-10分)
+        # 4. 位宽风险 (0-15分)
         if bit_width >= 32:
-            score += 10
-            factors.append(f'宽位宽({bit_width}-bit)')
+            func_score += 15
+            func_factors.append(f'宽位宽({bit_width}-bit)')
         elif bit_width >= 16:
-            score += 7
-            factors.append(f'中位宽({bit_width}-bit)')
+            func_score += 10
+            func_factors.append(f'中位宽({bit_width}-bit)')
         elif bit_width >= 8:
-            score += 3
+            func_score += 5
 
-        # 6. 条件复杂度 (0-10分)
+        # 5. 条件复杂度 (0-15分)
         cond_count = sum(1 for _, _, d in self.G.in_edges(node, data=True) if d.get('condition'))
-        if cond_count >= 5:
-            score += 10
-            factors.append(f'多条件({cond_count}个)')
+        if cond_count >= 8:
+            func_score += 15
+            func_factors.append(f'高条件({cond_count}个)')
+        elif cond_count >= 5:
+            func_score += 10
+            func_factors.append(f'多条件({cond_count}个)')
         elif cond_count >= 3:
-            score += 5
-            factors.append(f'条件({cond_count}个)')
+            func_score += 5
+            func_factors.append(f'条件({cond_count}个)')
 
-        # 7. 类型风险 (0-5分)
-        if kind == 'State':
-            score += 3  # 寄存器比线网风险高
-        elif kind == 'Port':
-            score += 2  # 端口是外部接口
+        func_score = min(100, max(0, func_score))
 
-        # 限制在 0-100
-        score = min(100, max(0, score))
+        # ============================================
+        # 时序复杂度 (0-100)
+        # ============================================
+        timing_score = 0.0
+        timing_factors = []
 
-        return round(score, 1), factors
+        # 1. 是否寄存器 (0-20分)
+        if timing == 'sequential':
+            timing_score += 20
+            timing_factors.append('寄存器')
+
+        # 2. 时钟域 (0-30分)
+        # 统计连接到该信号的时钟域数量
+        clock_domains = set()
+        for src, _, data in self.G.in_edges(node, data=True):
+            ek = data.get('edge_kind', '')
+            if ek in ('PosEdge', 'NegEdge'):
+                clock_domains.add(src)
+
+        clock_count = len(clock_domains)
+        if clock_count >= 3:
+            timing_score += 30
+            timing_factors.append(f'跨{clock_count}时钟域')
+        elif clock_count >= 2:
+            timing_score += 20
+            timing_factors.append(f'跨{clock_count}时钟域')
+        elif clock_count == 1:
+            timing_score += 10
+
+        # 3. 寄存器链深度 (0-25分)
+        # 从输入端口到该信号的最长寄存器链
+        reg_depth = self._estimate_reg_depth(node)
+        if reg_depth >= 5:
+            timing_score += 25
+            timing_factors.append(f'深寄存器链({reg_depth}级)')
+        elif reg_depth >= 3:
+            timing_score += 15
+            timing_factors.append(f'寄存器链({reg_depth}级)')
+        elif reg_depth >= 2:
+            timing_score += 8
+
+        # 4. 时序 fan-in 复杂度 (0-15分)
+        # 有多少个寄存器驱动这个信号
+        seq_fanin = sum(1 for src, dst in self.G.in_edges(node)
+                       if self.dg.node_attr(src).get('timing') == 'sequential')
+        if seq_fanin >= 5:
+            timing_score += 15
+            timing_factors.append(f'多寄存器驱动({seq_fanin})')
+        elif seq_fanin >= 3:
+            timing_score += 10
+            timing_factors.append(f'寄存器驱动({seq_fanin})')
+        elif seq_fanin >= 1:
+            timing_score += 5
+
+        # 5. 时序 fan-out 复杂度 (0-10分)
+        # 这个寄存器驱动多少个其他寄存器
+        seq_fanout = sum(1 for src, dst in self.G.out_edges(node)
+                        if self.dg.node_attr(dst).get('timing') == 'sequential')
+        if seq_fanout >= 5:
+            timing_score += 10
+            timing_factors.append(f'驱动多寄存器({seq_fanout})')
+        elif seq_fanout >= 2:
+            timing_score += 5
+
+        timing_score = min(100, max(0, timing_score))
+
+        return round(func_score, 1), round(timing_score, 1), func_factors, timing_factors
+
+    def _estimate_reg_depth(self, node: str) -> int:
+        """估算信号的寄存器链深度
+
+        从输入端口到该信号路径上的寄存器级数
+        """
+        max_depth = 0
+        input_ports = [n for n in self.G.nodes
+                       if self.dg.node_attr(n).get('kind') == 'Port'
+                       and self.dg.node_attr(n).get('direction') == 'In']
+
+        for port in input_ports[:10]:  # 限制数量避免太慢
+            try:
+                path = nx.shortest_path(self.G, port, node)
+                reg_count = sum(1 for p in path if self.dg.node_attr(p).get('timing') == 'sequential')
+                max_depth = max(max_depth, reg_count)
+            except (nx.NetworkXNoPath, nx.NodeNotFound):
+                pass
+
+        return max_depth
 
     def _compute_graph_metrics(self, nodes: List[str]) -> Dict[str, Any]:
         """计算全局图指标"""
@@ -319,9 +421,14 @@ def export_risk_json(report: RiskReport) -> Dict:
                 'betweenness': round(n.betweenness, 4),
                 'closeness': round(n.closeness, 4),
                 'pagerank': round(n.pagerank, 4),
-                'complexity_score': n.complexity_score,
+                'func_complexity': n.func_complexity,
+                'func_factors': n.func_factors,
+                'timing_complexity': n.timing_complexity,
+                'timing_factors': n.timing_factors,
+                'reg_chain_depth': n.reg_chain_depth,
+                'clock_domain_count': n.clock_domain_count,
+                'total_score': n.total_score,
                 'risk_level': n.risk_level,
-                'risk_factors': n.risk_factors,
             }
             for n in report.nodes
         ],
@@ -349,10 +456,11 @@ def export_risk_dot(report: RiskReport) -> str:
         else:
             color = 'lightgreen'
 
-        # 标签包含关键指标
-        label = f"{short}\\n[{n.risk_level}] score={n.complexity_score}"
-        if n.risk_factors:
-            label += f"\\n{', '.join(n.risk_factors[:2])}"
+        # 标签包含功能+时序分数
+        label = f"{short}\nF={n.func_complexity:.0f} T={n.timing_complexity:.0f}"
+        if n.func_factors or n.timing_factors:
+            factors = (n.func_factors + n.timing_factors)[:2]
+            label += f"\n{', '.join(factors)}"
 
         shape = 'parallelogram' if n.kind == 'Port' else 'box'
         lines.append(f'  "{short}" [fillcolor={color}, shape={shape}, label="{label}"];')

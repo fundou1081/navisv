@@ -1726,9 +1726,9 @@ def run_risk(args):
         else:
             # text
             gm = json_data['graph_metrics']
-            print(f"\n{'='*60}")
+            print(f"\n{'='*70}")
             print(f"信号风险/复杂度分析: {report.module}")
-            print(f"{'='*60}")
+            print(f"{'='*70}")
             print(f"  节点: {gm['nodes']}  边: {gm['edges']}")
             print(f"  强连通分量: {gm['scc_count']} (最大: {gm['scc_max_size']})")
             print(f"  是否DAG: {gm['is_dag']}")
@@ -1745,20 +1745,33 @@ def run_risk(args):
             high_risk = [n for n in report.nodes if n.risk_level in ('critical', 'high')]
             if high_risk:
                 print(f"\n🔴 高风险信号 (前 {min(args.limit, len(high_risk))} 个):")
-                print(f"  {'信号':25s} {'等级':8s} {'分数':>6s} {'入度':>5s} {'出度':>5s} {'fan-in':>7s} {'fan-out':>7s} {'位宽':>5s} {'因素'}")
+                print(f"  {'信号':25s} {'综合':>6s} {'功能':>6s} {'时序':>6s} {'等级':8s} {'入度':>5s} {'出度':>5s} {'fan-in':>7s} {'位宽':>5s} {'因素'}")
                 for n in high_risk[:args.limit]:
                     short = n.signal.split('.')[-1]
-                    factors = ', '.join(n.risk_factors[:2])
-                    print(f"  {short:25s} {n.risk_level:8s} {n.complexity_score:>6.1f} {n.in_degree:>5} {n.out_degree:>5} {n.fanin_size:>7} {n.fanout_size:>7} {n.bit_width:>5} {factors}")
+                    factors = ', '.join(n.func_factors[:1] + n.timing_factors[:1])
+                    print(f"  {short:25s} {n.total_score:>6.1f} {n.func_complexity:>6.1f} {n.timing_complexity:>6.1f} {n.risk_level:8s} {n.in_degree:>5} {n.out_degree:>5} {n.fanin_size:>7} {n.bit_width:>5} {factors}")
             
             # 中风险信号
             med_risk = [n for n in report.nodes if n.risk_level == 'medium']
             if med_risk:
                 print(f"\n🟡 中风险信号 (前 {min(10, len(med_risk))} 个):")
+                print(f"  {'信号':25s} {'综合':>6s} {'功能':>6s} {'时序':>6s} {'因素'}")
                 for n in med_risk[:10]:
                     short = n.signal.split('.')[-1]
-                    factors = ', '.join(n.risk_factors[:2])
-                    print(f"  {short:25s} {n.risk_level:8s} {n.complexity_score:>6.1f} {factors}")
+                    factors = ', '.join(n.func_factors[:1] + n.timing_factors[:1])
+                    print(f"  {short:25s} {n.total_score:>6.1f} {n.func_complexity:>6.1f} {n.timing_complexity:>6.1f} {factors}")
+            
+            # 二维分布
+            print(f"\n二维分布:")
+            print(f"  {'':20s} {'时序低(<40)':>12s} {'时序中(40-60)':>12s} {'时序高(≥60)':>12s}")
+            func_low = [n for n in report.nodes if n.func_complexity < 40]
+            func_mid = [n for n in report.nodes if 40 <= n.func_complexity < 60]
+            func_high = [n for n in report.nodes if n.func_complexity >= 60]
+            for label, group in [('功能低(<40)', func_low), ('功能中(40-60)', func_mid), ('功能高(≥60)', func_high)]:
+                t_low = len([n for n in group if n.timing_complexity < 40])
+                t_mid = len([n for n in group if 40 <= n.timing_complexity < 60])
+                t_high = len([n for n in group if n.timing_complexity >= 60])
+                print(f"  {label:20s} {t_low:>12} {t_mid:>12} {t_high:>12}")
         
         return {'success': True}
     finally:
