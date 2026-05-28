@@ -25,6 +25,7 @@ cd slang && cmake -B build && cmake --build build -j$(nproc)
 export NAVISV_SLANG_BIN=$(pwd)/slang  # 可执行文件在项目根目录
 
 # 编译 slang-netlist (网表提取, DesignGraph 需要)
+# 注意: slang-netlist 依赖 slang, 请先编译 slang
 git clone https://github.com/MikePopoloski/slang-netlist.git
 cd slang-netlist && cmake -B build && cmake --build build -j$(nproc)
 export NAVISV_NETLIST_BIN=$(pwd)/build/tools/driver/slang-netlist
