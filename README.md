@@ -382,6 +382,93 @@ with tempfile.TemporaryDirectory() as od:
 
 > 完整示例见 `examples/opentitan_example.py`
 
+### 示例 11: 端到端 RTL → Constraint → Coverage 分析
+
+从 RTL 信号出发，追踪到约束和覆盖组，检查约束空间是否被完整覆盖：
+
+```python
+from navisv import DesignDriver
+import tempfile
+
+dd = DesignDriver(['examples/e2e_rtl_to_coverage.sv'])
+dd.build()
+
+dg = dd.design_graph
+cg = dd.constraint_graph
+ca = dd._covergroup_analyzer
+
+# 1. 信号分析
+loads = dg.get_loads('e2e_coverage_demo.data_in')  # 6 个负载
+r = dg.trace_path('e2e_coverage_demo.data_in', 'e2e_coverage_demo.data_out')
+print(f'路径: {r["success"]} hops={len(r["path"])}')  # True, 5 跳
+
+# 2. 约束分析
+for cls in cg.get_classes():
+    for c in cg.get_constraints_in_class(cls['name']):
+        print(f'{c["name"]}: {c["constraint_body"]}')
+# c_data_range: data inside { 0:200 }
+# c_mode3_limit: if (op_mode == 2'b11) { data < 100 }
+# c_no_zero: data != 8'd0
+
+# 3. 覆盖分析
+for cp in ca.get_coverpoints_by_cg('cg_data'):
+    bins = ca.get_bins('cg_data', cp['name'])
+    for b in bins:
+        print(f'{b["name"]}: {b["values"]}')
+# low: [1:50], mid: [51:100], high: [101:200], extreme: [201:255]
+
+# 4. 交叉分析: 约束 [0:200] vs bins [0:200] → ✅ 完全覆盖
+```
+
+> 完整示例见 `examples/e2e_rtl_to_coverage.py` 和 `docs/e2e_workflow.md`
+
+### 示例 12: Debug 实战 — 信号异常排查
+
+仿真发现信号值异常，用 navisv 快速定位根因：
+
+```bash
+# 调试信号
+python3 examples/debug_signal.py debug_demo.pipeline_data
+```
+
+```python
+from navisv import DesignDriver
+import tempfile
+
+dd = DesignDriver(['examples/debug_scenario.sv'])
+dd.build()
+dg = dd.design_graph
+
+signal = 'debug_demo.pipeline_data'
+
+# 向后追踪: 谁影响它?
+drivers = dg.get_drivers(signal)
+# → [clk, en, mux_out, rst_n]
+
+fanin = dg.get_fanin_cone(signal, depth=5)
+# → {clk, data_a, data_b, en, rst_n, sel, mux_out}
+
+# 向前追踪: 它影响谁?
+loads = dg.get_loads(signal)
+# → [flag, processed]
+
+fanout = dg.get_fanout_cone(signal, depth=5)
+# → {flag, processed, result}
+
+# 路径追踪
+r = dg.trace_path('debug_demo.data_a', signal)
+# data_a → mux_out → pipeline_data (3 跳)
+
+r = dg.trace_path(signal, 'debug_demo.result')
+# pipeline_data → processed → result (4 跳)
+
+# 条件分析
+cov = dg.get_condition_coverage(signal)
+# 条件: rst_n (复位), en (使能)
+```
+
+> 完整示例见 `examples/debug_signal.py` 和 `docs/debug_workflow.md`
+
 ---
 
 ## API 参考
