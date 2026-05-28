@@ -42,6 +42,7 @@ class VerifyReport:
     signals: List[SignalVerifyStatus] = field(default_factory=list)
     sva_properties: List[Dict] = field(default_factory=list)
     covergroups: List[Dict] = field(default_factory=list)
+    temporal_relations: List[Dict] = field(default_factory=list)
     uncovered_inputs: List[str] = field(default_factory=list)
     uncovered_outputs: List[str] = field(default_factory=list)
     uncovered_registers: List[str] = field(default_factory=list)
@@ -91,7 +92,24 @@ class VerifyMapper:
         report.covergroups = cg_data['covergroups']
         cg_signals = cg_data['signal_map']
 
-        # 4. 分析每个信号
+        # 4. 收集时序关系
+        if self.ta:
+            for src in all_signals:
+                for _, dst, data in self.dg.graph.out_edges(src, data=True):
+                    if dst not in all_signals:
+                        continue
+                    timing = data.get('timing', '')
+                    if not timing:
+                        continue
+                    report.temporal_relations.append({
+                        'source': src,
+                        'target': dst,
+                        'relation': 'sequential' if 'sequential' in timing else ('combinational' if timing == 'combinational' else timing),
+                        'latency': 1 if 'sequential' in timing else 0,
+                        'condition': data.get('condition', ''),
+                    })
+
+        # 5. 分析每个信号
         for signal in all_signals:
             status = self._analyze_signal(signal, sva_signals, cg_signals)
             report.signals.append(status)
@@ -223,104 +241,117 @@ class VerifyMapper:
 
 
 def export_verify_dot(report: VerifyReport) -> str:
-    """生成验证覆盖 DOT 图"""
+    """生成验证覆盖 DOT 图 (信号关系 + 覆盖状态)"""
     lines = []
     lines.append(f'digraph verify_{report.module} {{')
     lines.append('  rankdir=LR;')
     lines.append('  node [shape=box, style=filled, fontname="Helvetica"];')
-    lines.append('  edge [fontname="Helvetica", fontsize=10];')
+    lines.append('  edge [fontname="Helvetica", fontsize=9];')
     lines.append('')
-
-    # 图例
-    lines.append('  subgraph cluster_legend {')
-    lines.append('    label="图例"; style=dashed; color=gray;')
-    lines.append('    l1 [label="✅ SVA+Coverage", fillcolor=lightgreen];')
-    lines.append('    l2 [label="⚠️ 仅SVA", fillcolor=lightyellow];')
-    lines.append('    l3 [label="⚠️ 仅Coverage", fillcolor=lightblue];')
-    lines.append('    l4 [label="❌ 无验证", fillcolor=lightcoral];')
-    lines.append('  }')
-    lines.append('')
-
-    # 按类型分组
-    ports_in = []
-    ports_out = []
-    registers = []
-    others = []
-
+    
+    # 颜色规则:
+    # 绿色 = SVA + Coverage 双覆盖
+    # 黄色 = 仅 SVA
+    # 蓝色 = 仅 Coverage
+    # 红色 = 未覆盖
+    # 灰色 = 内部信号 (不参与覆盖分析)
+    
+    # 节点
     for s in report.signals:
         short = s.signal.split('.')[-1]
-        if s.kind == 'Port':
-            # 从 signal 属性获取 direction
-            if any(s.signal.endswith(f'.{p}') for p in ['i', 'clk', 'rst', 'en']):
-                ports_in.append((short, s))
-            else:
-                ports_out.append((short, s))
-        elif s.kind == 'State':
-            registers.append((short, s))
-        else:
-            others.append((short, s))
-
-    # 节点
-    def add_node(name, status):
-        if status.verify_level == 'full':
+        if s.verify_level == 'full':
             color = 'lightgreen'
-        elif status.has_sva:
+            label = f"{short}\n[SVA+CG]"
+        elif s.has_sva:
             color = 'lightyellow'
-        elif status.has_coverage:
+            label = f"{short}\n[SVA]"
+        elif s.has_coverage:
             color = 'lightblue'
-        else:
+            label = f"{short}\n[CG]"
+        elif s.kind == 'State':
             color = 'lightcoral'
-        lines.append(f'  "{name}" [fillcolor={color}];')
-
-    if ports_in:
-        lines.append('  subgraph cluster_input { label="输入端口"; style=dashed; color=blue;')
-        for name, s in ports_in:
-            add_node(name, s)
-        lines.append('  }')
-
-    if ports_out:
-        lines.append('  subgraph cluster_output { label="输出端口"; style=dashed; color=blue;')
-        for name, s in ports_out:
-            add_node(name, s)
-        lines.append('  }')
-
-    if registers:
-        lines.append('  subgraph cluster_reg { label="寄存器"; style=dashed; color=red;')
-        for name, s in registers:
-            add_node(name, s)
-        lines.append('  }')
-
-    if others:
-        lines.append('  subgraph cluster_net { label="内部信号"; style=dashed; color=gray;')
-        for name, s in others:
-            add_node(name, s)
-        lines.append('  }')
-
+            label = f"{short}\n[寄存器]"
+        elif s.kind == 'Port':
+            color = 'lightcoral'
+            label = short
+        else:
+            color = '#E8E8E8'
+            label = short
+        
+        # 形状
+        if s.kind == 'Port':
+            shape = 'parallelogram'
+        elif s.kind == 'State':
+            shape = 'box'
+        else:
+            shape = 'ellipse'
+        
+        lines.append(f'  "{short}" [fillcolor={color}, shape={shape}, label="{label}"];')
+    
+    lines.append('')
+    
+    # 边 (从 temporal relations)
+    if hasattr(report, 'temporal_relations') and report.temporal_relations:
+        seen = set()
+        for rel in report.temporal_relations:
+            src = rel.get('source', '').split('.')[-1]
+            dst = rel.get('target', '').split('.')[-1]
+            if src == dst:
+                continue
+            edge_key = (src, dst)
+            if edge_key in seen:
+                continue
+            seen.add(edge_key)
+            
+            rel_type = rel.get('relation', '')
+            if 'sequential' in rel_type:
+                color = 'red'
+                style = 'bold'
+                label = f"seq#{rel.get('latency', 1)}"
+            elif rel_type == 'combinational':
+                color = 'blue'
+                style = 'dashed'
+                label = 'comb'
+            elif rel_type == 'conditional':
+                color = 'orange'
+                style = 'bold'
+                cond = rel.get('condition', '').split('.')[-1]
+                label = f"cond [{cond}]" if cond else 'cond'
+            else:
+                color = 'gray'
+                style = 'solid'
+                label = rel_type
+            
+            lines.append(f'  "{src}" -> "{dst}" [color={color}, style={style}, label="{label}"];')
+    
+    lines.append('')
+    lines.append('  // 图例')
+    lines.append('  subgraph cluster_legend {')
+    lines.append('    label="图例"; style=dashed; color=gray;')
+    lines.append('    l1 [label="✅ SVA+CG" fillcolor=lightgreen shape=box];')
+    lines.append('    l2 [label="⚠️ SVA" fillcolor=lightyellow shape=box];')
+    lines.append('    l3 [label="⚠️ CG" fillcolor=lightblue shape=box];')
+    lines.append('    l4 [label="❌ 未覆盖" fillcolor=lightcoral shape=box];')
+    lines.append('    l1 -> l2 -> l3 -> l4 [style=invis];')
+    lines.append('  }')
     lines.append('}')
-
+    
     return '\n'.join(lines)
 
 
 def export_verify_mermaid(report: VerifyReport) -> str:
-    """生成验证覆盖 Mermaid 图"""
+    """生成验证覆盖 Mermaid 图 (信号关系 + 覆盖状态)"""
     lines = []
     lines.append('graph LR')
     lines.append('')
-
-    # 图例
-    lines.append('  %% 图例')
-    lines.append('  ✅sva_cov[✅ SVA+Coverage]')
-    lines.append('  ⚠️sva[⚠️ 仅SVA]')
-    lines.append('  ⚠️cov[⚠️ 仅Coverage]')
-    lines.append('  ❌none[❌ 无验证]')
-    lines.append('')
-
-    # 按验证等级分组
+    
+    # 节点按覆盖等级分组
     full = []
     sva_only = []
     cov_only = []
-    none_list = []
-
+    uncovered = []
+    internal = []
+    
     for s in report.signals:
         short = s.signal.split('.')[-1]
         if s.verify_level == 'full':
@@ -329,35 +360,80 @@ def export_verify_mermaid(report: VerifyReport) -> str:
             sva_only.append(short)
         elif s.has_coverage:
             cov_only.append(short)
+        elif s.kind in ('Port', 'State'):
+            uncovered.append(short)
         else:
-            none_list.append(short)
-
+            internal.append(short)
+    
+    # 节点定义
     if full:
-        lines.append('  %% ✅ 完全覆盖')
+        lines.append('  %% ✅ SVA + Coverage 双覆盖')
         for n in full:
             lines.append(f'  {n}[{n}]')
         lines.append('')
-
+    
     if sva_only:
-        lines.append('  %% ⚠️ 仅SVA覆盖')
+        lines.append('  %% ⚠️ 仅 SVA 覆盖')
         for n in sva_only:
             lines.append(f'  {n}[{n}]')
         lines.append('')
-
+    
     if cov_only:
-        lines.append('  %% ⚠️ 仅Coverage覆盖')
+        lines.append('  %% ⚠️ 仅 Coverage 覆盖')
         for n in cov_only:
             lines.append(f'  {n}[{n}]')
         lines.append('')
-
-    if none_list:
+    
+    if uncovered:
         lines.append('  %% ❌ 未覆盖')
-        for n in none_list[:30]:  # 限制数量
+        for n in uncovered[:40]:
             lines.append(f'  {n}[{n}]')
-        if len(none_list) > 30:
-            lines.append(f'  %% ... 还有 {len(none_list)-30} 个')
+        if len(uncovered) > 40:
+            lines.append(f'  %% ... 还有 {len(uncovered)-40} 个')
         lines.append('')
-
+    
+    # 边 (从 temporal relations)
+    if hasattr(report, 'temporal_relations') and report.temporal_relations:
+        seen = set()
+        comb_lines = []
+        seq_lines = []
+        cond_lines = []
+        
+        for rel in report.temporal_relations:
+            src = rel.get('source', '').split('.')[-1]
+            dst = rel.get('target', '').split('.')[-1]
+            if src == dst:
+                continue
+            edge_key = (src, dst)
+            if edge_key in seen:
+                continue
+            seen.add(edge_key)
+            
+            rel_type = rel.get('relation', '')
+            lat = rel.get('latency', 1)
+            cond = rel.get('condition', '').split('.')[-1]
+            
+            if 'sequential' in rel_type:
+                seq_lines.append(f'  {src} ==>|seq#{lat}| {dst}')
+            elif rel_type == 'combinational':
+                comb_lines.append(f'  {src} -.->|comb| {dst}')
+            elif rel_type == 'conditional':
+                label = f'cond [{cond}]' if cond else 'cond'
+                cond_lines.append(f'  {src} ==>|{label}| {dst}')
+        
+        if comb_lines:
+            lines.append('  %% 组合路径')
+            lines.extend(comb_lines)
+            lines.append('')
+        if cond_lines:
+            lines.append('  %% 条件路径')
+            lines.extend(cond_lines)
+            lines.append('')
+        if seq_lines:
+            lines.append('  %% 寄存器路径')
+            lines.extend(seq_lines)
+            lines.append('')
+    
     # 样式
     lines.append('  %% 样式')
     for n in full:
@@ -366,9 +442,9 @@ def export_verify_mermaid(report: VerifyReport) -> str:
         lines.append(f'  style {n} fill:#FFFFE0')
     for n in cov_only:
         lines.append(f'  style {n} fill:#ADD8E6')
-    for n in none_list[:30]:
+    for n in uncovered[:40]:
         lines.append(f'  style {n} fill:#F08080')
-
+    
     return '\n'.join(lines)
 
 
@@ -383,6 +459,7 @@ def export_verify_json(report: VerifyReport) -> Dict:
             'both_covered': report.both_covered,
             'neither_covered': report.neither_covered,
             'verify_rate': round((report.sva_covered + report.coverage_covered - report.both_covered) / max(report.total_signals, 1) * 100, 1),
+            'temporal_relations': len(report.temporal_relations),
         },
         'signals': [
             {
@@ -399,6 +476,7 @@ def export_verify_json(report: VerifyReport) -> Dict:
             }
             for s in report.signals
         ],
+        'temporal_relations': report.temporal_relations,
         'uncovered': {
             'inputs': [s.split('.')[-1] for s in report.uncovered_inputs],
             'outputs': [s.split('.')[-1] for s in report.uncovered_outputs],
