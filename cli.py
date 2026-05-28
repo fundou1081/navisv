@@ -400,6 +400,12 @@ def main():
     p.add_argument('--module', '-m', help='模块前缀 (省略则自动检测)')
     p.add_argument('--limit', '-n', type=int, default=50, help='未覆盖信号显示数量')
 
+    # navisv risk <file>
+    p = sub.add_parser('risk', help='信号风险/复杂度分析')
+    p.add_argument('file', help='设计文件')
+    p.add_argument('--module', '-m', help='模块前缀 (省略则自动检测)')
+    p.add_argument('--limit', '-n', type=int, default=20, help='高风险信号显示数量')
+
     args = parser.parse_args()
 
     try:
@@ -443,6 +449,8 @@ def main():
             run_sva_align(args)
         elif args.command == 'verify-map':
             run_verify_map(args)
+        elif args.command == 'risk':
+            run_risk(args)
     except Exception as e:
         print(f"错误: {e}", file=sys.stderr)
         if args.json:
@@ -1667,6 +1675,90 @@ def run_verify_map(args):
                 print(f"\nCoverGroup ({len(report.covergroups)}):")
                 for cg in report.covergroups:
                     print(f"  {cg['name']:30s}  cp={cg.get('coverpoint_count', 0)}  cx={cg.get('cross_count', 0)}")
+        
+        return {'success': True}
+    finally:
+        shutil.rmtree(output_dir, ignore_errors=True)
+
+
+
+def run_risk(args):
+    """信号风险/复杂度分析"""
+    from navisv.graph.risk_analyzer import RiskAnalyzer, export_risk_json, export_risk_dot, export_risk_mermaid
+    
+    errors = check_tools()
+    if errors:
+        for e in errors:
+            print(f"错误: {e}", file=sys.stderr)
+        return {'success': False}
+    
+    output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
+    try:
+        dd = DesignDriver([args.file], output_dir=output_dir, include_dirs=args.include or [])
+        dd.build()
+        dg = dd.design_graph
+        
+        # 确定模块前缀
+        module_prefix = args.module
+        if not module_prefix:
+            for n in dg.graph.nodes:
+                parts = n.split('.')
+                if len(parts) >= 2:
+                    module_prefix = parts[0]
+                    break
+        
+        analyzer = RiskAnalyzer(dg, module_prefix)
+        report = analyzer.analyze()
+        fmt = _resolve_format(args)
+        
+        json_data = export_risk_json(report)
+        dot_content = export_risk_dot(report)
+        mermaid_content = export_risk_mermaid(report)
+        
+        if fmt == 'all':
+            _write_multi_output(json_data, mermaid_content, dot_content, args, 'risk_analysis')
+        elif fmt == 'json':
+            print(json.dumps(json_data, indent=2, ensure_ascii=False))
+        elif fmt == 'dot':
+            _write_output(dot_content, args)
+        elif fmt == 'mermaid':
+            _write_output(mermaid_content, args)
+        else:
+            # text
+            gm = json_data['graph_metrics']
+            print(f"\n{'='*60}")
+            print(f"信号风险/复杂度分析: {report.module}")
+            print(f"{'='*60}")
+            print(f"  节点: {gm['nodes']}  边: {gm['edges']}")
+            print(f"  强连通分量: {gm['scc_count']} (最大: {gm['scc_max_size']})")
+            print(f"  是否DAG: {gm['is_dag']}")
+            print(f"  平均入度: {gm['avg_in_degree']}  平均出度: {gm['avg_out_degree']}")
+            print(f"  最大入度: {gm['max_in_degree']}  最大出度: {gm['max_out_degree']}")
+            
+            print(f"\n风险分布:")
+            print(f"  🔴 关键: {report.critical_nodes}")
+            print(f"  🟠 高:   {report.high_risk_nodes}")
+            print(f"  🟡 中:   {report.medium_risk_nodes}")
+            print(f"  🟢 低:   {report.low_risk_nodes}")
+            
+            # 高风险信号
+            high_risk = [n for n in report.nodes if n.risk_level in ('critical', 'high')]
+            if high_risk:
+                print(f"\n🔴 高风险信号 (前 {min(args.limit, len(high_risk))} 个):")
+                print(f"  {'信号':25s} {'等级':8s} {'分数':>6s} {'入度':>5s} {'出度':>5s} {'fan-in':>7s} {'fan-out':>7s} {'位宽':>5s} {'因素'}")
+                for n in high_risk[:args.limit]:
+                    short = n.signal.split('.')[-1]
+                    factors = ', '.join(n.risk_factors[:2])
+                    print(f"  {short:25s} {n.risk_level:8s} {n.complexity_score:>6.1f} {n.in_degree:>5} {n.out_degree:>5} {n.fanin_size:>7} {n.fanout_size:>7} {n.bit_width:>5} {factors}")
+            
+            # 中风险信号
+            med_risk = [n for n in report.nodes if n.risk_level == 'medium']
+            if med_risk:
+                print(f"\n🟡 中风险信号 (前 {min(10, len(med_risk))} 个):")
+                for n in med_risk[:10]:
+                    short = n.signal.split('.')[-1]
+                    factors = ', '.join(n.risk_factors[:2])
+                    print(f"  {short:25s} {n.risk_level:8s} {n.complexity_score:>6.1f} {factors}")
         
         return {'success': True}
     finally:
