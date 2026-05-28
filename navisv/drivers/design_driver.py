@@ -60,8 +60,98 @@ class DesignDriver:
         self.output_dir = output_dir or tempfile.mkdtemp(prefix='navisv_')
         self.std = std
         
+        # 自动发现同目录文件
+        self.files = self._auto_discover_files(files)
+        
         # 结果缓存
         self._slang_driver: Optional[SlangDriver] = None
+        self._netlist_driver: Optional[NetlistDriver] = None
+        self._netlist_result: Optional[Dict] = None
+        self._ast_parser: Optional[ASTParser] = None
+        self._netlist_parser: Optional[NetlistParser] = None
+        self._graph_builder: Optional[GraphBuilder] = None
+        self._design_graph: Optional[DesignGraph] = None
+        
+        # ConstraintGraph 缓存
+        self._constraint_parser: Optional[ConstraintParser] = None
+        self._constraint_graph: Optional[ConstraintGraph] = None
+        
+        # CovergroupAnalyzer 缓存
+        self._covergroup_parser: Optional[CovergroupParser] = None
+        self._covergroup_analyzer: Optional[CovergroupAnalyzer] = None
+        
+        # SVA 缓存
+        self._sva_parser: Optional[SVAParser] = None
+        
+        # CallGraph 缓存
+        self._call_graph_parser: Optional[CallGraphParser] = None
+        self._call_graph: Optional[CallGraph] = None
+        
+        # UVM Testbench 缓存
+        self._uvm_tb_parser: Optional[UVMTestbenchParser] = None
+        self._uvm_tb: Optional[UVMTestbench] = None
+        
+        # 诊断信息
+        self._diagnostics: List[Dict[str, Any]] = []
+        self._error_count: int = 0
+        self._warning_count: int = 0
+    
+    def _auto_discover_files(self, files: List[str]) -> List[str]:
+        """自动发现同目录下的 SV 文件
+        
+        当只传入一个文件时，扫描同目录下的所有 .sv/.v 文件。
+        排除测试文件和备份文件。
+        """
+        if len(files) != 1:
+            return files
+        
+        main_file = files[0]
+        if not os.path.isfile(main_file):
+            return files
+        
+        # 测试文件不做自动发现
+        if 'tests/' in main_file or 'test_' in os.path.basename(main_file):
+            return files
+        
+        main_dir = os.path.dirname(os.path.abspath(main_file))
+        if not main_dir:
+            return files
+        
+        discovered = set()
+        discovered.add(os.path.abspath(main_file))
+        
+        # 扫描同目录
+        try:
+            for f in os.listdir(main_dir):
+                if f.endswith(('.sv', '.v', '.svh', '.vh')):
+                    full = os.path.join(main_dir, f)
+                    # 跳过测试/备份文件
+                    if any(skip in f.lower() for skip in ('test_', 'tb_', '_tb.', '_test.', '.bak', '.orig')):
+                        continue
+                    discovered.add(os.path.abspath(full))
+        except OSError:
+            pass
+        
+        # 也扫描 include_dirs
+        for inc_dir in self.include_dirs:
+            if os.path.isdir(inc_dir):
+                try:
+                    for f in os.listdir(inc_dir):
+                        if f.endswith(('.sv', '.v', '.svh', '.vh')):
+                            full = os.path.join(inc_dir, f)
+                            if any(skip in f.lower() for skip in ('test_', 'tb_', '_tb.', '_test.', '.bak', '.orig')):
+                                continue
+                            discovered.add(os.path.abspath(full))
+                except OSError:
+                    pass
+        
+        result = sorted(discovered)
+        if len(result) > 1:
+            import logging
+            logging.getLogger('navisv').info(
+                f'Auto-discovered {len(result)} files in {main_dir}'
+            )
+        return result
         self._netlist_driver: Optional[NetlistDriver] = None
         self._netlist_result: Optional[Dict] = None  # NetlistDriver.run() 结果
         self._ast_parser: Optional[ASTParser] = None
