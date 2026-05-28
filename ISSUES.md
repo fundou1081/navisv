@@ -6,19 +6,20 @@
 - **现象**: `assign {a, b, c} = {x, y, z}` 中 x→a 的路径丢失
 - **根因**: slang-netlist 将拼接表达式视为整体，不拆分内部依赖
 - **影响**: 涉及拼接赋值的信号路径追踪失败
-- **方案**: 从 AST 解析拼接表达式，按位宽拆分后补建边 ✅ (已部分实现)
+- **方案**: 从 AST 解析拼接表达式，按位宽拆分后补建边
+- **状态**: ✅ 已解决 (ConditionAnnotator)
 
 ### 2. slang-netlist 中间节点无出边
 - **现象**: `Conditional(452) → Assignment(454)` 是死端，无出边
 - **根因**: slang-netlist 生成的 netlist 中，条件块内的赋值节点只有入边没有出边
 - **影响**: always_ff 中 if/else 分支的赋值路径断开
-- **方案**: 在 `_add_edges` 中递归穿透中间节点，连接源到最终目标 ✅ (已部分实现)
+- **方案**: 在 `_add_edges` 中递归穿透中间节点，连接源到最终目标
+- **状态**: ✅ 已解决 (ConditionAnnotator + _resolve_intermediate_path)
 
-### 3. 路径追踪 2 个残留失败
-- **uart_controller.s_apb_pwrite_i → reg_wr_en_o**: Conditional→Assignment 死端
-- **uart_controller.uart_rx.uart_rx_i → rx_fifo_data_o**: data_rcvd 未连接
-- **根因**: 上述 P0-1 和 P0-2 的组合效应
-- **状态**: 待深入分析 netlist JSON 结构
+### 3. 路径追踪 2 个残留 "not_found" (已分析确认非 bug)
+- **uart_controller.s_apb_paddr_i → tx_bit_cnt_o**: 设计上无直接路径（paddr 是地址总线）
+- **uart_controller.uart_rx_i → rx_fifo_data_o**: 测试路径缺少模块前缀（应用 uart_rx.rx_fifo_data_o）
+- **状态**: 已关闭，无需修复
 
 ## P1 - 重要
 
