@@ -105,9 +105,23 @@ Benchmark: 94% (75/79, 剩余 4 个是 pipeline 跨域路径)
 - 需要识别 UVM 组件继承关系 (extends uvm_driver / uvm_monitor / uvm_scoreboard 等)
 
 ### 待讨论
-- 具体 spec 和输出格式
-- 覆盖哪些 UVM 组件类型
-- 与 CallGraph 的关系
+- ~~具体 spec 和输出格式~~ ✅
+- ~~覆盖哪些 UVM 组件类型~~ ✅
+- ~~与 CallGraph 的关系~~ ✅
+
+### 已完成
+- 组件发现 (env/driver/monitor/scoreboard/agent/test) ✅
+- 组件层级 (build_phase 中的 new()) ✅
+- Sequence/SequenceItem 继承 ✅
+- Phase 方法识别 ✅
+- Sequence 使用关系 ✅
+- Port Connection (connect_phase 中的 connect()) ✅
+- config_db::set/get 配置流 ✅
+- plusargs ($value$plusargs / $test$plusargs) ✅
+- plusargs 对 config_db 的影响追踪 ✅
+- DOT/Mermaid 导出 ✅
+
+测试: 43 个 (26 结构 + 17 config/plusargs)
 
 ---
 

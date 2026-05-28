@@ -107,6 +107,79 @@ class UVMTestbench:
             for c in self._parser.port_connections
         ]
     
+    def get_config_db_sets(self) -> List[Dict[str, Any]]:
+        """获取 config_db::set 调用"""
+        return [
+            {
+                'context': s.context,
+                'inst_name': s.inst_name,
+                'field': s.field,
+                'value': s.value,
+                'method': s.method,
+            }
+            for s in self._parser.config_db_sets
+        ]
+    
+    def get_config_db_gets(self) -> List[Dict[str, Any]]:
+        """获取 config_db::get 调用"""
+        return [
+            {
+                'context': g.context,
+                'inst_name': g.inst_name,
+                'field': g.field,
+                'method': g.method,
+            }
+            for g in self._parser.config_db_gets
+        ]
+    
+    def get_config_flows(self) -> List[Dict[str, Any]]:
+        """获取 set → get 配置流"""
+        flows = []
+        for s in self._parser.config_db_sets:
+            # 找匹配的 get
+            getter = None
+            for g in self._parser.config_db_gets:
+                if g.field == s.field:
+                    getter = g.context
+                    break
+            flows.append({
+                'field': s.field,
+                'value': s.value,
+                'setter': s.context,
+                'getter': getter,
+                'inst_name': s.inst_name,
+            })
+        return flows
+    
+    def get_plusargs(self) -> List[Dict[str, Any]]:
+        """获取 plusargs"""
+        return [
+            {
+                'name': p.name,
+                'kind': p.kind,
+                'context': p.context,
+                'method': p.method,
+                'variable': p.variable,
+            }
+            for p in self._parser.plusargs
+        ]
+    
+    def get_plusargs_impacts(self) -> List[Dict[str, Any]]:
+        """获取 plusargs 对 config_db 的影响"""
+        impacts = []
+        for p in self._parser.plusargs:
+            if p.kind == 'value' and p.variable:
+                # 查找同方法中的 config_db::set 使用了该变量
+                for s in self._parser.config_db_sets:
+                    if s.method == p.method and s.context == p.context:
+                        impacts.append({
+                            'plusarg': p.name,
+                            'variable': p.variable,
+                            'config_field': s.field,
+                            'context': s.context,
+                        })
+        return impacts
+    
     def to_dot(self, class_filter: str = '') -> str:
         """导出 DOT 格式"""
         lines = ['digraph UVMTestbench {', '  rankdir=TB;', '  node [shape=box];', '']

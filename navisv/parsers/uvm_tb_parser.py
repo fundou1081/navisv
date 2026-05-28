@@ -71,6 +71,32 @@ class UVMSequenceUsage:
 
 
 @dataclass
+class UVMConfigDBSet:
+    """config_db::set 调用"""
+    context: str           # 调用者类名
+    inst_name: str         # 实例路径
+    field: str             # 字段名
+    value: str             # 值 (可能为空)
+    method: str = ''       # 所在方法
+
+@dataclass
+class UVMConfigDBGet:
+    """config_db::get 调用"""
+    context: str
+    inst_name: str
+    field: str
+    method: str = ''
+
+@dataclass
+class UVMPlusarg:
+    """$value$plusargs / $test$plusargs"""
+    name: str              # plusarg 名称 (如 "DEBUG", "BAUD=%d")
+    kind: str              # "value" / "test"
+    context: str           # 所在类名
+    method: str = ''       # 所在方法
+    variable: str = ''     # 关联变量名
+
+@dataclass
 class UVMPortConnection:
     """端口连接"""
     source: str           # 如 axi_agt.mon.ap
@@ -106,6 +132,9 @@ class UVMTestbenchParser:
         self.phases: Dict[str, List[UVMPhase]] = {}    # class_path -> [UVMPhase]
         self.sequence_usages: List[UVMSequenceUsage] = []
         self.port_connections: List[UVMPortConnection] = []
+        self.config_db_sets: List[UVMConfigDBSet] = []
+        self.config_db_gets: List[UVMConfigDBGet] = []
+        self.plusargs: List[UVMPlusarg] = []
         
         # 地址映射
         self._addr_to_class: Dict[str, str] = {}
@@ -255,6 +284,11 @@ class UVMTestbenchParser:
         if name == 'connect_phase':
             body = node.get('body', {})
             self._find_port_connections(body, class_path, cls_name)
+        
+        # 分析所有方法中的 config_db 和 plusargs
+        body = node.get('body', {})
+        self._find_config_db(body, class_path, cls_name, name)
+        self._find_plusargs(body, class_path, cls_name, name)
     
     def _process_class_property(self, node: dict, class_path: str, cls_name: str):
         """处理 ClassProperty 节点"""
@@ -340,6 +374,133 @@ class UVMTestbenchParser:
         elif isinstance(node, list):
             for item in node:
                 self._walk_for_seq(item, class_path, cls_name)
+    
+    def _find_config_db(self, body: dict, class_path: str, cls_name: str, method_name: str):
+        """查找 config_db::set/get 调用"""
+        self._walk_for_config_db(body, class_path, cls_name, method_name)
+    
+    def _walk_for_config_db(self, node: Any, class_path: str, cls_name: str, method_name: str):
+        """遍历查找 config_db 调用"""
+        if isinstance(node, dict):
+            kind = node.get('kind', '')
+            
+            if kind == 'Call':
+                sub = node.get('subroutine', '')
+                args = node.get('arguments', [])
+                # config_db::set/get 有 4 个参数
+                if len(args) == 4:
+                    sub_name = sub.split(' ')[-1] if ' ' in sub else sub
+                    if sub_name in ('set', 'get'):
+                        # 提取参数
+                        inst = self._extract_string_arg(args[1])
+                        field = self._extract_string_arg(args[2])
+                        value = self._extract_value_arg(args[3])
+                        
+                        if sub_name == 'set':
+                            entry = UVMConfigDBSet(
+                                context=cls_name,
+                                inst_name=inst,
+                                field=field,
+                                value=value,
+                                method=method_name,
+                            )
+                            self.config_db_sets.append(entry)
+                        else:
+                            entry = UVMConfigDBGet(
+                                context=cls_name,
+                                inst_name=inst,
+                                field=field,
+                                method=method_name,
+                            )
+                            self.config_db_gets.append(entry)
+            
+            for v in node.values():
+                self._walk_for_config_db(v, class_path, cls_name, method_name)
+        elif isinstance(node, list):
+            for item in node:
+                self._walk_for_config_db(item, class_path, cls_name, method_name)
+    
+    def _find_plusargs(self, body: dict, class_path: str, cls_name: str, method_name: str):
+        """查找 $value$plusargs / $test$plusargs 调用"""
+        self._walk_for_plusargs(body, class_path, cls_name, method_name)
+    
+    def _walk_for_plusargs(self, node: Any, class_path: str, cls_name: str, method_name: str):
+        """遍历查找 plusargs 调用"""
+        if isinstance(node, dict):
+            kind = node.get('kind', '')
+            
+            if kind == 'Call':
+                sub = node.get('subroutine', '')
+                args = node.get('arguments', [])
+                
+                if sub == '$value$plusargs' and args:
+                    fmt = self._extract_string_arg(args[0])
+                    var = self._extract_named_value(args[1]) if len(args) > 1 else ''
+                    entry = UVMPlusarg(
+                        name=fmt,
+                        kind='value',
+                        context=cls_name,
+                        method=method_name,
+                        variable=var,
+                    )
+                    self.plusargs.append(entry)
+                elif sub == '$test$plusargs' and args:
+                    fmt = self._extract_string_arg(args[0])
+                    entry = UVMPlusarg(
+                        name=fmt,
+                        kind='test',
+                        context=cls_name,
+                        method=method_name,
+                    )
+                    self.plusargs.append(entry)
+            
+            for v in node.values():
+                self._walk_for_plusargs(v, class_path, cls_name, method_name)
+        elif isinstance(node, list):
+            for item in node:
+                self._walk_for_plusargs(item, class_path, cls_name, method_name)
+    
+    def _extract_string_arg(self, node: dict) -> str:
+        """提取字符串参数 (展开 Conversion)"""
+        inner = node
+        while inner.get('kind') == 'Conversion':
+            inner = inner.get('operand', {})
+        if inner.get('kind') == 'StringLiteral':
+            return inner.get('literal', inner.get('value', ''))
+        if inner.get('kind') == 'NamedValue':
+            sym = inner.get('symbol', '')
+            return sym.split(' ')[-1] if ' ' in sym else sym
+        return ''
+    
+    def _extract_value_arg(self, node: dict) -> str:
+        """提取值参数"""
+        inner = node
+        while inner.get('kind') == 'Conversion':
+            inner = inner.get('operand', {})
+        if inner.get('kind') == 'IntegerLiteral':
+            return inner.get('constant', inner.get('value', ''))
+        if inner.get('kind') == 'StringLiteral':
+            return inner.get('literal', '')
+        if inner.get('kind') == 'NamedValue':
+            sym = inner.get('symbol', '')
+            return sym.split(' ')[-1] if ' ' in sym else sym
+        return ''
+    
+    def _extract_named_value(self, node: dict) -> str:
+        """提取 NamedValue 名称 (支持 Assignment 参数)"""
+        inner = node
+        while inner.get('kind') == 'Conversion':
+            inner = inner.get('operand', {})
+        if inner.get('kind') == 'NamedValue':
+            sym = inner.get('symbol', '')
+            return sym.split(' ')[-1] if ' ' in sym else sym
+        if inner.get('kind') == 'Assignment':
+            # $value$plusargs 的第二个参数是 Assignment
+            left = inner.get('left', {})
+            if left.get('kind') == 'NamedValue':
+                sym = left.get('symbol', '')
+                return sym.split(' ')[-1] if ' ' in sym else sym
+        return ''
     
     def _resolve_type_class(self, type_str: str) -> str:
         """解析类型地址为类 full_path"""

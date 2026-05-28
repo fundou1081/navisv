@@ -33,6 +33,7 @@ python3 cli.py cg-list design.sv                        # 列出 covergroup
 | **约束查询** | `cvar` / `ccons` / `crel` | 变量↔约束关系 |
 | **CoverGroup 分析** | `cg-list` / `cg-check` / `cg-quality` | bins 一致性 + 质量评估 |
 | **SVA 提取** | (Python API) | 从 AST 提取 assert/assume/cover/restrict |
+| **UVM TB 结构** | (Python API) | 组件层级/Sequence/Port/config_db/plusargs |
 | **调用图** | (Python API) | 函数调用图、fork、randomize 标记 |
 | **SVA 生成** | (Python API) | 从信号关系生成 assert property |
 | **编译检查** | `check` | 快速语法检查 |
@@ -405,7 +406,9 @@ slang / slang-netlist
 | CallGraph | 17 | ✅ |
 | DesignGraph (UART) | 10/10 | ✅ |
 | DesignGraph (benchmark) | 75/79 | ✅ (94%) |
-| **总计** | **169** | ✅ |
+| UVM config_db + plusargs | 17 | ✅ |
+| UVM TB 静态结构 | 26 | ✅ |
+| **总计** | **212** | ✅ |
 
 ### DesignGraph 路径追踪详情
 
