@@ -443,6 +443,13 @@ def main():
     p.add_argument('--format', '-f', choices=['text', 'json'], default='text',
                     help='输出格式')
 
+    # navisv clock-stats <file>
+    p = sub.add_parser('clock-stats', help='时钟/复位 fan-out 统计')
+    p.add_argument('file', help='设计文件')
+    p.add_argument('--module', '-m', help='模块前缀 (省略则自动检测)')
+    p.add_argument('--format', '-f', choices=['text', 'json'], default='text',
+                    help='输出格式')
+
     # navisv risk <file>
     p = sub.add_parser('risk', help='信号风险/复杂度分析')
     p.add_argument('file', help='设计文件')
@@ -497,6 +504,9 @@ def main():
         elif args.command == 'cdc':
             from navisv.graph.cdc_analyzer import run_cdc as run_cdc_fn
             run_cdc_fn(args)
+        elif args.command == 'clock-stats':
+            from navisv.graph.clock_stats import run_clock_stats as run_clock_stats_fn
+            run_clock_stats_fn(args)
         elif args.command == 'risk':
             run_risk(args)
     except Exception as e:
