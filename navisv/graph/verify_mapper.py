@@ -285,7 +285,12 @@ def export_verify_dot(report: VerifyReport, rankdir: str = 'LR') -> str:
         else:
             shape = 'ellipse'
         
-        lines.append(f'  "{short}" [fillcolor={color}, shape={shape}, label="{label}"];')
+        # fillcolor: hex色值需要引号, 颜色名不需要
+        if color.startswith('#'):
+            fc = f'"{color}"'
+        else:
+            fc = color
+        lines.append(f'  "{short}" [fillcolor={fc}, shape={shape}, label="{label}"];')
     
     lines.append('')
     
@@ -324,13 +329,13 @@ def export_verify_dot(report: VerifyReport, rankdir: str = 'LR') -> str:
             lines.append(f'  "{src}" -> "{dst}" [color={color}, style={style}, label="{label}"];')
     
     lines.append('')
-    lines.append('  // 图例')
+    lines.append('  /* 图例 */')
     lines.append('  subgraph cluster_legend {')
-    lines.append('    label="图例"; style=dashed; color=gray;')
-    lines.append('    l1 [label="✅ SVA+CG" fillcolor=lightgreen shape=box];')
-    lines.append('    l2 [label="⚠️ SVA" fillcolor=lightyellow shape=box];')
-    lines.append('    l3 [label="⚠️ CG" fillcolor=lightblue shape=box];')
-    lines.append('    l4 [label="❌ 未覆盖" fillcolor=lightcoral shape=box];')
+    lines.append('    label="LEGEND"; style=dashed; color=gray;')
+    lines.append('    l1 [label="SVA+CG" fillcolor=lightgreen shape=box];')
+    lines.append('    l2 [label="SVA only" fillcolor=lightyellow shape=box];')
+    lines.append('    l3 [label="CG only" fillcolor=lightblue shape=box];')
+    lines.append('    l4 [label="uncovered" fillcolor=lightcoral shape=box];')
     lines.append('    l1 -> l2 -> l3 -> l4 [style=invis];')
     lines.append('  }')
     lines.append('}')
