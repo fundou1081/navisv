@@ -136,19 +136,28 @@ class RiskAnalyzer:
         msb, lsb = attr.get('bit_width', (0, 0))
         bit_width = abs(msb - lsb) + 1
 
-        # 时钟域
+        # 时钟域 (只取真正的时钟信号,排除复位)
         clock_domain = ''
+        real_clocks = set()
         for src, _, data in self.G.in_edges(node, data=True):
             ek = data.get('edge_kind', '')
-            if ek in ('PosEdge', 'NegEdge'):
+            if ek == 'PosEdge':  # 只看 PosEdge (复位通常是 NegEdge)
                 clock_domain = src
-                break
+                real_clocks.add(src)
+            elif ek == 'NegEdge':
+                src_name = src.split('.')[-1].lower()
+                if 'rst' not in src_name and 'reset' not in src_name:
+                    real_clocks.add(src)
 
-        # 图拓扑指标
-        in_deg = self.G.in_degree(node)
+        # 图拓扑指标 (排除时钟/复位边, 用纯数据图计算 fanin/fanout)
+        in_deg = 0
+        for src, _, data in self.G.in_edges(node, data=True):
+            ek = data.get('edge_kind', '')
+            if ek not in ('PosEdge', 'NegEdge'):
+                in_deg += 1
         out_deg = self.G.out_degree(node)
-        fanin = len(nx.ancestors(self.G, node))
-        fanout = len(nx.descendants(self.G, node))
+        fanin = len(nx.ancestors(self._data_graph, node)) if node in self._data_graph else 0
+        fanout = len(nx.descendants(self._data_graph, node)) if node in self._data_graph else 0
 
         # 计算风险评分
         func_score, timing_score, func_factors, timing_factors = self._calculate_risk_score(
@@ -160,12 +169,16 @@ class RiskAnalyzer:
         # 寄存器链深度
         reg_depth = self._estimate_reg_depth(node)
 
-        # 时钟域数量
+        # 时钟域数量 (只统计真正的时钟,排除复位)
         clock_domains = set()
         for src, _, data in self.G.in_edges(node, data=True):
             ek = data.get('edge_kind', '')
-            if ek in ('PosEdge', 'NegEdge'):
+            if ek == 'PosEdge':
                 clock_domains.add(src)
+            elif ek == 'NegEdge':
+                src_name = src.split('.')[-1].lower()
+                if 'rst' not in src_name and 'reset' not in src_name:
+                    clock_domains.add(src)
 
         # 综合得分 = max(功能, 时序) + 0.3 * min(功能, 时序)
         total = max(func_score, timing_score) + 0.3 * min(func_score, timing_score)
@@ -294,12 +307,16 @@ class RiskAnalyzer:
             timing_factors.append('寄存器')
 
         # 2. 时钟域 (0-30分)
-        # 统计连接到该信号的时钟域数量
+        # 统计连接到该信号的时钟域数量 (排除复位)
         clock_domains = set()
         for src, _, data in self.G.in_edges(node, data=True):
             ek = data.get('edge_kind', '')
-            if ek in ('PosEdge', 'NegEdge'):
+            if ek == 'PosEdge':
                 clock_domains.add(src)
+            elif ek == 'NegEdge':
+                src_name = src.split('.')[-1].lower()
+                if 'rst' not in src_name and 'reset' not in src_name:
+                    clock_domains.add(src)
 
         clock_count = len(clock_domains)
         if clock_count >= 3:
@@ -358,6 +375,19 @@ class RiskAnalyzer:
         if not hasattr(self, '_reg_depth_map'):
             self._build_reg_graph()
         return self._reg_depth_map.get(node, 0)
+
+    @property
+    def _data_graph(self):
+        """纯数据图(排除时钟/复位边), 缓存避免重复构建"""
+        if not hasattr(self, '_data_graph_cache'):
+            import networkx as nx
+            G = nx.DiGraph()
+            for src, dst, data in self.G.edges(data=True):
+                ek = data.get('edge_kind', '')
+                if ek not in ('PosEdge', 'NegEdge'):
+                    G.add_edge(src, dst)
+            self._data_graph_cache = G
+        return self._data_graph_cache
 
     def _build_reg_graph(self):
         """构建寄存器级图并计算关键路径"""
