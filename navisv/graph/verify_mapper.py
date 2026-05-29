@@ -240,11 +240,10 @@ class VerifyMapper:
         return result
 
 
-def export_verify_dot(report: VerifyReport) -> str:
-    """生成验证覆盖 DOT 图 (信号关系 + 覆盖状态)"""
+def export_verify_dot(report: VerifyReport, rankdir: str = 'LR') -> str:
     lines = []
     lines.append(f'digraph verify_{report.module} {{')
-    lines.append('  rankdir=LR;')
+    lines.append(f'  rankdir={rankdir};')
     lines.append('  node [shape=box, style=filled, fontname="Helvetica"];')
     lines.append('  edge [fontname="Helvetica", fontsize=9];')
     lines.append('')
@@ -339,10 +338,9 @@ def export_verify_dot(report: VerifyReport) -> str:
     return '\n'.join(lines)
 
 
-def export_verify_mermaid(report: VerifyReport) -> str:
-    """生成验证覆盖 Mermaid 图 (信号关系 + 覆盖状态)"""
+def export_verify_mermaid(report: VerifyReport, rankdir: str = 'LR') -> str:
     lines = []
-    lines.append('graph LR')
+    lines.append(f'graph {rankdir}')
     lines.append('')
     
     # 节点按覆盖等级分组

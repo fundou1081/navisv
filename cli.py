@@ -299,6 +299,8 @@ def main():
                        help='输出格式: text(默认), json, dot, mermaid, all(同时生成json+图)')
     parser.add_argument('--output', '-o', help='输出文件路径 (all 模式下为目录或前缀)')
     parser.add_argument('--include', '-I', action='append', help='include 目录')
+    parser.add_argument('--rankdir', '-d', choices=['LR', 'TB', 'BT', 'RL'], default='LR',
+                       help='图方向: LR=左右(默认), TB=上下, BT=下上, RL=右左')
     
     sub = parser.add_subparsers(dest='command', required=True)
 
@@ -1646,8 +1648,8 @@ def run_verify_map(args):
         fmt = _resolve_format(args)
         
         json_data = export_verify_json(report)
-        dot_content = export_verify_dot(report)
-        mermaid_content = export_verify_mermaid(report)
+        dot_content = export_verify_dot(report, rankdir=args.rankdir)
+        mermaid_content = export_verify_mermaid(report, rankdir=args.rankdir)
         
         if fmt == 'all':
             _write_multi_output(json_data, mermaid_content, dot_content, args, 'verify_map')
@@ -1747,8 +1749,8 @@ def run_risk(args):
         fmt = _resolve_format(args)
         
         json_data = export_risk_json(report)
-        dot_content = export_risk_dot(report)
-        mermaid_content = export_risk_mermaid(report)
+        dot_content = export_risk_dot(report, rankdir=args.rankdir)
+        mermaid_content = export_risk_mermaid(report, rankdir=args.rankdir)
         
         if fmt == 'all':
             _write_multi_output(json_data, mermaid_content, dot_content, args, 'risk_analysis')

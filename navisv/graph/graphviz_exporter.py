@@ -72,6 +72,7 @@ def export_dg_dot(
     max_nodes: int = 0,
     max_edges: int = 0,
     label_fn: Optional[Callable] = None,
+    rankdir: str = 'LR',
 ) -> str:
     """导出 DesignGraph 为 DOT"""
     G = dg.graph
@@ -93,7 +94,7 @@ def export_dg_dot(
         all_edges = [x[:3] for x in sorted(es, key=lambda x: -x[3])[:max_edges]]
 
     lines.append('digraph navisv {')
-    lines.append('  rankdir=LR;')
+    lines.append(f'  rankdir={rankdir};')
     lines.append('  node [shape=box, style=filled, fontname="Helvetica"];')
     lines.append('  edge [fontname="Helvetica", fontsize=9];')
     lines.append('')
@@ -113,11 +114,22 @@ def export_dg_dot(
         ek = data.get('edge_kind') or ''
         cond = data.get('condition') or ''
         ec, es = _edge_color(timing, ek, cond)
-        edge_label = ''
-        if timing == 'state':
+
+        # 边标签: 优先显示 true_condition, 其次时序类型
+        if cond:
+            # 有条件 → 显示条件信号名
+            edge_label = cond.split('.')[-1][:15]
+        elif timing == 'state':
             edge_label = '(reg)'
-        elif cond:
-            edge_label = cond.split('.')[-1][:12]
+        elif timing == 'sequential_input':
+            edge_label = '(seq-in)'
+        elif timing == 'sequential_output':
+            edge_label = '(seq-out)'
+        elif ek in ('PosEdge', 'NegEdge'):
+            edge_label = f'({ek.lower()})'
+        else:
+            edge_label = ''
+
         style = f'color="{ec}", style="{es}"'
         if edge_label:
             style += f', label="{edge_label}"'
@@ -134,9 +146,15 @@ def export_risk_dot(
     module_prefix: str = '',
     max_nodes: int = 150,
     max_edges: int = 300,
+    rankdir: str = 'LR',
 ) -> str:
     """
     DOT 风险图
+
+    参数:
+      rankdir: 图方向 (默认 LR, 另支持 TB/TD/BT/RL)
+        - LR/RL: 左右排列 (水平)
+        - TB/BT: 上下排列 (垂直)
 
     节点: 🔴red=critical 🟠orange=high 🟡yellow=medium 🟢green=low
           标签: 信号名 + F分数 + T分数 + 主要因素
@@ -165,6 +183,7 @@ def export_risk_dot(
         node_color=node_color,
         max_nodes=max_nodes, max_edges=max_edges,
         label_fn=label_fn,
+        rankdir=rankdir,
     )
 
 
@@ -172,16 +191,22 @@ def export_risk_mermaid(
     dg,
     module_prefix: str = '',
     max_nodes: int = 100,
+    rankdir: str = 'LR',
 ) -> str:
     """
     Mermaid 风险图
+
+    参数:
+      rankdir: 图方向 (默认 LR, 另支持 TB/BT/RL)
+        - LR/RL: 左右排列
+        - TB/BT: 上下排列
 
     节点: 🟢🟡🟠🔴 颜色块 + 信号名
     边: --> 组合逻辑  ==> 寄存器  -.- 条件
     """
     G = dg.graph
     lines = []
-    lines.append('graph LR')
+    lines.append(f'graph {rankdir}')
     lines.append('  %% ════════════════════════════════════════')
     lines.append('  %% navisv Risk Graph  (节点=信号, 边=关系)')
     lines.append('  %% 🔴critical  🟠high  🟡medium  🟢low')
@@ -226,32 +251,70 @@ def export_risk_mermaid(
     emit_group('🟡 Medium',   '🟡', med, limit=25)
     emit_group('🟢 Low',      '🟢', low_, limit=15)
 
-    combo = [(u,v,d) for u,v,d in edges
-             if d.get('timing') != 'state' and d.get('edge_kind') not in ('PosEdge','NegEdge')]
-    state  = [(u,v,d) for u,v,d in edges if d.get('timing') == 'state']
-    cond   = [(u,v,d) for u,v,d in edges if d.get('condition') or d.get('edge_kind') == 'condition']
-    ns_names = [n.split('.')[-1] for n in nodes]
-
     lines.append('  %% ── 信号关系 ──')
-    for u, v, _ in combo[:60]:
-        us, vs = u.split('.')[-1], v.split('.')[-1]
-        if us in ns_names and vs in ns_names:
-            lines.append(f'  {us} --> {vs}')
-    if len(combo) > 60:
-        lines.append(f'  %% ...还有{len(combo)-60}条组合边')
+    lines.append('  %% 边标签: 条件信号名 / (reg) / (seq-in) / (seq-out)')
+    lines.append('')
 
-    for u, v, _ in state[:40]:
-        us, vs = u.split('.')[-1], v.split('.')[-1]
-        if us in ns_names and vs in ns_names:
-            lines.append(f'  {us} ==> {vs}')
-    if len(state) > 40:
-        lines.append(f'  %% ...还有{len(state)-40}条寄存器边')
+    # 所有边按类型分组, 显示条件标签
+    seq_in  = [(u,v,d) for u,v,d in edges
+               if d.get('timing') == 'sequential_input']
+    seq_out = [(u,v,d) for u,v,d in edges
+               if d.get('timing') == 'sequential_output']
+    state_e = [(u,v,d) for u,v,d in edges if d.get('timing') == 'state']
+    combo_e = [(u,v,d) for u,v,d in edges
+               if not d.get('condition') and d.get('timing') not in ('state','sequential_input','sequential_output')
+               and d.get('edge_kind') not in ('PosEdge','NegEdge')]
 
-    for u, v, d in cond[:20]:
+    def mermaid_edge(u, v, d, style):
         us, vs = u.split('.')[-1], v.split('.')[-1]
-        c = (d.get('condition') or '').split('.')[-1][:8]
-        if us in ns_names and vs in ns_names:
-            lines.append(f'  {us} -.->|{c}| {vs}')
+        if us not in ns_names or vs not in ns_names:
+            return None
+        cond = (d.get('condition') or '').split('.')[-1][:15]
+        timing = d.get('timing', 'combinational')
+        if cond:
+            return f'  {us} {style} {cond} {vs}'
+        elif timing == 'state':
+            return f'  {us} {style} (reg) {vs}'
+        elif timing in ('sequential_input', 'sequential_output'):
+            suffix = timing.replace('sequential_', '(seq-') + ')'
+            return f'  {us} {style} {suffix} {vs}'
+        return f'  {us} {style} {vs}'
+
+    if seq_in:
+        lines.append('  %% ── 时序输入 ──')
+        for u,v,d in seq_in[:60]:
+            line = mermaid_edge(u, v, d, '-->')
+            if line: lines.append(line)
+        if len(seq_in) > 60:
+            lines.append(f'  %% ...还有{len(seq_in)-60}条')
+        lines.append('')
+
+    if seq_out:
+        lines.append('  %% ── 时序输出 ──')
+        for u,v,d in seq_out[:60]:
+            line = mermaid_edge(u, v, d, '-->')
+            if line: lines.append(line)
+        if len(seq_out) > 60:
+            lines.append(f'  %% ...还有{len(seq_out)-60}条')
+        lines.append('')
+
+    if state_e:
+        lines.append('  %% ── 寄存器 ──')
+        for u,v,d in state_e[:40]:
+            line = mermaid_edge(u, v, d, '==>')
+            if line: lines.append(line)
+        if len(state_e) > 40:
+            lines.append(f'  %% ...还有{len(state_e)-40}条')
+        lines.append('')
+
+    if combo_e:
+        lines.append('  %% ── 组合逻辑 ──')
+        for u,v,d in combo_e[:60]:
+            line = mermaid_edge(u, v, d, '-->')
+            if line: lines.append(line)
+        if len(combo_e) > 60:
+            lines.append(f'  %% ...还有{len(combo_e)-60}条')
+        lines.append('')
 
     return '\n'.join(lines)
 
@@ -277,9 +340,15 @@ def export_verify_dot(
     max_nodes: int = 150,
     max_edges: int = 300,
     verify_report=None,
+    rankdir: str = 'LR',
 ) -> str:
     """
     DOT 验证覆盖图
+
+    参数:
+      rankdir: 图方向 (默认 LR, 另支持 TB/TD/BT/RL)
+        - LR/RL: 左右排列 (水平)
+        - TB/BT: 上下排列 (垂直)
 
     节点: 🟢双覆盖 🟡仅SVA 🔵仅CG 🔴未覆盖
     边: 🔵蓝虚线=组合  🔴红粗线=寄存器  🟠橙实线=条件
@@ -301,6 +370,7 @@ def export_verify_dot(
         node_color=node_color,
         max_nodes=max_nodes, max_edges=max_edges,
         label_fn=label_fn,
+        rankdir=rankdir,
     )
 
 
@@ -309,16 +379,20 @@ def export_verify_mermaid(
     module_prefix: str = '',
     max_nodes: int = 100,
     verify_report=None,
+    rankdir: str = 'LR',
 ) -> str:
     """
     Mermaid 验证覆盖图
+
+    参数:
+      rankdir: 图方向 (默认 LR, 另支持 TB/BT/RL)
 
     节点: 🟢双覆盖 🟡仅SVA 🔵仅CG 🔴未覆盖
     边: --> 组合逻辑  ==> 寄存器
     """
     G = dg.graph
     lines = []
-    lines.append('graph LR')
+    lines.append(f'graph {rankdir}')
     lines.append('  %% ════════════════════════════════════════')
     lines.append('  %% navisv Verify Coverage Map')
     lines.append('  %% 🟢 双覆盖  🟡 仅SVA  🔵 仅CG  🔴 未覆盖')
@@ -371,14 +445,36 @@ def export_verify_mermaid(
 
     node_set = set(nodes)
     edges = [(u, v, d) for u, v, d in G.edges(data=True) if u in node_set and v in node_set]
-    combo = [t for t in edges
-             if t[2].get('timing') != 'state' and t[2].get('edge_kind') not in ('PosEdge','NegEdge')]
-    state = [t for t in edges if t[2].get('timing') == 'state']
+    seq_in  = [(u,v,d) for u,v,d in edges if d.get('timing') == 'sequential_input']
+    seq_out = [(u,v,d) for u,v,d in edges if d.get('timing') == 'sequential_output']
+    state_e = [(u,v,d) for u,v,d in edges if d.get('timing') == 'state']
+    combo_e = [(u,v,d) for u,v,d in edges
+               if not d.get('condition') and d.get('timing') not in ('state','sequential_input','sequential_output')
+               and d.get('edge_kind') not in ('PosEdge','NegEdge')]
 
-    lines.append('  %% ── 信号关系 ──')
-    for u, v, _ in combo[:60]:
-        lines.append(f'  {u.split(".")[-1]} --> {v.split(".")[-1]}')
-    for u, v, _ in state[:40]:
-        lines.append(f'  {u.split(".")[-1]} ==> {v.split(".")[-1]}')
+    def mermaid_edge(u, v, d, style):
+        us, vs = u.split('.')[-1], v.split('.')[-1]
+        cond = (d.get('condition') or '').split('.')[-1][:15]
+        timing = d.get('timing', 'combinational')
+        if cond:
+            return f'  {us} {style} {cond} {vs}'
+        elif timing == 'state':
+            return f'  {us} {style} (reg) {vs}'
+        elif timing in ('sequential_input', 'sequential_output'):
+            suffix = timing.replace('sequential_', '(seq-') + ')'
+            return f'  {us} {style} {suffix} {vs}'
+        return f'  {us} {style} {vs}'
+
+    ns = [n.split('.')[-1] for n in nodes]
+
+    lines.append('  %% ── 信号关系 (含 true_condition) ──')
+    for u,v,d in (seq_in + seq_out + state_e + combo_e)[:120]:
+        if u.split('.')[-1] in ns and v.split('.')[-1] in ns:
+            style = '-->' if d.get('timing') != 'state' else '==>'
+            line = mermaid_edge(u, v, d, style)
+            if line:
+                lines.append(line)
+    if len(edges) > 120:
+        lines.append(f'  %% ...还有{len(edges)-120}条边')
 
     return '\n'.join(lines)

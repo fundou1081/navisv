@@ -594,11 +594,13 @@ def export_risk_json(report: RiskReport) -> Dict:
     }
 
 
-def export_risk_dot(report: RiskReport) -> str:
-    """生成风险 DOT 图"""
+def export_risk_dot(report: RiskReport, rankdir: str = 'LR') -> str:
+    """生成风险 DOT 图
+    
+    rankdir: 图方向 (默认 LR, 另支持 TB/TD/BT/RL)"""
     lines = []
     lines.append(f'digraph risk_{report.module} {{')
-    lines.append('  rankdir=LR;')
+    lines.append(f'  rankdir={rankdir};')
     lines.append('  node [shape=box, style=filled, fontname="Helvetica"];')
     lines.append('  edge [fontname="Helvetica", fontsize=9];')
     lines.append('')
@@ -629,10 +631,12 @@ def export_risk_dot(report: RiskReport) -> str:
     return '\n'.join(lines)
 
 
-def export_risk_mermaid(report: RiskReport) -> str:
-    """生成风险 Mermaid 图"""
+def export_risk_mermaid(report: RiskReport, rankdir: str = 'LR') -> str:
+    """生成风险 Mermaid 图
+    
+    rankdir: 图方向 (默认 LR, 另支持 TB/BT/RL)"""
     lines = []
-    lines.append('graph LR')
+    lines.append(f'graph {rankdir}')
     lines.append('')
 
     # 按风险等级分组

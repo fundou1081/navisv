@@ -567,8 +567,8 @@ class ASTAnalyzer:
                             relation='drives', timing='combinational',
                             edge_kind=None, condition='')
 
-    def _add_combinational_edges(self, target_path: str, expr: Dict):
-        """为连续赋值表达式添加组合逻辑边"""
+    def _add_combinational_edges(self, target_path: str, expr: Dict, branch: str = None):
+        """为连续赋值表达式添加组合逻辑边, branch 为 TRUE/FALSE 表示条件分支"""
         if not isinstance(expr, dict):
             return
 
@@ -582,28 +582,28 @@ class ASTAnalyzer:
         kind = expr.get('kind', '')
 
         if kind == 'ConditionalOp':
-            # 条件驱动: 添加条件信号边
+            # 条件驱动: 区分 TRUE / FALSE 分支
             conditions = expr.get('conditions', [])
             for cond in conditions:
                 if isinstance(cond, dict):
                     cond_expr = cond.get('expr', {})
                     if cond_expr.get('kind') == 'ElementSelect':
-                        # sel[0] -> 获取 sel
                         value = cond_expr.get('value', {})
                         if value.get('kind') == 'NamedValue':
                             driver = self._extract_expr_path(value)
                             if driver and self.graph.has_node(driver):
-                                self.graph.add_edge(driver, target_path,
-                                    relation='drives', timing='combinational',
-                                    edge_kind=None, condition=target_path.split('.')[-1] + '.sel')
+                                for branch in ('TRUE', 'FALSE'):
+                                    self.graph.add_edge(driver, target_path,
+                                        relation='drives', timing='combinational',
+                                        edge_kind=None, condition=f'{driver.split(".")[-1]}.{branch}')
 
-            # 递归处理左右分支
+            # 递归处理左右分支, 标记 TRUE / FALSE
             left = expr.get('left', {})
             right = expr.get('right', {})
             if isinstance(left, dict):
-                self._add_combinational_edges(target_path, left)
+                self._add_combinational_edges(target_path, left, branch='TRUE')
             if isinstance(right, dict):
-                self._add_combinational_edges(target_path, right)
+                self._add_combinational_edges(target_path, right, branch='FALSE')
 
         elif kind == 'NamedValue':
             # 简单信号赋值: 添加边
