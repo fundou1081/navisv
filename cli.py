@@ -435,6 +435,14 @@ def main():
     p.add_argument('--module', '-m', help='模块前缀 (省略则自动检测)')
     p.add_argument('--limit', '-n', type=int, default=50, help='未覆盖信号显示数量')
 
+    # navisv cdc <file>
+    p = sub.add_parser('cdc', help='CDC 跨时钟域检测')
+    p.add_argument('file', help='设计文件')
+    p.add_argument('--module', '-m', help='模块前缀 (省略则自动检测)')
+    p.add_argument('--limit', '-n', type=int, default=50, help='最多显示路径数')
+    p.add_argument('--format', '-f', choices=['text', 'json'], default='text',
+                    help='输出格式')
+
     # navisv risk <file>
     p = sub.add_parser('risk', help='信号风险/复杂度分析')
     p.add_argument('file', help='设计文件')
@@ -486,6 +494,9 @@ def main():
             run_sva_align(args)
         elif args.command == 'verify-map':
             run_verify_map(args)
+        elif args.command == 'cdc':
+            from navisv.graph.cdc_analyzer import run_cdc as run_cdc_fn
+            run_cdc_fn(args)
         elif args.command == 'risk':
             run_risk(args)
     except Exception as e:
