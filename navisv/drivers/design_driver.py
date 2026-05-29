@@ -42,6 +42,7 @@ class DesignDriver:
         output_dir: Optional[str] = None,
         std: str = '1800-2017',
         single_unit: bool = False,
+        cache: bool = True,
     ):
         """
         Args:
@@ -53,6 +54,7 @@ class DesignDriver:
             output_dir: 输出目录（默认使用临时目录）
             std: 语言标准
             single_unit: 是否将所有文件视为同一编译单元
+            cache: 是否使用磁盘缓存（默认开启，可大幅加速重复解析）
         """
         self.files = files
         self.top = top
@@ -62,6 +64,9 @@ class DesignDriver:
         self.output_dir = output_dir or tempfile.mkdtemp(prefix='navisv_')
         self.std = std
         self.single_unit = single_unit
+        self.cache = cache
+        self._cache_key: Optional[str] = None
+        self._cache_hit: bool = False
         
         # 自动发现同目录文件
         self.files = self._auto_discover_files(files)
@@ -196,23 +201,116 @@ class DesignDriver:
     def build(self) -> 'DesignDriver':
         """
         构建 DesignGraph
-        
+
+        流程:
+            1. 检查磁盘缓存 → 命中则直接恢复，跳过 slang/netlist 解析
+            2. 生成 AST JSON (slang)
+            3. 生成 Netlist JSON (slang-netlist)
+            4. 解析 JSON → 构建 DesignGraph
+            5. 保存到磁盘缓存
+
         Returns:
             self (链式调用)
         """
-        # 1. 生成 AST JSON
+        import time
+
+        # ── 1. 尝试从缓存恢复 ───────────────────────────────────────
+        if self.cache:
+            entry = self._load_from_cache()
+            if entry:
+                self._cache_hit = True
+                return self
+
+        # ── 2. 正常解析流程 ───────────────────────────────────────
+        start = time.time()
+
         self._run_slang()
-        
-        # 2. 生成 Netlist JSON
         self._run_netlist()
-        
-        # 3. 解析 JSON
         self._parse_jsons()
-        
-        # 4. 构建图
         self._build_graph()
-        
+
+        build_time = time.time() - start
+
+        # ── 3. 保存到缓存 ─────────────────────────────────────────
+        if self.cache:
+            self._save_to_cache(build_time)
+
         return self
+
+    def _load_from_cache(self) -> bool:
+        """从 SQLite 缓存恢复，返回是否命中"""
+        from navisv.drivers.cache_manager import CacheManager
+
+        entry = CacheManager.get(
+            files=self.files,
+            include_dirs=self.include_dirs,
+            defines=self.defines,
+            params=self.params,
+        )
+        if not entry:
+            return False
+
+        # 恢复 output_dir 指向缓存的 JSON 文件
+        cache_json_dir = entry.ast_json.replace('/ast.json', '') if entry.ast_json else ''
+        if not cache_json_dir or not os.path.exists(cache_json_dir):
+            print(f'[cache] JSON 目录不存在，重新解析')
+            CacheManager._delete_entry(entry.cache_key)
+            return False
+
+        self.output_dir = cache_json_dir
+        self._cache_key = entry.cache_key
+
+        print(f'[cache HIT] 跳过 slang/slang-netlist 解析 (key={entry.cache_key[:8]}...)')
+
+        # 从缓存的 JSON 文件重建图
+        self._parse_jsons()
+        self._build_graph()
+
+        return True
+
+    def _save_to_cache(self, build_time: float = 0):
+        """将 JSON 文件复制到缓存目录，路径存入 SQLite"""
+        from navisv.drivers.cache_manager import CacheManager
+        import time
+        import shutil
+
+        try:
+            ast_json = os.path.join(self.output_dir, 'ast.json')
+            netlist_json = os.path.join(self.output_dir, 'netlist.json')
+
+            if not os.path.exists(ast_json):
+                print(f'[cache] ast.json 不存在，跳过缓存')
+                return
+
+            # 复制到持久化缓存目录
+            cache_json_dir = CacheManager.copy_to_cache(ast_json, netlist_json)
+            cached_ast = os.path.join(cache_json_dir, 'ast.json')
+            cached_netlist = os.path.join(cache_json_dir, 'netlist.json')
+
+            self._cache_key = CacheManager.put(
+                files=self.files,
+                include_dirs=self.include_dirs,
+                defines=self.defines,
+                params=self.params,
+                ast_json=cached_ast,
+                netlist_json=cached_netlist,
+                graph_data=b'',
+                created_at=time.time(),
+            )
+            print(f'[cache SAVE] 缓存已保存 (key={self._cache_key[:8]}..., '
+                  f'JSON: {os.path.getsize(cached_ast)//1024}KB, 解析耗时={build_time:.1f}s)')
+        except Exception as e:
+            print(f'[cache] 保存失败: {e}')
+
+    @property
+    def cache_hit(self) -> bool:
+        """上次 build() 是否命中缓存"""
+        return getattr(self, '_cache_hit', False)
+
+    @property
+    def cache_key(self) -> Optional[str]:
+        """缓存 key"""
+        return getattr(self, '_cache_key', None)
     
     def _run_slang(self):
         """运行 slang 生成 AST"""

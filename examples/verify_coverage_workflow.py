@@ -29,17 +29,20 @@ from navisv.graph.risk_analyzer import RiskAnalyzer, export_risk_json
 from navisv.graph.verify_mapper import VerifyMapper, export_verify_json
 
 
-def run_cmd(cmd):
+def run_cmd(cmd, cwd=None):
     """执行 CLI 命令，返回 stdout"""
-    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+    result = subprocess.run(cmd, shell=True, capture_output=True, text=True, cwd=cwd)
     return result.stdout, result.stderr
 
 
 def analyze_risk(design_path, module_prefix, include_dirs, limit=20):
     """执行 risk 分析，返回高风险信号列表"""
-    # Risk: 用全局 --json 选项
-    cmd = f'python3 cli.py -I "{include_dirs}" --json risk "{design_path}" -m {module_prefix} -n {limit}'
-    stdout, stderr = run_cmd(cmd)
+    # cwd 固定为 navisv 目录,这样 CLI 能找到
+    navisv_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    inc_opt = f'-I "{include_dirs}"' if include_dirs else ''
+    mod_opt = f'-m {module_prefix}' if module_prefix else ''
+    cmd = f'python3 cli.py {inc_opt} --json risk "{design_path}" {mod_opt} -n {limit}'
+    stdout, stderr = run_cmd(cmd, cwd=navisv_dir)
     try:
         data = json.loads(stdout)
     except json.JSONDecodeError:
@@ -61,9 +64,11 @@ def analyze_risk(design_path, module_prefix, include_dirs, limit=20):
 
 def analyze_verify_map(design_path, module_prefix, include_dirs, limit=50):
     """执行 verify-map 分析，返回未覆盖信号列表"""
-    # Verify-map: 用全局 --json 选项
-    cmd = f'python3 cli.py -I "{include_dirs}" --json verify-map "{design_path}" -m {module_prefix} -n {limit}'
-    stdout, stderr = run_cmd(cmd)
+    navisv_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    inc_opt = f'-I "{include_dirs}"' if include_dirs else ''
+    mod_opt = f'-m {module_prefix}' if module_prefix else ''
+    cmd = f'python3 cli.py {inc_opt} --json verify-map "{design_path}" {mod_opt} -n {limit}'
+    stdout, stderr = run_cmd(cmd, cwd=navisv_dir)
     try:
         data = json.loads(stdout)
     except json.JSONDecodeError:
@@ -97,7 +102,7 @@ def main():
         sys.exit(1)
 
     include_dirs = args.include.rstrip('/')
-    module = args.module or os.path.splitext(os.path.basename(args.design))[0]
+    module = args.module if args.module else ''  # 不默认用文件名
 
     print("=" * 70)
     print("navisv 验证覆盖工作流")

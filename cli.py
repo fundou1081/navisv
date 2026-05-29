@@ -262,6 +262,32 @@ def run_tools(args):
         print(f"\n状态: ✅ 所有工具可用")
         return {'success': True}
 
+def run_cache(args):
+    """缓存管理: info / clear / sweep"""
+    from navisv.drivers.cache_manager import CacheManager
+
+    action = args.action
+
+    if action == 'info':
+        stats = CacheManager.cache_stats()
+        print(f"\n=== navisv 缓存状态 ===")
+        print(f"缓存目录: {stats.get('cache_dir', 'N/A')}")
+        print(f"数据库:  {stats.get('db_path', 'N/A')}")
+        print(f"缓存条目: {stats.get('entries', 0)}")
+        size_kb = (stats.get('size_bytes', 0) or 0) // 1024
+        print(f"数据大小: {size_kb} KB")
+        return
+
+    elif action == 'clear':
+        count = CacheManager.clear_cache()
+        print(f"\n已清除 {count} 条缓存")
+        return
+
+    elif action == 'sweep':
+        count = CacheManager.sweep(max_age_days=args.days)
+        print(f"\n已清除 {count} 条过期缓存 (>{args.days}天)")
+        return
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -293,6 +319,13 @@ def main():
 
     # navisv tools
     p = sub.add_parser('tools', help='检查依赖工具')
+
+    # navisv cache [info|clear|sweep]
+    p = sub.add_parser('cache', help='缓存管理')
+    p.add_argument('action', nargs='?', default='info',
+                   choices=['info', 'clear', 'sweep'],
+                   help='info=显示统计, clear=清除所有, sweep=清除7天前')
+    p.add_argument('--days', type=float, default=7, help='sweep 模式下的过期天数 (默认: 7)')
 
     # navisv trace <file> <src> <dst>
     p = sub.add_parser('trace', help='路径追踪')
@@ -417,6 +450,8 @@ def main():
             run_ast(args)
         elif args.command == 'tools':
             run_tools(args)
+        elif args.command == 'cache':
+            run_cache(args)
         elif args.command == 'check':
             run_check(args)
         elif args.command == 'trace':
