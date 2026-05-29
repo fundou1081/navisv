@@ -12,6 +12,20 @@ import json
 from typing import Dict, List, Any, Optional, Tuple, Set
 
 
+class NodeAttr:
+    """简单节点属性对象 (替代动态 type(), 支持 pickle)"""
+    __slots__ = ('kind', 'name', 'direction', 'bit_width', 'timing', 'risk_level',
+                    'func_complexity', 'timing_complexity', 'verify_status',
+                    'func_factors', 'timing_factors')
+
+    def __init__(self, **kwargs):
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
+    def __repr__(self):
+        return f"NodeAttr({self.__dict__})"
+
+
 class ASTAnalyzer:
     """
     从 AST 提取条件信息
@@ -519,9 +533,9 @@ class ASTAnalyzer:
         # 如果目标不在图中,添加为组合逻辑节点
         if not self.graph.has_node(full_target_path):
             self.graph.add_node(full_target_path, kind='Net', type='logic[7:0]')
-            self._node_attrs[full_target_path] = type('NodeAttr', (), {
-                'kind': 'Net', 'name': full_target_path.split('.')[-1]
-            })()
+            self._node_attrs[full_target_path] = NodeAttr(
+                kind='Net', name=full_target_path.split('.')[-1]
+            )
 
         right = assignment.get('right', {})
         if not isinstance(right, dict):
@@ -561,9 +575,9 @@ class ASTAnalyzer:
         # 确保目标节点在图中(使用完整路径)
         if not self.graph.has_node(target_path):
             self.graph.add_node(target_path, kind='Net', type='logic[7:0]')
-            self._node_attrs[target_path] = type('NodeAttr', (), {
-                'kind': 'Net', 'name': target_path.split('.')[-1]
-            })()
+            self._node_attrs[target_path] = NodeAttr(
+                kind='Net', name=target_path.split('.')[-1]
+            )
 
         kind = expr.get('kind', '')
 
@@ -918,9 +932,9 @@ class ASTAnalyzer:
                 
                 # 如果仍然不在 _node_attrs 中,添加为组合逻辑节点
                 if target_path not in self._node_attrs:
-                    self._node_attrs[target_path] = type('NodeAttr', (), {
-                        'kind': 'Net', 'name': target_path.split('.')[-1]
-                    })()
+                    self._node_attrs[target_path] = NodeAttr(
+                        kind='Net', name=target_path.split('.')[-1]
+                    )
                     self.graph.add_node(target_path, kind='Net', type='logic')
                 
                 self._signal_conditions[target_path] = []

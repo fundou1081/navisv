@@ -240,6 +240,7 @@ class DesignDriver:
     def _load_from_cache(self) -> bool:
         """从 SQLite 缓存恢复，返回是否命中"""
         from navisv.drivers.cache_manager import CacheManager
+        import pickle
 
         entry = CacheManager.get(
             files=self.files,
@@ -250,55 +251,76 @@ class DesignDriver:
         if not entry:
             return False
 
-        # 恢复 output_dir 指向缓存的 JSON 文件
         cache_json_dir = entry.ast_json.replace('/ast.json', '') if entry.ast_json else ''
         if not cache_json_dir or not os.path.exists(cache_json_dir):
-            print(f'[cache] JSON 目录不存在，重新解析')
+            print(f'[cache] 缓存目录不存在，重新解析')
             CacheManager._delete_entry(entry.cache_key)
             return False
 
         self.output_dir = cache_json_dir
         self._cache_key = entry.cache_key
 
-        print(f'[cache HIT] 跳过 slang/slang-netlist 解析 (key={entry.cache_key[:8]}...)')
+        # 尝试加载完整 pickle（跳过 slang/netlist + 解析 + 图构建）
+        pickle_path = os.path.join(cache_json_dir, 'design_driver.pkl')
+        if os.path.exists(pickle_path):
+            try:
+                with open(pickle_path, 'rb') as f:
+                    self._slang_driver = pickle.load(f)
+                npkl = pickle_path.replace('design_driver', 'netlist_driver')
+                if os.path.exists(npkl):
+                    with open(npkl, 'rb') as f:
+                        self._netlist_driver = pickle.load(f)
+                self._parse_jsons()
+                self._build_graph()
+                print(f'[cache HIT] 直接加载 DesignGraph (跳过 slang+解析+图构建, key={entry.cache_key[:8]}...)')
+                return True
+            except Exception as e:
+                print(f'[cache] pickle 恢复失败: {e}, 尝试 JSON 恢复')
 
-        # 从缓存的 JSON 文件重建图
+        # 回退到 JSON 恢复（跳过 slang/netlist，仅解析+图构建）
+        print(f'[cache HIT] 跳过 slang/slang-netlist (key={entry.cache_key[:8]}...)')
         self._parse_jsons()
         self._build_graph()
-
         return True
 
     def _save_to_cache(self, build_time: float = 0):
-        """将 JSON 文件复制到缓存目录，路径存入 SQLite"""
+        """保存到 SQLite 缓存 (JSON + pickle)"""
         from navisv.drivers.cache_manager import CacheManager
+        import pickle
         import time
-        import shutil
 
         try:
-            ast_json = os.path.join(self.output_dir, 'ast.json')
-            netlist_json = os.path.join(self.output_dir, 'netlist.json')
+            cache_json_dir = CacheManager.copy_to_cache(
+                os.path.join(self.output_dir, 'ast.json'),
+                os.path.join(self.output_dir, 'netlist.json'),
+            )
 
-            if not os.path.exists(ast_json):
-                print(f'[cache] ast.json 不存在，跳过缓存')
-                return
-
-            # 复制到持久化缓存目录
-            cache_json_dir = CacheManager.copy_to_cache(ast_json, netlist_json)
-            cached_ast = os.path.join(cache_json_dir, 'ast.json')
-            cached_netlist = os.path.join(cache_json_dir, 'netlist.json')
+            # 保存完整 pickle（DesignGraph 对象）
+            pickle_path = os.path.join(cache_json_dir, 'design_driver.pkl')
+            netlist_pkl = pickle_path.replace('design_driver', 'netlist_driver')
+            try:
+                with open(pickle_path, 'wb') as f:
+                    pickle.dump(self._slang_driver, f)
+                with open(netlist_pkl, 'wb') as f:
+                    pickle.dump(self._netlist_driver, f)
+                pickle_ok = True
+            except Exception as e:
+                print(f'[cache] pickle 保存失败: {e}')
+                pickle_ok = False
 
             self._cache_key = CacheManager.put(
                 files=self.files,
                 include_dirs=self.include_dirs,
                 defines=self.defines,
                 params=self.params,
-                ast_json=cached_ast,
-                netlist_json=cached_netlist,
-                graph_data=b'',
+                ast_json=os.path.join(cache_json_dir, 'ast.json'),
+                netlist_json=os.path.join(cache_json_dir, 'netlist.json'),
+                graph_data=pickle.dumps(self._slang_driver) if pickle_ok else b'',
                 created_at=time.time(),
             )
-            print(f'[cache SAVE] 缓存已保存 (key={self._cache_key[:8]}..., '
-                  f'JSON: {os.path.getsize(cached_ast)//1024}KB, 解析耗时={build_time:.1f}s)')
+
+            saved = 'pickle+JSON' if pickle_ok else 'JSON only'
+            print(f'[cache SAVE] 已保存 ({saved}, key={self._cache_key[:8]}..., 耗时={build_time:.1f}s)')
         except Exception as e:
             print(f'[cache] 保存失败: {e}')
 
