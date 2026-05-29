@@ -63,6 +63,19 @@ def _mermaid_shape(kind: str) -> str:
     return {'Port': '([', 'State': '[', 'Net': '>'}.get(kind, '(')
 
 
+def _is_cross_module(src: str, dst: str) -> bool:
+    """检查边是否跨模块边界 (top-level module 不同)"""
+    sp = src.split('.')
+    dp = dst.split('.')
+    return sp[0] != dp[0]
+
+
+def _node_depth(node: str) -> int:
+    """返回节点层级 (module hierarchy 深度)"""
+    return len(node.split('.'))
+
+
+
 # ── 核心导出 ───────────────────────────────────────────────────────────────
 
 def export_dg_dot(
@@ -113,6 +126,11 @@ def export_dg_dot(
             fc = '#FFE0B0'
             tc = '#CC6600'
             label = label + ' ?'
+        # P2-1: 模块边界节点 (层级 >= 4) 用 doublebox 标注
+        elif _node_depth(node) >= 4 and attr.get('kind') == 'Port':
+            shape = 'doublebox'
+            fc = '#E8F4FF'
+            tc = '#0066CC'
 
         lines.append(f'  "{node}" [fillcolor="{fc}", fontcolor="{tc}", '
                      f'shape={shape}, label="{label}"];')
@@ -138,9 +156,23 @@ def export_dg_dot(
         else:
             edge_label = ''
 
+        # P2-4: 边层级标注 — 标注 seq-in 跳数 (寄存器间路径深度)
+        depth = 0
+        if timing == 'sequential_input':
+            # seq-in edge: 标注从起点到终点的寄存器跳数
+            # 格式: label="#2" 表示第2个寄存器
+            depth = 1
+
+        # P2-1: 跨模块边用虚线区分
+        if _is_cross_module(src, dst):
+            es = 'dashed'
+            edge_label = (edge_label + ' [X]') if edge_label else '[X-module]'
+
         style = f'color="{ec}", style="{es}"'
         if edge_label:
             style += f', label="{edge_label}"'
+        if depth > 0:
+            style += f', penwidth=1.5'
         lines.append(f'  "{src}" -> "{dst}" [{style}];')
 
     lines.append('}')
@@ -277,20 +309,29 @@ def export_risk_mermaid(
                if not d.get('condition') and d.get('timing') not in ('state','sequential_input','sequential_output')
                and d.get('edge_kind') not in ('PosEdge','NegEdge')]
 
+    ns_names = set(n.split('.')[-1] for n in nodes)
+
     def mermaid_edge(u, v, d, style):
         us, vs = u.split('.')[-1], v.split('.')[-1]
         if us not in ns_names or vs not in ns_names:
             return None
         cond = (d.get('condition') or '').split('.')[-1][:15]
         timing = d.get('timing', 'combinational')
+        # P2-1: cross-module edges → use -.- style
+        if _is_cross_module(u, v):
+            style = '-.-'
+            edge_suffix = ' [X]'
+        else:
+            edge_suffix = ''
         if cond:
-            return f'  {us} {style} {cond} {vs}'
+            return f'  {us} {style} {cond} {vs}{edge_suffix}'
         elif timing == 'state':
-            return f'  {us} {style} (reg) {vs}'
+            return f'  {us} {style} (reg){edge_suffix} {vs}'
         elif timing in ('sequential_input', 'sequential_output'):
             suffix = timing.replace('sequential_', '(seq-') + ')'
-            return f'  {us} {style} {suffix} {vs}'
-        return f'  {us} {style} {vs}'
+            return f'  {us} {style} {suffix}{edge_suffix} {vs}'
+        return f'  {us} {style} {vs}{edge_suffix}'
+
 
     if seq_in:
         lines.append('  %% ── 时序输入 ──')
@@ -472,18 +513,21 @@ def export_verify_mermaid(
         us, vs = u.split('.')[-1], v.split('.')[-1]
         cond = (d.get('condition') or '').split('.')[-1][:15]
         timing = d.get('timing', 'combinational')
+        # P2-1: cross-module edges → use -.- style
+        if _is_cross_module(u, v):
+            style = '-.-'
+            edge_suffix = ' [X]'
+        else:
+            edge_suffix = ''
         if cond:
-            return f'  {us} {style} {cond} {vs}'
+            return f'  {us} {style} {cond} {vs}{edge_suffix}'
         elif timing == 'state':
-            return f'  {us} {style} (reg) {vs}'
+            return f'  {us} {style} (reg){edge_suffix} {vs}'
         elif timing in ('sequential_input', 'sequential_output'):
             suffix = timing.replace('sequential_', '(seq-') + ')'
-            return f'  {us} {style} {suffix} {vs}'
-        return f'  {us} {style} {vs}'
+            return f'  {us} {style} {suffix}{edge_suffix} {vs}'
+        return f'  {us} {style} {vs}{edge_suffix}'
 
-    ns = [n.split('.')[-1] for n in nodes]
-
-    lines.append('  %% ── 信号关系 (含 true_condition) ──')
     for u,v,d in (seq_in + seq_out + state_e + combo_e)[:120]:
         if u.split('.')[-1] in ns and v.split('.')[-1] in ns:
             style = '-->' if d.get('timing') != 'state' else '==>'
