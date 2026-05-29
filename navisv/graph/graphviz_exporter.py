@@ -106,6 +106,14 @@ def export_dg_dot(
         shape = NODE_SHAPE.get(kind, 'box')
         fc, tc = node_color(node) if node_color else ('#E8E8E8', 'black')
         label = label_fn(node) if label_fn else short
+
+        # 标记 timing=None 的 uncertain 节点 (虚线边框 + ? 后缀)
+        if attr.get('timing') is None:
+            shape = 'doubleoctagon'
+            fc = '#FFE0B0'
+            tc = '#CC6600'
+            label = label + ' ?'
+
         lines.append(f'  "{node}" [fillcolor="{fc}", fontcolor="{tc}", '
                      f'shape={shape}, label="{label}"];')
 
@@ -240,7 +248,11 @@ def export_risk_mermaid(
         lines.append(f'    label="{label}"; style=filled; fontname="Helvetica";')
         for n in g:
             s = n.split('.')[-1]
-            lines.append(f'    {s}["{s}{sym}"]')
+            # uncertain 节点: timing=None → 橙色标注 + ? 后缀
+            if dg.node_attr(n).get('timing') is None:
+                lines.append(f'    {s}["{s} ?⚠️"]')
+            else:
+                lines.append(f'    {s}["{s}{sym}"]')
         if len(group) > limit:
             lines.append(f'    %% ...还有{len(group)-limit}个')
         lines.append('  }')
@@ -432,7 +444,11 @@ def export_verify_mermaid(
         lines.append(f'    label="{label}"; style=filled; fontname="Helvetica";')
         for n in g:
             s = n.split('.')[-1]
-            lines.append(f'    {s}["{s}{SYMS.get(status_key, "🔴")}"]')
+            # uncertain 节点: timing=None → 橙色标注 + ? 后缀
+            if dg.node_attr(n).get('timing') is None:
+                lines.append(f'    {s}["{s} ?⚠️"]')
+            else:
+                lines.append(f'    {s}["{s}{SYMS.get(status_key, "🔴")}"]')
         if len(group) > limit:
             lines.append(f'    %% ...还有{len(group)-limit}个')
         lines.append('  }')
