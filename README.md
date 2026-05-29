@@ -98,6 +98,82 @@ python3 cli.py cg-check design.sv pkg.Class.var cg_name cp_name
 python3 cli.py check design.sv
 ```
 
+### 2.5 图形可视化 (DOT / Mermaid)
+
+navisv 支持生成带信号关系的可视化图，**每个节点 = 信号，每个边 = 数据/时钟/条件关系**。
+
+```bash
+# 风险分析图 (信号 + 风险等级 + 功能/时序复杂度)
+python3 cli.py -f dot -o /tmp/risk.dot risk design.sv
+dot -Tpng /tmp/risk.dot -o /tmp/risk.png    # 生成 PNG
+
+# 验证覆盖图 (信号 + 覆盖状态)
+python3 cli.py -f dot -o /tmp/verify.dot verify-map design.sv
+dot -Tpng /tmp/verify.dot -o /tmp/verify.png
+
+# 或输出 Mermaid (可直接粘贴到 GitHub / Typora)
+python3 cli.py -f mermaid risk design.sv
+```
+
+**图的含义:**
+
+
+| 节点颜色 | 含义 |
+|---------|------|
+| 🔴 红色 | critical (风险≥80) |
+| 🟠 橙色 | high (风险≥60) |
+| 🟡 黄色 | medium (风险≥40) |
+| 🟢 绿色 | low (风险<40) |
+
+
+| 边样式 | 含义 |
+|--------|------|
+| 🔵 蓝虚线 | 组合逻辑驱动 |
+| 🔴 红粗线 | 寄存器时钟驱动 |
+| 🟠 橙实线 | 条件控制 |
+
+
+**节点标签 (风险图):**
+```
+signal_name
+F=70 T=60       ← 功能复杂度 / 时序复杂度
+高入度(12)      ← 主要风险因素 (critical/high 时显示)
+```
+
+**Python API (更灵活):**
+```python
+from navisv import DesignDriver
+from navisv.graph.risk_analyzer import RiskAnalyzer
+from navisv.graph.graphviz_exporter import export_risk_dot, export_risk_mermaid
+
+dd = DesignDriver(['design.sv'], output_dir='/tmp/navisv_out', include_dirs=['./'])
+dd.build()
+
+analyzer = RiskAnalyzer(dd.design_graph, 'top')
+analyzer.analyze()
+
+# DOT (Graphviz) - 适合生成高清图
+dot = export_risk_dot(dd.design_graph, module_prefix='top', max_nodes=100, max_edges=200)
+
+# Mermaid - 适合粘贴到文档
+mmd = export_risk_mermaid(dd.design_graph, module_prefix='top', max_nodes=80)
+
+# 验证覆盖图
+from navisv.graph.verify_mapper import VerifyMapper
+from navisv.graph.graphviz_exporter import export_verify_dot
+mapper = VerifyMapper(dd.design_graph)
+vreport = mapper.analyze('top')
+dot = export_verify_dot(dd.design_graph, verify_report=vreport, max_nodes=100)
+```
+
+| 参数 | 说明 |
+|------|------|
+| `module_prefix` | 模块前缀，按模块筛选节点 |
+| `max_nodes` | 最大节点数，按度数排序裁剪 |
+| `max_edges` | 最大边数，按重要性排序裁剪 |
+| `verify_report` | verify-map 的报告，用于着色覆盖状态 |
+
+
 ### 3. Python API (推荐 Agent 使用)
 
 ```python
@@ -151,6 +227,7 @@ navisv 提供 9 大能力模块，覆盖 RTL 设计分析的完整链路：
 | **SVA 时序对齐** | `sva-align` | 检查 SVA 与 RTL 时序一致性 |
 | **验证覆盖率地图** | `verify-map` | SVA + Coverage 叠加在信号图上 |
 | **信号风险分析** | `risk` | 功能+时序复杂度，风险等级评估 |
+| **图形可视化** | `-f dot/mermaid` | **🔥 信号关系图 + 风险/覆盖状态着色** |
 
 ---
 
