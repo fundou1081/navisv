@@ -6,6 +6,57 @@ navisv 将 RTL 设计转化为结构化查询，让 AI Agent 能够直接回答�
 - 这个信号从哪来？到哪去？
 - 这个变量被哪些约束限制？
 - 这个 coverpoint 的 bin 定义合理吗？
+- **哪些关键信号还没有被验证覆盖？** ← navisv 独有的能力
+
+## 🔥 杀手级应用: 验证覆盖缺口检测
+
+> "我写了这么多 assertion 和 covergroup，到底哪些关键信号还没被覆盖到？"
+
+navisv 用 **risk + verify-map** 工作流回答这个问题。
+
+```bash
+python3 examples/verify_coverage_workflow.py top.sv -I ./RTL/
+```
+
+**工作原理:**
+
+```
+Step 1: navisv risk    →  找出 critical/high 风险信号 (功能+时序复杂度)
+Step 2: navisv verify-map →  检查这些信号有没有 SVA 或 CoverGroup 覆盖
+Step 3: 输出待验证清单   →  "这 5 个高风险信号完全没有覆盖"
+```
+
+**实际输出:**
+```
+⏱️ Step 1: 风险分析
+高风险信号 (24 个):
+  reg_data_o     综合=88.0  critical  高入度(12), 大Fan-in锥(117)
+  tx_fifo_rd_en  综合=83.5  critical  中出度(5), 大Fan-in锥(117)
+  next_state    综合=82.5  critical  高入度(19), 高出度(14)
+
+时序关键路径 (Top 3):
+  1: uart_rst_n → stop_bit → curr_state → tik_count → parity_bit → uart_tx_o (深度=8)
+
+🔍 Step 2: 覆盖缺口检测
+  🔴 未覆盖: 0    🟢 双覆盖: 0
+
+📋 Step 3: 高风险信号覆盖状态
+  ✅ 所有高风险信号已覆盖
+
+✅ 工作流完成
+```
+
+**覆盖状态图 (verify-map 输出):**
+```
+🔴 红色节点 = 没有 SVA 也没有 CoverGroup
+🟡 黄色节点 = 只有 SVA assertion
+🔵 蓝色节点 = 只有 CoverGroup
+🟢 绿色节点 = SVA + CoverGroup 双覆盖
+```
+
+查看具体用例: `examples/verify_coverage_workflow.py`
+
+详细文档: `docs/verification_coverage_analysis.md`
 
 ## 快速上手
 
@@ -95,6 +146,11 @@ navisv 提供 9 大能力模块，覆盖 RTL 设计分析的完整链路：
 | **SVA 生成** | (Python API) | 从信号关系生成 assert property |
 | **编译检查** | `check` | 快速语法检查 |
 | **时序分析** | `timing` / `fanout` | 时钟域/CDC 分析 |
+| **验证覆盖工作流** | `examples/verify_coverage_workflow.py` | **🔥 杀手级: risk + verify-map 缺口检测** |
+| **时序关系分析** | `temporal` | 自动发现信号间时序约束 |
+| **SVA 时序对齐** | `sva-align` | 检查 SVA 与 RTL 时序一致性 |
+| **验证覆盖率地图** | `verify-map` | SVA + Coverage 叠加在信号图上 |
+| **信号风险分析** | `risk` | 功能+时序复杂度，风险等级评估 |
 
 ---
 
