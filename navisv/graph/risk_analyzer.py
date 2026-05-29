@@ -57,6 +57,7 @@ class RiskReport:
     medium_risk_nodes: int = 0
     low_risk_nodes: int = 0
     nodes: List[NodeRiskMetrics] = field(default_factory=list)
+    critical_paths: List[Dict] = field(default_factory=list)
     graph_metrics: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -122,6 +123,9 @@ class RiskAnalyzer:
         # 按复杂度排序
         report.nodes.sort(key=lambda x: x.total_score, reverse=True)
 
+        # 4. 计算关键路径
+        report.critical_paths = self.get_critical_paths(top_n=5)
+
         return report
 
     def _compute_node_metrics(self, node: str, bc: dict, cc: dict, pr: dict) -> NodeRiskMetrics:
@@ -152,20 +156,20 @@ class RiskAnalyzer:
             in_deg, out_deg, fanin, fanout,
             bc.get(node, 0), cc.get(node, 0), pr.get(node, 0)
         )
-        
+
         # 寄存器链深度
         reg_depth = self._estimate_reg_depth(node)
-        
+
         # 时钟域数量
         clock_domains = set()
         for src, _, data in self.G.in_edges(node, data=True):
             ek = data.get('edge_kind', '')
             if ek in ('PosEdge', 'NegEdge'):
                 clock_domains.add(src)
-        
+
         # 综合得分 = max(功能, 时序) + 0.3 * min(功能, 时序)
         total = max(func_score, timing_score) + 0.3 * min(func_score, timing_score)
-        
+
         # 确定风险等级
         if total >= 80:
             level = 'critical'
@@ -349,22 +353,146 @@ class RiskAnalyzer:
     def _estimate_reg_depth(self, node: str) -> int:
         """估算信号的寄存器链深度
 
-        从输入端口到该信号路径上的寄存器级数
+        使用寄存器级图的最长路径算法
         """
-        max_depth = 0
-        input_ports = [n for n in self.G.nodes
-                       if self.dg.node_attr(n).get('kind') == 'Port'
-                       and self.dg.node_attr(n).get('direction') == 'In']
+        if not hasattr(self, '_reg_depth_map'):
+            self._build_reg_graph()
+        return self._reg_depth_map.get(node, 0)
 
-        for port in input_ports[:10]:  # 限制数量避免太慢
-            try:
-                path = nx.shortest_path(self.G, port, node)
-                reg_count = sum(1 for p in path if self.dg.node_attr(p).get('timing') == 'sequential')
-                max_depth = max(max_depth, reg_count)
-            except (nx.NetworkXNoPath, nx.NodeNotFound):
-                pass
+    def _build_reg_graph(self):
+        """构建寄存器级图并计算关键路径"""
+        from collections import deque
 
-        return max_depth
+        registers = set(n for n in self.G.nodes if self.dg.node_attr(n).get('timing') == 'sequential')
+        inputs = set(n for n in self.G.nodes
+                     if self.dg.node_attr(n).get('kind') == 'Port'
+                     and self.dg.node_attr(n).get('direction') == 'In')
+
+        # 构建寄存器级图
+        reg_graph = nx.DiGraph()
+
+        for src_reg in registers:
+            visited = set()
+            queue = deque([(src_reg, 0)])
+
+            while queue:
+                node, depth = queue.popleft()
+                if depth > 3:
+                    continue
+
+                for _, dst, data in self.G.out_edges(node, data=True):
+                    ek = data.get('edge_kind', '')
+                    if ek in ('PosEdge', 'NegEdge'):
+                        continue
+                    if dst in visited:
+                        continue
+                    visited.add(dst)
+
+                    if dst in registers and dst != src_reg:
+                        if not reg_graph.has_edge(src_reg, dst):
+                            reg_graph.add_edge(src_reg, dst)
+                    elif dst not in registers and dst not in inputs:
+                        queue.append((dst, depth + 1))
+
+        # 添加输入端口到寄存器的边
+        for reg in registers:
+            for src, _, data in self.G.in_edges(reg, data=True):
+                ek = data.get('edge_kind', '')
+                if ek in ('PosEdge', 'NegEdge'):
+                    continue
+                if src in inputs:
+                    if not reg_graph.has_edge(src, reg):
+                        reg_graph.add_edge(src, reg)
+
+        self._reg_graph = reg_graph
+        
+        # 计算每个寄存器的时序深度
+        self._reg_depth_map = {}
+        self._reg_pred_map = {}
+
+        if nx.is_directed_acyclic_graph(reg_graph):
+            topo = list(nx.topological_sort(reg_graph))
+            dist = {n: 0 for n in topo}
+            prev = {n: None for n in topo}
+
+            for u in topo:
+                for v in reg_graph.successors(u):
+                    if dist[u] + 1 > dist[v]:
+                        dist[v] = dist[u] + 1
+                        prev[v] = u
+
+            self._reg_depth_map = dist
+            self._reg_pred_map = prev
+        else:
+            # 有环: 缩点后找最长路径
+            sccs = list(nx.strongly_connected_components(reg_graph))
+            scc_map = {}
+            for i, scc in enumerate(sccs):
+                for node in scc:
+                    scc_map[node] = i
+
+            dag = nx.DiGraph()
+            for src, dst in reg_graph.edges():
+                if scc_map[src] != scc_map[dst]:
+                    if not dag.has_edge(scc_map[src], scc_map[dst]):
+                        dag.add_edge(scc_map[src], scc_map[dst])
+
+            topo = list(nx.topological_sort(dag))
+            dist = {n: 0 for n in topo}
+
+            for u in topo:
+                for v in dag.successors(u):
+                    if dist[u] + 1 > dist[v]:
+                        dist[v] = dist[u] + 1
+
+            for reg in registers:
+                scc_id = scc_map.get(reg)
+                if scc_id is not None:
+                    self._reg_depth_map[reg] = dist.get(scc_id, 0)
+
+    def get_critical_paths(self, top_n: int = 5) -> List[Dict[str, Any]]:
+        """获取关键路径"""
+        if not hasattr(self, '_reg_graph'):
+            self._build_reg_graph()
+        
+        paths = []
+        sorted_regs = sorted(self._reg_depth_map.items(), key=lambda x: -x[1])
+        
+        seen = set()
+        for target, depth in sorted_regs:
+            if depth < 2 or target in seen:
+                continue
+            
+            # 在寄存器级图上回溯
+            path = [target]
+            current = target
+            for _ in range(30):
+                best_pred = None
+                best_depth = -1
+                for pred in self._reg_graph.predecessors(current):
+                    pred_depth = self._reg_depth_map.get(pred, 0)
+                    if pred_depth > best_depth and pred not in path:
+                        best_pred = pred
+                        best_depth = pred_depth
+                if best_pred:
+                    path.append(best_pred)
+                    current = best_pred
+                else:
+                    break
+            path.reverse()
+            
+            seen.add(target)
+            paths.append({
+                'path': path,
+                'depth': depth,
+                'source': path[0].split('.')[-1],
+                'target': path[-1].split('.')[-1],
+            })
+            
+            if len(paths) >= top_n:
+                break
+        
+        return paths
 
     def _compute_graph_metrics(self, nodes: List[str]) -> Dict[str, Any]:
         """计算全局图指标"""
@@ -406,6 +534,7 @@ def export_risk_json(report: RiskReport) -> Dict:
             'medium_risk_nodes': report.medium_risk_nodes,
             'low_risk_nodes': report.low_risk_nodes,
         },
+        'critical_paths': report.critical_paths,
         'nodes': [
             {
                 'signal': n.signal.split('.')[-1],

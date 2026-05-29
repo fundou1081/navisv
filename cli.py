@@ -1761,6 +1761,13 @@ def run_risk(args):
                     factors = ', '.join(n.func_factors[:1] + n.timing_factors[:1])
                     print(f"  {short:25s} {n.total_score:>6.1f} {n.func_complexity:>6.1f} {n.timing_complexity:>6.1f} {factors}")
             
+            # 关键路径
+            if json_data.get('critical_paths'):
+                print(f"\n⏱️ 时序关键路径:")
+                for i, cp in enumerate(json_data['critical_paths']):
+                    names = [p.split('.')[-1] for p in cp['path']]
+                    print(f"  路径 {i+1}: {' → '.join(names)} (深度={cp['depth']})")
+            
             # 二维分布
             print(f"\n二维分布:")
             print(f"  {'':20s} {'时序低(<40)':>12s} {'时序中(40-60)':>12s} {'时序高(≥60)':>12s}")
