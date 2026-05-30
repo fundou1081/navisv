@@ -450,6 +450,17 @@ def main():
     p.add_argument('--format', '-f', choices=['text', 'json'], default='text',
                     help='输出格式')
 
+    # navisv eco <file>
+    p = sub.add_parser('eco', help='ECO 影响分析 (diff 或 before/after)')
+    p.add_argument('file', help='设计文件')
+    p.add_argument('--diff', help='git diff 文件路径')
+    p.add_argument('--before', help='改动前文件路径 (CDC 模式)')
+    p.add_argument('--after', help='改动后文件路径 (CDC 模式)')
+    p.add_argument('--mode', choices=['impact', 'cdc'], default='impact',
+                    help='分析模式: impact=影响范围, cdc=CDC 变化对比')
+    p.add_argument('--depth', type=int, default=3, help='最大影响深度 (默认 3)')
+    p.add_argument('--include', '-I', action='append', help='include 目录')
+
     # navisv risk <file>
     p = sub.add_parser('risk', help='信号风险/复杂度分析')
     p.add_argument('file', help='设计文件')
@@ -507,6 +518,9 @@ def main():
         elif args.command == 'clock-stats':
             from navisv.graph.clock_stats import run_clock_stats as run_clock_stats_fn
             run_clock_stats_fn(args)
+        elif args.command == 'eco':
+            from navisv.graph.eco_analyzer import run_eco as run_eco_fn
+            run_eco_fn(args)
         elif args.command == 'risk':
             run_risk(args)
     except Exception as e:
