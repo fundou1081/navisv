@@ -594,10 +594,14 @@ def export_risk_json(report: RiskReport) -> Dict:
     }
 
 
-def export_risk_dot(report: RiskReport, rankdir: str = 'LR') -> str:
+def export_risk_dot(report: RiskReport, rankdir: str = 'LR',
+                    cdc_edge_pairs=None, cdc_node_set=None) -> str:
     """生成风险 DOT 图
-    
-    rankdir: 图方向 (默认 LR, 另支持 TB/TD/BT/RL)"""
+
+    rankdir: 图方向 (默认 LR, 另支持 TB/TD/BT/RL)
+    cdc_edge_pairs: CDC 边对集合，用于高亮 CDC 边
+    cdc_node_set: CDC 节点集合，用于高亮 CDC 节点
+    """
     lines = []
     lines.append(f'digraph risk_{report.module} {{')
     lines.append(f'  rankdir={rankdir};')
@@ -624,14 +628,22 @@ def export_risk_dot(report: RiskReport, rankdir: str = 'LR') -> str:
             label += f"\n{', '.join(factors)}"
 
         shape = 'parallelogram' if n.kind == 'Port' else 'box'
-        lines.append(f'  "{short}" [fillcolor={color}, shape={shape}, label="{label}"];')
 
+        # CDC 节点高亮
+        if cdc_node_set and n.signal in cdc_node_set:
+            lines.append(f'  "{short}" [fillcolor={color}, shape={shape}, label="{label}", color="#FF1493", penwidth=2];')
+        else:
+            lines.append(f'  "{short}" [fillcolor={color}, shape={shape}, label="{label}"];')
+
+    # 边（简化版：无显式边，可通过关系推断）
+    # 如果需要，可以添加节点间关系边
     lines.append('}')
 
     return '\n'.join(lines)
 
 
-def export_risk_mermaid(report: RiskReport, rankdir: str = 'LR') -> str:
+def export_risk_mermaid(report: RiskReport, rankdir: str = 'LR',
+                    cdc_edge_pairs=None, cdc_node_set=None) -> str:
     """生成风险 Mermaid 图
     
     rankdir: 图方向 (默认 LR, 另支持 TB/BT/RL)"""
@@ -649,28 +661,34 @@ def export_risk_mermaid(report: RiskReport, rankdir: str = 'LR') -> str:
         lines.append('  %% 🔴 关键风险')
         for n in critical:
             short = n.signal.split('.')[-1]
-            lines.append(f'  {short}[{short}]')
+            cdc_tag = ' ⚡CDC' if cdc_node_set and n.signal in cdc_node_set else ''
+            lines.append(f'  {short}[{short}{cdc_tag}]')
         lines.append('')
 
     if high:
         lines.append('  %% 🟠 高风险')
         for n in high:
             short = n.signal.split('.')[-1]
-            lines.append(f'  {short}[{short}]')
+            cdc_tag = ' ⚡CDC' if cdc_node_set and n.signal in cdc_node_set else ''
+            lines.append(f'  {short}[{short}{cdc_tag}]')
         lines.append('')
 
     if medium:
         lines.append('  %% 🟡 中风险')
         for n in medium[:20]:
             short = n.signal.split('.')[-1]
-            lines.append(f'  {short}[{short}]')
+            cdc_tag = ' ⚡CDC' if cdc_node_set and n.signal in cdc_node_set else ''
+            lines.append(f'  {short}[{short}{cdc_tag}]')
+        if len(medium) > 20:
+            lines.append(f'  %% ... 还有 {len(medium)-20} 个')
         lines.append('')
 
     if low:
         lines.append('  %% 🟢 低风险')
         for n in low[:20]:
             short = n.signal.split('.')[-1]
-            lines.append(f'  {short}[{short}]')
+            cdc_tag = ' ⚡CDC' if cdc_node_set and n.signal in cdc_node_set else ''
+            lines.append(f'  {short}[{short}{cdc_tag}]')
         if len(low) > 20:
             lines.append(f'  %% ... 还有 {len(low)-20} 个')
         lines.append('')
@@ -678,12 +696,20 @@ def export_risk_mermaid(report: RiskReport, rankdir: str = 'LR') -> str:
     # 样式
     lines.append('  %% 样式')
     for n in critical:
-        lines.append(f'  style {n.signal.split(".")[-1]} fill:#FF0000,color:#fff')
+        short = n.signal.split('.')[-1]
+        cdc_style = ',stroke:#FF1493,stroke-width:3px' if cdc_node_set and n.signal in cdc_node_set else ''
+        lines.append(f'  style {short} fill:#FF0000,color:#fff{cdc_style}')
     for n in high:
-        lines.append(f'  style {n.signal.split(".")[-1]} fill:#FFA500')
+        short = n.signal.split('.')[-1]
+        cdc_style = ',stroke:#FF1493,stroke-width:3px' if cdc_node_set and n.signal in cdc_node_set else ''
+        lines.append(f'  style {short} fill:#FFA500{cdc_style}')
     for n in medium:
-        lines.append(f'  style {n.signal.split(".")[-1]} fill:#FFD700')
+        short = n.signal.split('.')[-1]
+        cdc_style = ',stroke:#FF1493,stroke-width:3px' if cdc_node_set and n.signal in cdc_node_set else ''
+        lines.append(f'  style {short} fill:#FFD700{cdc_style}')
     for n in low[:20]:
-        lines.append(f'  style {n.signal.split(".")[-1]} fill:#90EE90')
+        short = n.signal.split('.')[-1]
+        cdc_style = ',stroke:#FF1493,stroke-width:3px' if cdc_node_set and n.signal in cdc_node_set else ''
+        lines.append(f'  style {short} fill:#90EE90{cdc_style}')
 
     return '\n'.join(lines)

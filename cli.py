@@ -4,18 +4,18 @@
 """
 navisv CLI - SystemVerilog 语义导航工具
 
-用法：
+用法:
     navisv info <file> <signal>     # 获取信号完整信息
     navisv registers <file>         # 报告所有寄存器
     navisv ast <file>               # 生成 AST JSON
     navisv tools                    # 检查依赖工具
 
-环境变量：
+环境变量:
     NAVISV_SLANG_BIN    slang 二进制路径
     NAVISV_NETLIST_BIN  slang-netlist 二进制路径
     NAVISV_CACHE_DIR    缓存目录
 
-示例：
+示例:
     navisv info design.sv top.clk
     navisv registers design.sv
     navisv tools
@@ -36,25 +36,25 @@ from navisv.config import check_tools
 def format_signal_info(info, verbose=False):
     """格式化信号信息"""
     signal = info.get('signal', 'unknown')
-    
+
     # 标题
     print(f"\n{'='*60}")
     print(f"信号: {signal}")
     print(f"{'='*60}")
-    
+
     # 基本属性
     if info.get('target_kind'):
         kinds = info.get('target_kind', set())
         print(f"  类型: {', '.join(kinds) if kinds else 'unknown'}")
-    
+
     clocks = info.get('clock_domain', set())
     if clocks:
         print(f"  时钟域: {', '.join(clocks)}")
-    
+
     resets = info.get('reset_kind', set())
     if resets:
         print(f"  Reset类型: {', '.join(resets)}")
-    
+
     # 驱动源
     drivers = info.get('drivers', [])
     if drivers:
@@ -65,7 +65,7 @@ def format_signal_info(info, verbose=False):
                 print(f"      条件: {d['condition']}")
         if len(drivers) > 5:
             print(f"    ... 还有 {len(drivers) - 5} 个")
-    
+
     # 负载
     loads = info.get('loads', [])
     if loads:
@@ -74,7 +74,7 @@ def format_signal_info(info, verbose=False):
             print(f"    - {l.get('to', 'unknown')}")
         if len(loads) > 5:
             print(f"    ... 还有 {len(loads) - 5} 个")
-    
+
     # 条件列表
     conditions = info.get('conditions', [])
     if conditions:
@@ -97,20 +97,20 @@ def run_info(args):
         for e in errors:
             print(f"错误: {e}", file=sys.stderr)
         return {'success': False, 'error': 'tools missing'}
-    
+
     output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
     try:
         dd = DesignDriver([args.file], output_dir=output_dir, include_dirs=args.include or [])
         dd.build()
         dg = dd.design_graph
-        
+
         info = dg.get_signal_info(args.signal, source=args.source or 'both')
-        
+
         if args.json:
             print(json.dumps(info, indent=2, default=str))
         else:
             format_signal_info(info)
-        
+
         return {'success': True, 'info': info}
     finally:
         import shutil
@@ -124,13 +124,13 @@ def run_registers(args):
         for e in errors:
             print(f"错误: {e}", file=sys.stderr)
         return {'success': False}
-    
+
     output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
     try:
         dd = DesignDriver([args.file], output_dir=output_dir, include_dirs=args.include or [])
         dd.build()
         dg = dd.design_graph
-        
+
         registers = []
         for sig, conds in dg._signal_conditions.items():
             kinds = set(c.get('target_kind') for c in conds if c.get('target_kind'))
@@ -142,7 +142,7 @@ def run_registers(args):
                     'clock': list(clocks)[0] if clocks else '-',
                     'reset': list(resets)[0] if resets else 'none',
                 })
-        
+
         if args.json:
             print(json.dumps(registers, indent=2, default=str))
         else:
@@ -152,13 +152,13 @@ def run_registers(args):
             for r in sorted(registers, key=lambda x: x['signal']):
                 short = r['signal'].split('.')[-1]
                 print(f"  {short:<35} {r['clock']:<10} {r['reset']:<8}")
-            
+
             # 统计
             async_cnt = sum(1 for r in registers if r['reset'] == 'async')
             sync_cnt = sum(1 for r in registers if r['reset'] == 'sync')
             none_cnt = sum(1 for r in registers if r['reset'] == 'none')
             print(f"\n  统计: async={async_cnt}, sync={sync_cnt}, no_reset={none_cnt}")
-        
+
         return {'success': True, 'registers': registers}
     finally:
         import shutil
@@ -172,14 +172,14 @@ def run_ast(args):
         for e in errors:
             print(f"错误: {e}", file=sys.stderr)
         return {'success': False}
-    
+
     output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
     try:
         dd = DesignDriver([args.file], output_dir=output_dir, include_dirs=args.include or [])
         dd.build()
-        
+
         ast_json = os.path.join(output_dir, 'ast.json')
-        
+
         if args.json:
             with open(ast_json) as f:
                 print(f.read())
@@ -187,7 +187,7 @@ def run_ast(args):
             size = os.path.getsize(ast_json)
             print(f"AST 已生成: {ast_json}")
             print(f"大小: {size} bytes")
-        
+
         return {'success': True, 'ast_json': ast_json}
     finally:
         import shutil
@@ -198,7 +198,7 @@ def run_ast(args):
 def run_check(args):
     """检查源码编译状态"""
     from navisv.drivers import SlangDriver
-    
+
     # 处理 filelist 参数
     if args.filelist:
         result = SlangDriver.compile_check(
@@ -217,7 +217,7 @@ def run_check(args):
             top=args.top,
             ignore_unknown_modules=args.ignore_unknown,
         )
-    
+
     if args.json:
         print(json.dumps(result, indent=2, default=str))
     else:
@@ -226,7 +226,7 @@ def run_check(args):
         else:
             print("\n❌ 编译检查失败")
             print(f"   error: {result['error_count']}, warning: {result['warning_count']}")
-            
+
             if result['errors']:
                 print("\n   错误详情:")
                 for e in result['errors'][:10]:
@@ -237,21 +237,21 @@ def run_check(args):
                         file = file.split('/')[-1]
                     msg = e.get('message', '')[:60]
                     print(f"     {file}:{line} - {msg}")
-                
+
                 if len(result['errors']) > 10:
                     print(f"     ... 还有 {len(result['errors']) - 10} 个错误")
-    
+
     return result
 
 
 def run_tools(args):
     """检查依赖工具"""
     from navisv.config import SLANG_BIN, NETLIST_BIN
-    
+
     print(f"\n工具路径:")
     print(f"  SLANG_BIN: {SLANG_BIN}")
     print(f"  NETLIST_BIN: {NETLIST_BIN}")
-    
+
     errors = check_tools()
     if errors:
         print(f"\n状态: ❌")
@@ -301,14 +301,14 @@ def main():
     parser.add_argument('--include', '-I', action='append', help='include 目录')
     parser.add_argument('--rankdir', '-d', choices=['LR', 'TB', 'BT', 'RL'], default='LR',
                        help='图方向: LR=左右(默认), TB=上下, BT=下上, RL=右左')
-    
+
     sub = parser.add_subparsers(dest='command', required=True)
 
     # navisv info <file> <signal>
     p = sub.add_parser('info', help='获取信号完整信息')
     p.add_argument('file', help='设计文件')
     p.add_argument('signal', help='信号路径')
-    p.add_argument('--source', '-s', choices=['ast', 'netlist', 'both'], 
+    p.add_argument('--source', '-s', choices=['ast', 'netlist', 'both'],
                    default='both', help='数据源')
 
     # navisv registers <file>
@@ -338,7 +338,7 @@ def main():
     # navisv batch-trace <file> <path1> <path2> ...
     p = sub.add_parser('batch-trace', help='批量路径追踪')
     p.add_argument('file', help='设计文件')
-    p.add_argument('paths', nargs='+', help='路径对，格式: src->dst')
+    p.add_argument('paths', nargs='+', help='路径对,格式: src->dst')
 
     # navisv timing <file>
     p = sub.add_parser('timing', help='时序报告')
@@ -367,7 +367,7 @@ def main():
     p.add_argument('--rankdir', choices=['LR', 'TB', 'BT', 'RL'], default='LR',
                    help='图方向 (默认 LR)')
 
-    # navisv mermaid <file> (独立 mermaid 命令，支持与 dot 相同参数)
+    # navisv mermaid <file> (独立 mermaid 命令,支持与 dot 相同参数)
     p = sub.add_parser('mermaid', help='Mermaid 导出 (模块分组 + CDC 高亮 + 图例)')
     p.add_argument('file', help='设计文件')
     p.add_argument('--subgraph', '-s', help='子图过滤模式 (如 module.*)')
@@ -443,6 +443,8 @@ def main():
     p.add_argument('src', nargs='?', help='源信号 (省略则批量分析)')
     p.add_argument('dst', nargs='?', help='目标信号')
     p.add_argument('--depth', '-d', type=int, default=3, help='寄存器链深度')
+    p.add_argument('--cdc-highlight', action='store_true',
+                   help='CDC 相关路径高亮显示')
 
     # navisv sva-align <file>
     p = sub.add_parser('sva-align', help='SVA 时序对齐检查')
@@ -487,6 +489,8 @@ def main():
     p.add_argument('file', help='设计文件')
     p.add_argument('--module', '-m', help='模块前缀 (省略则自动检测)')
     p.add_argument('--limit', '-n', type=int, default=20, help='高风险信号显示数量')
+    p.add_argument('--cdc-highlight', action='store_true',
+                   help='CDC 相关路径高亮显示')
 
     args = parser.parse_args()
 
@@ -560,15 +564,15 @@ def run_trace(args):
         for e in errors:
             print(f"错误: {e}", file=sys.stderr)
         return {'success': False}
-    
+
     output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
     try:
         dd = DesignDriver([args.file], output_dir=output_dir, include_dirs=args.include or [])
         dd.build()
         dg = dd.design_graph
-        
+
         result = dg.trace_full_path(args.src, args.dst)
-        
+
         if args.json:
             print(json.dumps(result, indent=2, default=str))
         else:
@@ -584,7 +588,7 @@ def run_trace(args):
                 print(f"\n路径追踪失败 ❌")
                 print(f"  from: {args.src}")
                 print(f"  to: {args.dst}")
-        
+
         return result
     finally:
         shutil.rmtree(output_dir, ignore_errors=True)
@@ -597,22 +601,22 @@ def run_batch_trace(args):
         for e in errors:
             print(f"错误: {e}", file=sys.stderr)
         return {'success': False}
-    
+
     output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
     try:
         dd = DesignDriver([args.file], output_dir=output_dir, include_dirs=args.include or [])
         dd.build()
         dg = dd.design_graph
-        
+
         # 解析路径对
         path_specs = []
         for pair in args.paths:
             parts = pair.split('->')
             if len(parts) == 2:
                 path_specs.append((parts[0].strip(), parts[1].strip()))
-        
+
         result = dg.trace_paths_batch(path_specs)
-        
+
         if args.json:
             print(json.dumps(result, indent=2, default=str))
         else:
@@ -621,7 +625,7 @@ def run_batch_trace(args):
             print(f"  总路径数: {summary['total_paths']}")
             print(f"  成功: {summary['successful_paths']}")
             print(f"  失败: {summary['failed_paths']}")
-            
+
             for i, p in enumerate(result['paths']):
                 status = "✅" if p['success'] else "❌"
                 src_short = p['from'].split('.')[-1]
@@ -631,7 +635,7 @@ def run_batch_trace(args):
                     print(f"  {status} {src_short} → {dst_short} (conf={conf})")
                 else:
                     print(f"  {status} {src_short} → {dst_short}")
-        
+
         return result
     finally:
         shutil.rmtree(output_dir, ignore_errors=True)
@@ -644,15 +648,15 @@ def run_timing(args):
         for e in errors:
             print(f"错误: {e}", file=sys.stderr)
         return {'success': False}
-    
+
     output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
     try:
         dd = DesignDriver([args.file], output_dir=output_dir, include_dirs=args.include or [])
         dd.build()
         dg = dd.design_graph
-        
+
         report = dg.generate_timing_report(format=args.format or 'text')
-        
+
         if args.json:
             print(json.dumps(report, indent=2, default=str))
         else:
@@ -661,7 +665,7 @@ def run_timing(args):
                 print(md)
             else:
                 print(report.get('report_text', ''))
-        
+
         return report
     finally:
         shutil.rmtree(output_dir, ignore_errors=True)
@@ -674,29 +678,29 @@ def run_fanout(args):
         for e in errors:
             print(f"错误: {e}", file=sys.stderr)
         return {'success': False}
-    
+
     output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
     try:
         dd = DesignDriver([args.file], output_dir=output_dir, include_dirs=args.include or [])
         dd.build()
         dg = dd.design_graph
-        
+
         loads = dg.get_loads_with_timing(args.signal)
-        
+
         if args.json:
             print(json.dumps(loads, indent=2, default=str))
         else:
             print(f"\n信号 {args.signal.split('.')[-1]} 的 fan-out ({len(loads)} 负载):\n")
-            
+
             # 分类
             registers = [l for l in loads if l['timing'].get('target_kind') == 'register_output']
             combinational = [l for l in loads if l['timing'].get('target_kind') == 'combinational']
             cross_clock = [l for l in loads if l.get('cross_clock')]
-            
+
             print(f"  寄存器负载: {len(registers)}")
             print(f"  组合逻辑负载: {len(combinational)}")
             print(f"  跨时钟域: {len(cross_clock)}")
-            
+
             if loads:
                 print(f"\n  负载详情:")
                 for l in loads[:10]:
@@ -706,10 +710,10 @@ def run_fanout(args):
                     kind = l['timing'].get('target_kind', '?')
                     cc = " ⚠️ CDC" if l.get('cross_clock') else ""
                     print(f"    → {tgt} [{clk_short}] {kind}{cc}")
-                
+
                 if len(loads) > 10:
                     print(f"    ... 还有 {len(loads) - 10} 个")
-        
+
         return {'success': True, 'loads': loads}
     finally:
         shutil.rmtree(output_dir, ignore_errors=True)
@@ -722,27 +726,27 @@ def run_coverage(args):
         for e in errors:
             print(f"错误: {e}", file=sys.stderr)
         return {'success': False}
-    
+
     output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
     try:
         dd = DesignDriver([args.file], output_dir=output_dir, include_dirs=args.include or [])
         dd.build()
         dg = dd.design_graph
-        
+
         if args.signal:
             # 单信号分析
             coverage = dg.get_condition_coverage(args.signal)
-            
+
             if args.json:
                 print(json.dumps(coverage, indent=2, default=str))
             else:
                 sig = args.signal.split('.')[-1]
                 print(f"\n信号 {sig} 的条件覆盖率:")
                 print(f"  总条件数: {coverage['total_conditions']}")
-                
+
                 s = coverage['coverage_summary']
                 print(f"  if: {s.get('if', 0)}, case: {s.get('case', 0)}, plain: {s.get('plain', 0)}, ternary: {s.get('ternary', 0)}")
-                
+
                 if coverage['conditions']:
                     print(f"\n  条件详情:")
                     for c in coverage['conditions']:
@@ -750,7 +754,7 @@ def run_coverage(args):
                         cond = c['condition'][:30] if c['condition'] else ''
                         stmt = c['statement'][:40] if c['statement'] else ''
                         print(f"    [{kind}] {cond} → {stmt}")
-                
+
                 if coverage['warnings']:
                     print(f"\n  警告:")
                     for w in coverage['warnings']:
@@ -758,7 +762,7 @@ def run_coverage(args):
         else:
             # 批量分析
             analysis = dg.analyze_condition_coverage()
-            
+
             if args.json:
                 print(json.dumps(analysis, indent=2, default=str))
             else:
@@ -767,37 +771,37 @@ def run_coverage(args):
                 print(f"  总条件数: {analysis['total_conditions']}")
                 print(f"  有冗余的信号: {analysis['signals_with_redundancy']}")
                 print(f"  可能有死代码的信号: {len(analysis['dead_code_signals'])}")
-                
+
                 if analysis['dead_code_signals']:
                     print(f"\n  死代码风险信号:")
                     for sig in analysis['dead_code_signals'][:5]:
                         print(f"    - {sig.split('.')[-1]}")
-        
+
         return {'success': True}
     finally:
         shutil.rmtree(output_dir, ignore_errors=True)
 
 
 def run_dot(args):
-    """DOT 导出（增强版：模块聚类 + CDC 高亮 + 图例）"""
+    """DOT 导出(增强版:模块聚类 + CDC 高亮 + 图例)"""
     errors = check_tools()
     if errors:
         for e in errors:
             print(f"错误: {e}", file=sys.stderr)
         return {'success': False}
-    
+
     from navisv.graph.graphviz_exporter import export_risk_dot
-    
+
     output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
     try:
-        dd = DesignDriver([args.file], output_dir=output_dir, 
+        dd = DesignDriver([args.file], output_dir=output_dir,
                          include_dirs=args.include or [], cache=True)
         dd.build()
         dg = dd.design_graph
-        
+
         # 从 --subgraph 提取 module_prefix
         module_prefix = args.subgraph if args.subgraph else ''
-        
+
         dot = export_risk_dot(
             dg,
             module_prefix=module_prefix,
@@ -808,7 +812,7 @@ def run_dot(args):
             show_legend=not args.no_legend,
             cluster_depth=args.cluster_depth,
         )
-        
+
         if args.output:
             with open(args.output, 'w') as f:
                 f.write(dot)
@@ -825,31 +829,31 @@ def run_dot(args):
                 print(f"  {line}")
             if len(lines) > 50:
                 print(f"  ... 还有 {len(lines) - 50} 行")
-        
+
         return {'success': True}
     finally:
         shutil.rmtree(output_dir, ignore_errors=True)
 
 
 def run_mermaid(args):
-    """Mermaid 导出（增强版：模块分组 + CDC 高亮 + 图例注释）"""
+    """Mermaid 导出(增强版:模块分组 + CDC 高亮 + 图例注释)"""
     errors = check_tools()
     if errors:
         for e in errors:
             print(f"错误: {e}", file=sys.stderr)
         return {'success': False}
-    
+
     from navisv.graph.graphviz_exporter import export_risk_mermaid
-    
+
     output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
     try:
         dd = DesignDriver([args.file], output_dir=output_dir,
                          include_dirs=args.include or [], cache=True)
         dd.build()
         dg = dd.design_graph
-        
+
         module_prefix = args.subgraph if args.subgraph else ''
-        
+
         mermaid = export_risk_mermaid(
             dg,
             module_prefix=module_prefix,
@@ -857,7 +861,7 @@ def run_mermaid(args):
             rankdir=args.rankdir,
             cdc_highlight=args.cdc_highlight,
         )
-        
+
         if args.output:
             with open(args.output, 'w') as f:
                 f.write(mermaid)
@@ -874,7 +878,7 @@ def run_mermaid(args):
                 print(f"  {line}")
             if len(lines) > 60:
                 print(f"  ... 还有 {len(lines) - 60} 行")
-        
+
         return {'success': True}
     finally:
         shutil.rmtree(output_dir, ignore_errors=True)
@@ -887,16 +891,16 @@ def run_fanin_cone(args):
         for e in errors:
             print(f"错误: {e}", file=sys.stderr)
         return {'success': False}
-    
+
     output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
     try:
         dd = DesignDriver([args.file], output_dir=output_dir, include_dirs=args.include or [])
         dd.build()
         dg = dd.design_graph
-        
+
         depth = args.depth or 3
         cone = dg.get_fanin_cone(args.signal, depth=depth)
-        
+
         if args.json:
             print(json.dumps(list(cone), indent=2))
         else:
@@ -907,7 +911,7 @@ def run_fanin_cone(args):
                 print(f"    ← {s.split('.')[-1]}")
             if len(cone) > 20:
                 print(f"    ... 还有 {len(cone) - 20} 个")
-        
+
         return {'success': True}
     finally:
         shutil.rmtree(output_dir, ignore_errors=True)
@@ -927,7 +931,7 @@ def run_constraints(args):
         if not cg:
             print('错误: ConstraintGraph 未构建', file=sys.stderr)
             return {'success': False}
-        
+
         if args.json:
             classes = cg.get_classes()
             result = []
@@ -951,7 +955,7 @@ def run_constraints(args):
                 print(f'  {cls["name"]}')
                 if len(chain) > 1:
                     print(f'    继承: {chain_str}')
-                
+
                 vars_list = cg.get_variables_in_class(cls['full_path'])
                 if vars_list:
                     print(f'    变量 ({len(vars_list)}):')
@@ -962,7 +966,7 @@ def run_constraints(args):
                         tc = v.get('type_class', '')
                         tc_str = f' -> {tc.split(".")[-1]}' if tc else ''
                         print(f'      {v["name"]:20s} {rm:6s}{bw_str}{tc_str}')
-                
+
                 cons = cg.get_constraints_in_class(cls['full_path'])
                 if cons:
                     print(f'    约束 ({len(cons)}):')
@@ -978,7 +982,7 @@ def run_constraints(args):
                             body = c.get('constraint_body', '')
                             for line in body.split('; '):
                                 print(f'        {line}')
-        
+
         return {'success': True}
     finally:
         shutil.rmtree(output_dir, ignore_errors=True)
@@ -994,7 +998,7 @@ def run_constraint_query(args):
         if not cg:
             print('错误: ConstraintGraph 未构建', file=sys.stderr)
             return {'success': False}
-        
+
         if args.command == 'cvar':
             # Q1: 变量在哪些约束中
             cons = cg.get_constraints_for_variable(
@@ -1020,7 +1024,7 @@ def run_constraint_query(args):
                             print(f'    expr: {expr}')
                     if args.verbose and c.get('constraint_body'):
                         print(f'    body: {c["constraint_body"]}')
-        
+
         elif args.command == 'ccons':
             # Q2: 约束影响哪些变量
             vars_list = cg.get_variables_in_constraint(args.constraint)
@@ -1034,7 +1038,7 @@ def run_constraint_query(args):
                     br = v.get('bit_range')
                     br_str = f' [{br[0]}:{br[1]}]' if br else ''
                     print(f'  {v["name"]}{br_str}{acc}')
-        
+
         elif args.command == 'crel':
             # Q3: 变量关系
             rel = cg.get_constraint_relationship(args.var1, args.var2)
@@ -1050,7 +1054,7 @@ def run_constraint_query(args):
                         print(f'    - {name}')
                 else:
                     print(f'  无共享约束')
-        
+
         return {'success': True}
     finally:
         shutil.rmtree(output_dir, ignore_errors=True)
@@ -1066,7 +1070,7 @@ def run_cg_list(args):
         if not cg:
             print('错误: CovergroupAnalyzer 未构建', file=sys.stderr)
             return {'success': False}
-        
+
         if args.json:
             cgs = cg.get_covergroups()
             result = []
@@ -1101,7 +1105,7 @@ def run_cg_list(args):
                     if args.verbose and c.get('bins'):
                         for b in c['bins']:
                             print(f'      {b["name"]} [{b["kind"]}]')
-        
+
         return {'success': True}
     finally:
         shutil.rmtree(output_dir, ignore_errors=True)
@@ -1117,9 +1121,9 @@ def run_cg_check(args):
         if not cg:
             print('错误: CovergroupAnalyzer 未构建', file=sys.stderr)
             return {'success': False}
-        
+
         result = cg.check_bin_constraint_consistency(args.variable, args.cg, args.cp)
-        
+
         if args.json:
             print(json.dumps(result, indent=2, ensure_ascii=False))
         else:
@@ -1128,7 +1132,7 @@ def run_cg_check(args):
             if not result:
                 print('  ✅ 无问题')
             for r in result:
-                icon = '⚠️ ' if r['type'] != 'info' else 'ℹ️ '
+                icon = '⚠️ ' if r['type'] != 'info' else 'i️ '
                 print(f'  {icon} {r["type"]}: {r["reason"]}')
                 if r.get('range'):
                     lo, hi = r['range']
@@ -1139,7 +1143,7 @@ def run_cg_check(args):
                 if r.get('forbidden_range'):
                     ranges = ', '.join(f'[{lo}:{hi}]' for lo, hi in r['forbidden_range'])
                     print(f'      forbidden: {ranges}')
-        
+
         return {'success': True}
     finally:
         shutil.rmtree(output_dir, ignore_errors=True)
@@ -1155,7 +1159,7 @@ def run_cg_quality(args):
         if not cg:
             print('错误: CovergroupAnalyzer 未构建', file=sys.stderr)
             return {'success': False}
-        
+
         if args.variable and args.cg and args.cp:
             # coverpoint 级别
             result = cg.check_coverage_quality(
@@ -1171,7 +1175,7 @@ def run_cg_quality(args):
                     if r['type'] == 'warning':
                         print(f'  ⚠️  {r["reason"]}')
                     elif r['type'] == 'info':
-                        print(f'  ℹ️  {r["reason"]}')
+                        print(f'  i️  {r["reason"]}')
         elif args.cg:
             # covergroup 级别
             result = cg.check_cg_quality(args.cg)
@@ -1184,11 +1188,11 @@ def run_cg_quality(args):
                     if r['type'] == 'warning':
                         print(f'  ⚠️  {r["reason"]}')
                     elif r['type'] == 'info':
-                        print(f'  ℹ️  {r["reason"]}')
+                        print(f'  i️  {r["reason"]}')
         else:
             print('错误: 需要指定 cg 名称', file=sys.stderr)
             return {'success': False}
-        
+
         return {'success': True}
     finally:
         shutil.rmtree(output_dir, ignore_errors=True)
@@ -1205,7 +1209,7 @@ def _resolve_format(args):
 
 def _write_multi_output(json_data, mermaid_content, dot_content, args, prefix='navisv'):
     """同时输出 JSON + 图文件
-    
+
     Args:
         json_data: dict/list JSON 数据
         mermaid_content: Mermaid 图内容
@@ -1214,9 +1218,9 @@ def _write_multi_output(json_data, mermaid_content, dot_content, args, prefix='n
         prefix: 文件名前缀
     """
     import os
-    
+
     output = getattr(args, 'output', None)
-    
+
     if output:
         # 指定了输出路径
         if os.path.isdir(output):
@@ -1225,23 +1229,23 @@ def _write_multi_output(json_data, mermaid_content, dot_content, args, prefix='n
         else:
             # 前缀模式
             base = output
-        
+
         json_path = base + '.json'
         mmd_path = base + '.mmd'
         dot_path = base + '.dot'
-        
+
         with open(json_path, 'w') as f:
             json.dump(json_data, f, indent=2, ensure_ascii=False, default=str)
         with open(mmd_path, 'w') as f:
             f.write(mermaid_content)
         with open(dot_path, 'w') as f:
             f.write(dot_content)
-        
+
         print(f'JSON:     {json_path}')
         print(f'Mermaid:  {mmd_path}')
         print(f'DOT:      {dot_path}')
     else:
-        # 无输出路径: JSON 打印到 stdout，图打印到 stdout
+        # 无输出路径: JSON 打印到 stdout,图打印到 stdout
         print('=== JSON ===')
         print(json.dumps(json_data, indent=2, ensure_ascii=False, default=str))
         print()
@@ -1263,7 +1267,7 @@ def _write_output(content, args, default_ext='.txt'):
         print(content)
 
 
-def _export_temporal_dot(dg, relations, title='temporal'):
+def _export_temporal_dot(dg, relations, title='temporal', cdc_edge_pairs=None, cdc_node_set=None):
     """生成时序关系 DOT 图"""
     lines = []
     lines.append(f'digraph {title} {{')
@@ -1271,7 +1275,7 @@ def _export_temporal_dot(dg, relations, title='temporal'):
     lines.append('  node [shape=box, style=filled, fontname="Helvetica"];')
     lines.append('  edge [fontname="Helvetica", fontsize=10];')
     lines.append('')
-    
+
     # 节点分类
     ports = set()
     regs = set()
@@ -1290,7 +1294,7 @@ def _export_temporal_dot(dg, relations, title='temporal'):
             regs.add(dst)
         else:
             nets.add(dst)
-    
+
     for n in sorted(ports):
         lines.append(f'  "{n}" [fillcolor=lightblue, shape=parallelogram];')
     for n in sorted(regs):
@@ -1298,7 +1302,7 @@ def _export_temporal_dot(dg, relations, title='temporal'):
     for n in sorted(nets):
         lines.append(f'  "{n}" [fillcolor=lightgray];')
     lines.append('')
-    
+
     # 边
     seen = set()
     for r in relations:
@@ -1309,8 +1313,12 @@ def _export_temporal_dot(dg, relations, title='temporal'):
         if edge_key in seen:
             continue
         seen.add(edge_key)
-        
-        if 'sequential' in rel:
+
+        if cdc_edge_pairs and (r['source'], r['target']) in cdc_edge_pairs:
+            color = '#FF1493'
+            style = 'bold'
+            label = f"⚡CDC"
+        elif 'sequential' in rel:
             color = 'red'
             style = 'bold'
             label = f"seq#{r.get('latency',1)}"
@@ -1326,19 +1334,25 @@ def _export_temporal_dot(dg, relations, title='temporal'):
             color = 'gray'
             style = 'solid'
             label = rel
-        
+
+        # CDC node highlight
+        if cdc_node_set and (r['source'] in cdc_node_set or r['target'] in cdc_node_set):
+            node_color = '#FFD700'
+        else:
+            node_color = None
+
         lines.append(f'  "{src}" -> "{dst}" [color={color}, style={style}, label="{label}"];')
-    
+
     lines.append('}')
     return '\n'.join(lines)
 
 
-def _export_temporal_mermaid(dg, relations, title='temporal'):
+def _export_temporal_mermaid(dg, relations, title='temporal', cdc_edge_pairs=None, cdc_node_set=None):
     """生成时序关系 Mermaid 图"""
     lines = []
     lines.append('graph LR')
     lines.append('')
-    
+
     # 节点分类
     ports = set()
     regs = set()
@@ -1352,7 +1366,7 @@ def _export_temporal_mermaid(dg, relations, title='temporal'):
             ports.add(dst)
         else:
             regs.add(dst)
-    
+
     lines.append('  %% 输入端口')
     for n in sorted(ports):
         lines.append(f'  {n}[/{n}/]')
@@ -1361,7 +1375,7 @@ def _export_temporal_mermaid(dg, relations, title='temporal'):
     for n in sorted(regs - ports):
         lines.append(f'  {n}[{n}]')
     lines.append('')
-    
+
     # 组合路径
     comb_edges = [(r['source'].split('.')[-1], r['target'].split('.')[-1], r.get('condition',''))
                   for r in relations if r['relation'] == 'combinational']
@@ -1369,9 +1383,13 @@ def _export_temporal_mermaid(dg, relations, title='temporal'):
         lines.append('  %% 组合路径 (0周期)')
         for src, dst, cond in comb_edges:
             label = f'comb [{cond.split(".")[-1]}]' if cond else 'comb'
-            lines.append(f'  {src} -.->|{label}| {dst}')
+            # CDC highlight
+            if cdc_edge_pairs and (r['source'], r['target']) in cdc_edge_pairs:
+                lines.append(f'  {src} ==>|⚡CDC {label}| {dst}')
+            else:
+                lines.append(f'  {src} -.->|{label}| {dst}')
         lines.append('')
-    
+
     # 条件路径
     cond_edges = [(r['source'].split('.')[-1], r['target'].split('.')[-1], r.get('condition',''), r.get('latency',1))
                   for r in relations if r['relation'] == 'conditional']
@@ -1379,17 +1397,25 @@ def _export_temporal_mermaid(dg, relations, title='temporal'):
         lines.append('  %% 条件路径')
         for src, dst, cond, lat in cond_edges:
             label = f'cond#{lat} [{cond.split(".")[-1]}]' if cond else f'cond#{lat}'
-            lines.append(f'  {src} ==>|{label}| {dst}')
+            # Find the relation
+            rel_entry = next((r for r in relations if r['source'].endswith(src) and r['target'].endswith(dst) and r['relation'] == 'conditional'), None)
+            if cdc_edge_pairs and rel_entry and (rel_entry['source'], rel_entry['target']) in cdc_edge_pairs:
+                lines.append(f'  {src} ==>|⚡CDC {label}| {dst}')
+            else:
+                lines.append(f'  {src} ==>|{label}| {dst}')
         lines.append('')
-    
+
     # 寄存器路径
-    seq_edges = [(r['source'].split('.')[-1], r['target'].split('.')[-1], r.get('latency',1))
+    seq_edges = [(r['source'].split('.')[-1], r['target'].split('.')[-1], r.get('latency',1), r)
                  for r in relations if 'sequential' in r['relation']]
     if seq_edges:
         lines.append('  %% 寄存器路径 (N周期)')
-        for src, dst, lat in seq_edges:
-            lines.append(f'  {src} ==>|seq#{lat}| {dst}')
-    
+        for src, dst, lat, rel_entry in seq_edges:
+            if cdc_edge_pairs and (rel_entry['source'], rel_entry['target']) in cdc_edge_pairs:
+                lines.append(f'  {src} ==>|⚡CDC seq#{lat}| {dst}')
+            else:
+                lines.append(f'  {src} ==>|seq#{lat}| {dst}')
+
     return '\n'.join(lines)
 
 
@@ -1401,17 +1427,17 @@ def _export_sva_align_dot(uncovered, suggestions):
     lines.append('  node [shape=box, style=filled, fontname="Helvetica"];')
     lines.append('  edge [fontname="Helvetica", fontsize=10];')
     lines.append('')
-    
+
     # 节点
     all_nodes = set()
     for p in uncovered:
         all_nodes.add(p['source'].split('.')[-1])
         all_nodes.add(p['target'].split('.')[-1])
-    
+
     for n in sorted(all_nodes):
         lines.append(f'  "{n}" [fillcolor=lightyellow];')
     lines.append('')
-    
+
     # 边 (标记未覆盖)
     seen = set()
     for p in uncovered:
@@ -1421,7 +1447,7 @@ def _export_sva_align_dot(uncovered, suggestions):
         if edge_key in seen:
             continue
         seen.add(edge_key)
-        
+
         rel = p['relation']
         lat = p['latency']
         if 'sequential' in rel:
@@ -1433,9 +1459,9 @@ def _export_sva_align_dot(uncovered, suggestions):
         else:
             label = f"{rel} ❌"
             color = 'gray'
-        
+
         lines.append(f'  "{src}" -> "{dst}" [color={color}, style=bold, label="{label}"];')
-    
+
     lines.append('}')
     return '\n'.join(lines)
 
@@ -1445,17 +1471,17 @@ def _export_sva_align_mermaid(uncovered, suggestions):
     lines = []
     lines.append('graph LR')
     lines.append('')
-    
+
     # 节点
     all_nodes = set()
     for p in uncovered:
         all_nodes.add(p['source'].split('.')[-1])
         all_nodes.add(p['target'].split('.')[-1])
-    
+
     for n in sorted(all_nodes):
         lines.append(f'  {n}[{n}]')
     lines.append('')
-    
+
     # 边
     seen = set()
     for p in uncovered:
@@ -1465,7 +1491,7 @@ def _export_sva_align_mermaid(uncovered, suggestions):
         if edge_key in seen:
             continue
         seen.add(edge_key)
-        
+
         rel = p['relation']
         lat = p['latency']
         if 'sequential' in rel:
@@ -1474,7 +1500,7 @@ def _export_sva_align_mermaid(uncovered, suggestions):
             lines.append(f'  {src} ==>|cond#{lat} ❌| {dst}')
         else:
             lines.append(f'  {src} -->|{rel} ❌| {dst}')
-    
+
     return '\n'.join(lines)
 
 
@@ -1491,13 +1517,13 @@ def _write_output(content, args, default_ext='.txt'):
 def run_temporal(args):
     """时序关系分析"""
     from navisv.graph.temporal_analyzer import TemporalAnalyzer
-    
+
     errors = check_tools()
     if errors:
         for e in errors:
             print(f"错误: {e}", file=sys.stderr)
         return {'success': False}
-    
+
     output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
     try:
         dd = DesignDriver([args.file], output_dir=output_dir, include_dirs=args.include or [])
@@ -1505,7 +1531,15 @@ def run_temporal(args):
         dg = dd.design_graph
         ta = TemporalAnalyzer(dg)
         fmt = _resolve_format(args)
-        
+
+        # CDC 高亮参数
+        cdc_edge_pairs = None
+        cdc_node_set = None
+        if getattr(args, 'cdc_highlight', False):
+            from navisv.graph.graphviz_exporter import _get_cdc_edge_pairs, _get_cdc_node_set
+            cdc_edge_pairs = _get_cdc_edge_pairs(dg, '')
+            cdc_node_set = _get_cdc_node_set(dg, '')
+
         if args.src and args.dst:
             # 单对信号分析
             if not dg.has_node(args.src):
@@ -1514,11 +1548,11 @@ def run_temporal(args):
             if not dg.has_node(args.dst):
                 print(f"错误: 信号 '{args.dst}' 不存在", file=sys.stderr)
                 return {'success': False}
-            
+
             rel = ta.get_temporal_relation(args.src, args.dst)
             src_attr = dg.node_attr(args.src)
             dst_attr = dg.node_attr(args.dst)
-            
+
             json_data = {
                 'source': rel.source, 'target': rel.target,
                 'relation': rel.relation, 'latency': rel.latency,
@@ -1532,16 +1566,16 @@ def run_temporal(args):
                 'source_kind': src_attr.get('kind', ''),
                 'target_kind': dst_attr.get('kind', ''),
             }]
-            
+
             if fmt == 'all':
-                _write_multi_output(json_data, _export_temporal_mermaid(dg, relations),
-                    _export_temporal_dot(dg, relations), args, 'temporal_pair')
+                _write_multi_output(json_data, _export_temporal_mermaid(dg, relations, cdc_edge_pairs=cdc_edge_pairs, cdc_node_set=cdc_node_set),
+                    _export_temporal_dot(dg, relations, cdc_edge_pairs=cdc_edge_pairs, cdc_node_set=cdc_node_set), args, 'temporal_pair')
             elif fmt == 'json':
                 print(json.dumps(json_data, indent=2, ensure_ascii=False))
             elif fmt == 'dot':
-                _write_output(_export_temporal_dot(dg, relations), args)
+                _write_output(_export_temporal_dot(dg, relations, cdc_edge_pairs=cdc_edge_pairs, cdc_node_set=cdc_node_set), args)
             elif fmt == 'mermaid':
-                _write_output(_export_temporal_mermaid(dg, relations), args)
+                _write_output(_export_temporal_mermaid(dg, relations, cdc_edge_pairs=cdc_edge_pairs, cdc_node_set=cdc_node_set), args)
             else:
                 src_name = rel.source.split('.')[-1]
                 dst_name = rel.target.split('.')[-1]
@@ -1561,7 +1595,7 @@ def run_temporal(args):
                     for chain in chains[:10]:
                         names = [c.split('.')[-1] for c in chain]
                         print(f"    {' → '.join(names)} ({len(chain)-1} 级)")
-        
+
         elif args.src:
             if not dg.has_node(args.src):
                 print(f"错误: 信号 '{args.src}' 不存在", file=sys.stderr)
@@ -1586,16 +1620,16 @@ def run_temporal(args):
                 relations.append({'source': args.src, 'target': l, 'relation': rel.relation,
                     'latency': rel.latency, 'condition': rel.condition,
                     'source_kind': profile.kind, 'target_kind': l_attr.get('kind', '')})
-            
+
             if fmt == 'all':
-                _write_multi_output(json_data, _export_temporal_mermaid(dg, relations),
-                    _export_temporal_dot(dg, relations), args, f'temporal_{args.src.split(".")[-1]}')
+                _write_multi_output(json_data, _export_temporal_mermaid(dg, relations, cdc_edge_pairs=cdc_edge_pairs, cdc_node_set=cdc_node_set),
+                    _export_temporal_dot(dg, relations, cdc_edge_pairs=cdc_edge_pairs, cdc_node_set=cdc_node_set), args, f'temporal_{args.src.split(".")[-1]}')
             elif fmt == 'json':
                 print(json.dumps(json_data, indent=2, ensure_ascii=False))
             elif fmt == 'dot':
-                _write_output(_export_temporal_dot(dg, relations), args)
+                _write_output(_export_temporal_dot(dg, relations, cdc_edge_pairs=cdc_edge_pairs, cdc_node_set=cdc_node_set), args)
             elif fmt == 'mermaid':
-                _write_output(_export_temporal_mermaid(dg, relations), args)
+                _write_output(_export_temporal_mermaid(dg, relations, cdc_edge_pairs=cdc_edge_pairs, cdc_node_set=cdc_node_set), args)
             else:
                 kind_icon = {'Port': '📌', 'State': '📦', 'Net': '🔗'}.get(profile.kind, '?')
                 timing_icon = {'sequential': '⏱️', 'combinational': '⚡'}.get(profile.timing, '?')
@@ -1615,7 +1649,7 @@ def run_temporal(args):
                     for chain in chains[:10]:
                         names = [c.split('.')[-1] for c in chain]
                         print(f"    {' → '.join(names)} ({len(chain)-1} 级)")
-        
+
         else:
             registers = dg.get_registers()
             json_data = []
@@ -1635,23 +1669,23 @@ def run_temporal(args):
                             relations.append({'source': reg, 'target': l, 'relation': rel.relation,
                                 'latency': rel.latency, 'condition': rel.condition,
                                 'source_kind': 'State', 'target_kind': 'State'})
-            
+
             if fmt == 'all':
-                _write_multi_output(json_data, _export_temporal_mermaid(dg, relations),
-                    _export_temporal_dot(dg, relations), args, 'temporal_registers')
+                _write_multi_output(json_data, _export_temporal_mermaid(dg, relations, cdc_edge_pairs=cdc_edge_pairs, cdc_node_set=cdc_node_set),
+                    _export_temporal_dot(dg, relations, cdc_edge_pairs=cdc_edge_pairs, cdc_node_set=cdc_node_set), args, 'temporal_registers')
             elif fmt == 'json':
                 print(json.dumps(json_data, indent=2, ensure_ascii=False))
             elif fmt == 'dot':
-                _write_output(_export_temporal_dot(dg, relations), args)
+                _write_output(_export_temporal_dot(dg, relations, cdc_edge_pairs=cdc_edge_pairs, cdc_node_set=cdc_node_set), args)
             elif fmt == 'mermaid':
-                _write_output(_export_temporal_mermaid(dg, relations), args)
+                _write_output(_export_temporal_mermaid(dg, relations, cdc_edge_pairs=cdc_edge_pairs, cdc_node_set=cdc_node_set), args)
             else:
                 print(f"\n寄存器时序画像 ({len(registers)} 个):")
                 for reg in sorted(registers):
                     profile = ta.get_signal_profile(reg)
                     clock = profile.clock_domain.split('.')[-1] if profile.clock_domain else '-'
                     print(f"  {reg.split('.')[-1]:30s}  clock={clock:20s}  drivers={len(profile.drivers)}  loads={len(profile.loads)}")
-        
+
         return {'success': True}
     finally:
         shutil.rmtree(output_dir, ignore_errors=True)
@@ -1661,41 +1695,41 @@ def run_sva_align(args):
     """SVA 时序对齐检查"""
     from navisv.graph.temporal_analyzer import TemporalAnalyzer
     from navisv.graph.sva_aligner import SVAAligner
-    
+
     errors = check_tools()
     if errors:
         for e in errors:
             print(f"错误: {e}", file=sys.stderr)
         return {'success': False}
-    
+
     output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
     try:
         dd = DesignDriver([args.file], output_dir=output_dir, include_dirs=args.include or [])
         dd.build()
         dg = dd.design_graph
-        
+
         sva_parser = None
         sva_file = args.file.replace('.sv', '_sva.sv')
         if os.path.exists(sva_file):
             from navisv.parsers.sva_parser import SVAParser
             sva_parser = SVAParser(sva_file).parse()
-        
+
         aligner = SVAAligner(dg, sva_parser)
         fmt = _resolve_format(args)
         uncovered = aligner.find_uncovered_temporal_paths(min_latency=args.min_latency)
-        
+
         json_data = {
             'total_uncovered': len(uncovered),
             'paths': uncovered[:args.limit],
         }
-        
+
         # 生成 SVA 建议
         suggestions = []
         for p in uncovered[:5]:
             result = aligner.check_signal_pair(p['source'], p['target'])
             suggestions.extend(result['suggestions'])
         json_data['suggestions'] = suggestions
-        
+
         if fmt == 'all':
             _write_multi_output(json_data, _export_sva_align_mermaid(uncovered[:args.limit], suggestions),
                 _export_sva_align_dot(uncovered[:args.limit], suggestions), args, 'sva_alignment')
@@ -1717,7 +1751,7 @@ def run_sva_align(args):
             print(f"\nSVA 建议:")
             for s in suggestions[:10]:
                 print(f"  {s['property_template']}")
-        
+
         return {'success': True}
     finally:
         shutil.rmtree(output_dir, ignore_errors=True)
@@ -1729,35 +1763,35 @@ def run_verify_map(args):
     """模块验证覆盖率地图"""
     from navisv.graph.verify_mapper import VerifyMapper, export_verify_json, export_verify_dot, export_verify_mermaid
     from navisv.graph.temporal_analyzer import TemporalAnalyzer
-    
+
     errors = check_tools()
     if errors:
         for e in errors:
             print(f"错误: {e}", file=sys.stderr)
         return {'success': False}
-    
+
     output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
     try:
         dd = DesignDriver([args.file], output_dir=output_dir, include_dirs=args.include or [])
         dd.build()
         dg = dd.design_graph
-        
+
         # 加载 SVA
         sva_parser = None
         sva_file = args.file.replace('.sv', '_sva.sv')
         if os.path.exists(sva_file):
             from navisv.parsers.sva_parser import SVAParser
             sva_parser = SVAParser(sva_file).parse()
-        
+
         # 加载 CoverGroup
         cg_analyzer = dd._covergroup_analyzer
-        
+
         # 创建 TemporalAnalyzer
         ta = TemporalAnalyzer(dg)
-        
+
         # 创建 VerifyMapper
         mapper = VerifyMapper(dg, sva_parser, cg_analyzer, ta)
-        
+
         # 确定模块前缀
         module_prefix = args.module
         if not module_prefix:
@@ -1767,15 +1801,15 @@ def run_verify_map(args):
                 if len(parts) >= 2:
                     module_prefix = parts[0]
                     break
-        
+
         # 分析
         report = mapper.analyze(module_prefix)
         fmt = _resolve_format(args)
-        
+
         json_data = export_verify_json(report)
         dot_content = export_verify_dot(report, rankdir=args.rankdir)
         mermaid_content = export_verify_mermaid(report, rankdir=args.rankdir)
-        
+
         if fmt == 'all':
             _write_multi_output(json_data, mermaid_content, dot_content, args, 'verify_map')
         elif fmt == 'json':
@@ -1796,28 +1830,28 @@ def run_verify_map(args):
             print(f"  双覆盖: {summary['both_covered']}")
             print(f"  未覆盖: {summary['neither_covered']}")
             print(f"  验证率: {summary['verify_rate']}%")
-            
+
             # 按等级分组显示
             full = [s for s in report.signals if s.verify_level == 'full']
             sva_only = [s for s in report.signals if s.has_sva and not s.has_coverage]
             cov_only = [s for s in report.signals if s.has_coverage and not s.has_sva]
             none_list = [s for s in report.signals if s.verify_level == 'none']
-            
+
             if full:
                 print(f"\n✅ 双覆盖 ({len(full)}):")
                 for s in full[:10]:
                     print(f"  {s.signal.split('.')[-1]:30s}  SVA={s.sva_properties}  CG={s.covergroups}")
-            
+
             if sva_only:
                 print(f"\n⚠️  仅SVA ({len(sva_only)}):")
                 for s in sva_only[:10]:
                     print(f"  {s.signal.split('.')[-1]:30s}  SVA={s.sva_properties}")
-            
+
             if cov_only:
                 print(f"\n⚠️  仅Coverage ({len(cov_only)}):")
                 for s in cov_only[:10]:
                     print(f"  {s.signal.split('.')[-1]:30s}  CG={s.covergroups}")
-            
+
             if none_list:
                 print(f"\n❌ 未覆盖 ({len(none_list)}):")
                 for s in none_list[:args.limit]:
@@ -1825,19 +1859,19 @@ def run_verify_map(args):
                     print(f"  {kind_icon} {s.signal.split('.')[-1]:30s}  {s.kind}  {s.timing}")
                 if len(none_list) > args.limit:
                     print(f"  ... 还有 {len(none_list) - args.limit} 个")
-            
+
             # SVA 属性列表
             if report.sva_properties:
                 print(f"\nSVA 属性 ({len(report.sva_properties)}):")
                 for p in report.sva_properties[:10]:
                     print(f"  {p['name']:30s}  signals={p.get('signals', [])[:3]}")
-            
+
             # CoverGroup 列表
             if report.covergroups:
                 print(f"\nCoverGroup ({len(report.covergroups)}):")
                 for cg in report.covergroups:
                     print(f"  {cg['name']:30s}  cp={cg.get('coverpoint_count', 0)}  cx={cg.get('cross_count', 0)}")
-        
+
         return {'success': True}
     finally:
         shutil.rmtree(output_dir, ignore_errors=True)
@@ -1847,19 +1881,19 @@ def run_verify_map(args):
 def run_risk(args):
     """信号风险/复杂度分析"""
     from navisv.graph.risk_analyzer import RiskAnalyzer, export_risk_json, export_risk_dot, export_risk_mermaid
-    
+
     errors = check_tools()
     if errors:
         for e in errors:
             print(f"错误: {e}", file=sys.stderr)
         return {'success': False}
-    
+
     output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
     try:
         dd = DesignDriver([args.file], output_dir=output_dir, include_dirs=args.include or [])
         dd.build()
         dg = dd.design_graph
-        
+
         # 确定模块前缀
         module_prefix = args.module
         if not module_prefix:
@@ -1868,15 +1902,25 @@ def run_risk(args):
                 if len(parts) >= 2:
                     module_prefix = parts[0]
                     break
-        
+
         analyzer = RiskAnalyzer(dg, module_prefix)
         report = analyzer.analyze()
         fmt = _resolve_format(args)
-        
+
+        # CDC 高亮参数
+        cdc_edge_pairs = None
+        cdc_node_set = None
+        if getattr(args, 'cdc_highlight', False):
+            from navisv.graph.graphviz_exporter import _get_cdc_edge_pairs, _get_cdc_node_set
+            cdc_edge_pairs = _get_cdc_edge_pairs(dg, module_prefix)
+            cdc_node_set = _get_cdc_node_set(dg, module_prefix)
+
         json_data = export_risk_json(report)
-        dot_content = export_risk_dot(report, rankdir=args.rankdir)
-        mermaid_content = export_risk_mermaid(report, rankdir=args.rankdir)
-        
+        dot_content = export_risk_dot(report, rankdir=args.rankdir,
+                                      cdc_edge_pairs=cdc_edge_pairs, cdc_node_set=cdc_node_set)
+        mermaid_content = export_risk_mermaid(report, rankdir=args.rankdir,
+                                              cdc_edge_pairs=cdc_edge_pairs, cdc_node_set=cdc_node_set)
+
         if fmt == 'all':
             _write_multi_output(json_data, mermaid_content, dot_content, args, 'risk_analysis')
         elif fmt == 'json':
@@ -1896,13 +1940,13 @@ def run_risk(args):
             print(f"  是否DAG: {gm['is_dag']}")
             print(f"  平均入度: {gm['avg_in_degree']}  平均出度: {gm['avg_out_degree']}")
             print(f"  最大入度: {gm['max_in_degree']}  最大出度: {gm['max_out_degree']}")
-            
+
             print(f"\n风险分布:")
             print(f"  🔴 关键: {report.critical_nodes}")
             print(f"  🟠 高:   {report.high_risk_nodes}")
             print(f"  🟡 中:   {report.medium_risk_nodes}")
             print(f"  🟢 低:   {report.low_risk_nodes}")
-            
+
             # 高风险信号
             high_risk = [n for n in report.nodes if n.risk_level in ('critical', 'high')]
             if high_risk:
@@ -1912,7 +1956,7 @@ def run_risk(args):
                     short = n.signal.split('.')[-1]
                     factors = ', '.join(n.func_factors[:1] + n.timing_factors[:1])
                     print(f"  {short:25s} {n.total_score:>6.1f} {n.func_complexity:>6.1f} {n.timing_complexity:>6.1f} {n.risk_level:8s} {n.in_degree:>5} {n.out_degree:>5} {n.fanin_size:>7} {n.bit_width:>5} {factors}")
-            
+
             # 中风险信号
             med_risk = [n for n in report.nodes if n.risk_level == 'medium']
             if med_risk:
@@ -1922,14 +1966,14 @@ def run_risk(args):
                     short = n.signal.split('.')[-1]
                     factors = ', '.join(n.func_factors[:1] + n.timing_factors[:1])
                     print(f"  {short:25s} {n.total_score:>6.1f} {n.func_complexity:>6.1f} {n.timing_complexity:>6.1f} {factors}")
-            
+
             # 关键路径
             if json_data.get('critical_paths'):
                 print(f"\n⏱️ 时序关键路径:")
                 for i, cp in enumerate(json_data['critical_paths']):
                     names = [p.split('.')[-1] for p in cp['path']]
                     print(f"  路径 {i+1}: {' → '.join(names)} (深度={cp['depth']})")
-            
+
             # 二维分布
             print(f"\n二维分布:")
             print(f"  {'':20s} {'时序低(<40)':>12s} {'时序中(40-60)':>12s} {'时序高(≥60)':>12s}")
@@ -1941,7 +1985,7 @@ def run_risk(args):
                 t_mid = len([n for n in group if 40 <= n.timing_complexity < 60])
                 t_high = len([n for n in group if n.timing_complexity >= 60])
                 print(f"  {label:20s} {t_low:>12} {t_mid:>12} {t_high:>12}")
-        
+
         return {'success': True}
     finally:
         shutil.rmtree(output_dir, ignore_errors=True)
