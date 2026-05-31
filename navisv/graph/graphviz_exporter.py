@@ -205,18 +205,18 @@ def _make_legend() -> str:
     """生成 DOT 图例节点（放在右上角）"""
     legend = (
         '<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="4"'
-        ' BGCOLOR="#F8F8F8" CELLSPACING="0">'
+        ' BGCOLOR="#F8F8F8">'
         '<TR><TD COLSPAN="3" BGCOLOR="#DDDDDD"><B>navisv 图例</B></TD></TR>'
         # 节点风险
         '<TR><TD><B>节点颜色</B></TD><TD BGCOLOR="#FF4444"><FONT COLOR="white">■</FONT></TD><TD>Critical</TD></TR>'
-        '<TR><TD></TD><TD BGCOLOR="#FF8833">■</TD><TD>High</TD></TR>'
-        '<TR><TD></TD><TD BGCOLOR="#FFCC00">■</TD><TD>Medium</TD></TR>'
+        '<TR><TD></TD><TD BGCOLOR="#FF8833"><FONT COLOR="#FF8833">■</FONT></TD><TD>High</TD></TR>'
+        '<TR><TD></TD><TD BGCOLOR="#FFCC00"><FONT COLOR="#FFCC00">■</FONT></TD><TD>Medium</TD></TR>'
         '<TR><TD></TD><TD BGCOLOR="#44CC44"><FONT COLOR="white">■</FONT></TD><TD>Low</TD></TR>'
         # 边类型
         '<TR><TD><B>边类型</B></TD><TD><FONT COLOR="#4472C4">— —</FONT></TD><TD>组合逻辑</TD></TR>'
         '<TR><TD></TD><TD><FONT COLOR="#C00000"><B>━━</B></FONT></TD><TD>寄存器</TD></TR>'
         '<TR><TD></TD><TD><FONT COLOR="#FF8C00">—</FONT></TD><TD>条件/控制</TD></TR>'
-        '<TR><TD></TD><TD><FONT COLOR="#FF1493" PENWIDTH="2"><B>━━</B></FONT></TD><TD>CDC 路径</TD></TR>'
+        '<TR><TD></TD><TD><FONT COLOR="#FF1493"><B>━━</B></FONT></TD><TD>CDC 路径</TD></TR>'
         # 形状
         '<TR><TD><B>形状</B></TD><TD>▭</TD><TD>寄存器/状态</TD></TR>'
         '<TR><TD></TD><TD>⬡</TD><TD>Port 接口</TD></TR>'
@@ -291,12 +291,15 @@ def export_dg_dot(
     # ── DOT Header ────────────────────────────────────────────────
     lines.append('digraph navisv {')
     lines.append(f'  rankdir={rankdir};')
-    lines.append('  splines=ortho;')
-    lines.append('  nodesep=0.6;')
-    lines.append('  ranksep=0.8;')
+    lines.append('  splines=polyline;')
+    lines.append('  nodesep=0.5;')
+    lines.append('  ranksep=0.7;')
     lines.append('  fontname="Helvetica";')
     lines.append('  node [shape=box, style=filled, fontname="Helvetica"];')
     lines.append('  edge [fontname="Helvetica", fontsize=9];')
+    # Keep square-ish aspect ratio
+    lines.append('  size="10,10!";')
+    lines.append('  ratio=compress;')
     lines.append('')
 
     # ── Legend 节点（右上角固定）──────────────────────────────────
@@ -319,6 +322,26 @@ def export_dg_dot(
         lines.append(f'    // {len(mod_nodes)} 个节点')
         lines.append('  }')
     if clusters:
+        lines.append('')
+
+    # ── Port 对齐（左右布局时 input 左，output 右）──────────────
+    if rankdir == 'LR':
+        # 找所有 Port 节点，分 input/output
+        input_ports = []
+        output_ports = []
+        for node in nodes:
+            attr = dg.node_attr(node)
+            if attr.get('kind') == 'Port':
+                dir_val = attr.get('direction', attr.get('dir', ''))
+                short = node.split('.')[-1]
+                if dir_val in ('In', 'input'):
+                    input_ports.append(f'"{node}"')
+                elif dir_val in ('Out', 'output'):
+                    output_ports.append(f'"{node}"')
+        if input_ports:
+            lines.append(f'  {{ rank=source; {"; " .join(input_ports)}; }}')
+        if output_ports:
+            lines.append(f'  {{ rank=sink; {"; " .join(output_ports)}; }}')
         lines.append('')
 
     # ── 节点定义 ──────────────────────────────────────────────────
