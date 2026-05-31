@@ -22,7 +22,7 @@ navisv 图形可视化导出器
 """
 
 import networkx as nx
-from typing import Dict, Any, List, Optional, Callable, Tuple, Set
+from typing import Dict, Any, List, Optional, Callable, Tuple, Set, Set
 
 
 # ── 颜色常量 ────────────────────────────────────────────────────────────────
@@ -173,6 +173,29 @@ def _get_cdc_edge_pairs(dg, module_prefix: str = '') -> Set[Tuple[str, str]]:
                 edge_pairs.add((src, dst))
         return edge_pairs
     except Exception as e:
+        return set()
+
+
+def _get_cdc_node_set(dg, module_prefix: str = '') -> Set[str]:
+    """
+    获取 CDC 路径中涉及的所有寄存器节点集合。
+    用于在图中高亮 CDC 源/目标寄存器（节点标记）。
+    返回所有在 CDC 路径上的 src_reg 和 dst_reg。
+    """
+    try:
+        from navisv.graph.cdc_analyzer import CDCAnalyzer
+        analyzer = CDCAnalyzer(dg, module_prefix=module_prefix)
+        report = analyzer.analyze()
+        nodes: Set[str] = set()
+        for path in report.cross_clock_paths:
+            if path.src_reg:
+                nodes.add(path.src_reg)
+            if path.dst_reg:
+                nodes.add(path.dst_reg)
+            for n in path.intermediate:
+                nodes.add(n)
+        return nodes
+    except Exception:
         return set()
 
 
@@ -419,17 +442,20 @@ def export_risk_mermaid(
     module_prefix: str = '',
     max_nodes: int = 100,
     rankdir: str = 'LR',
+    cdc_highlight: bool = False,
 ) -> str:
     """
-    Mermaid 风险图（改进版：按模块分组 subgraph）
+    Mermaid 风险图（改进版：按模块分组 subgraph + CDC 高亮）
     
     不再按 risk level 分组，而是保留模块语义：
     - 同模块节点归入同一个 subgraph
     - risk level 通过节点颜色后缀 🔴🟠🟡🟢 表示
-    - 边类型：--> 组合  ==> 寄存器  -.- 条件/跨模块
+    - CDC 路径用 ==> 双线 + ⚡CDC 标签高亮
+    - 边类型：--> 组合  ==> 寄存器  ==  CDC
     
     参数:
       rankdir: 图方向 (默认 LR, 另支持 TB/BT/RL)
+      cdc_highlight: True 时 CDC 边用双线 ==> + ⚡CDC 标注
     """
     G = dg.graph
     lines: List[str] = []
@@ -444,6 +470,11 @@ def export_risk_mermaid(
     node_set = set(nodes)
     edges = [(u, v, d) for u, v, d in G.edges(data=True) if u in node_set and v in node_set]
 
+    # CDC 高亮：收集 CDC 边对
+    cdc_edge_pairs: Set[Tuple[str, str]] = set()
+    if cdc_highlight:
+        cdc_edge_pairs = _get_cdc_edge_pairs(dg, module_prefix)
+
     # 按模块分组，而不是按 risk 分组
     clusters = _build_module_clusters(nodes, depth=2)
 
@@ -453,7 +484,9 @@ def export_risk_mermaid(
     lines.append(f'graph {rankdir}')
     lines.append('  %% ═══════════════════════════════════════════')
     lines.append('  %% navisv Risk Graph  (模块分组, 风险着色)')
-    lines.append('  %% 边: --> 组合  ==> 寄存器  -.- 条件/跨模块')
+    lines.append('  %% → 组合逻辑  ⇒ 寄存器  == CDC 路径')
+    if cdc_highlight:
+        lines.append('  %% ⚡ CDC 边用双线 == 标注')
     lines.append('  %% ═══════════════════════════════════════════')
     lines.append('')
 
@@ -498,14 +531,19 @@ def export_risk_mermaid(
                and d.get('edge_kind') not in ('PosEdge','NegEdge')]
     cond_e  = [(u,v,d) for u,v,d in edges if d.get('condition') or d.get('edge_kind') == 'condition']
 
-    def mermaid_label(u, v, d) -> str:
+    def mermaid_label(u, v, d) -> Optional[str]:
         us, vs = u.split('.')[-1], v.split('.')[-1]
         if us not in ns_names or vs not in ns_names:
             return None
         timing = d.get('timing', 'combinational')
         cond = (d.get('condition') or '').split('.')[-1][:12]
         cross = _is_cross_module(u, v)
+        is_cdc = (u, v) in cdc_edge_pairs
         
+        if is_cdc:
+            # CDC 边：双线 + ⚡CDC 标注
+            suf = ' [跨]' if cross else ''
+            return f'  {us} == ⚡CDC{vs}{suf}'
         if cond:
             suf = ' [跨]' if cross else ''
             return f'  {us} --> 「{cond}」{vs}{suf}'

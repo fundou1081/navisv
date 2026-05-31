@@ -355,13 +355,26 @@ def main():
     p.add_argument('signal', nargs='?', help='信号路径 (省略则批量分析)')
 
     # navisv dot <file>
-    p = sub.add_parser('dot', help='DOT 导出 (模块聚类 + CDC 高亮 + 图例)')
+    p = sub.add_parser('dot', help='DOT 导出 (Graphviz, 模块聚类 + CDC 高亮 + 图例)')
     p.add_argument('file', help='设计文件')
     p.add_argument('--subgraph', '-s', help='子图过滤模式 (如 module.*)')
     p.add_argument('--cdc-highlight', action='store_true',
                    help='CDC 路径用粉红粗边高亮')
     p.add_argument('--no-legend', action='store_true',
                    help='隐藏图例面板')
+    p.add_argument('--cluster-depth', type=int, default=2,
+                   help='模块聚类深度 (默认2, 即子模块级别)')
+    p.add_argument('--rankdir', choices=['LR', 'TB', 'BT', 'RL'], default='LR',
+                   help='图方向 (默认 LR)')
+
+    # navisv mermaid <file> (独立 mermaid 命令，支持与 dot 相同参数)
+    p = sub.add_parser('mermaid', help='Mermaid 导出 (模块分组 + CDC 高亮 + 图例)')
+    p.add_argument('file', help='设计文件')
+    p.add_argument('--subgraph', '-s', help='子图过滤模式 (如 module.*)')
+    p.add_argument('--cdc-highlight', action='store_true',
+                   help='CDC 路径用双线高亮 (==)')
+    p.add_argument('--no-legend', action='store_true',
+                   help='隐藏图例注释')
     p.add_argument('--cluster-depth', type=int, default=2,
                    help='模块聚类深度 (默认2, 即子模块级别)')
     p.add_argument('--rankdir', choices=['LR', 'TB', 'BT', 'RL'], default='LR',
@@ -502,6 +515,8 @@ def main():
             run_coverage(args)
         elif args.command == 'dot':
             run_dot(args)
+        elif args.command == 'mermaid':
+            run_mermaid(args)
         elif args.command == 'fanin-cone':
             run_fanin_cone(args)
         elif args.command == 'constraints':
@@ -810,6 +825,55 @@ def run_dot(args):
                 print(f"  {line}")
             if len(lines) > 50:
                 print(f"  ... 还有 {len(lines) - 50} 行")
+        
+        return {'success': True}
+    finally:
+        shutil.rmtree(output_dir, ignore_errors=True)
+
+
+def run_mermaid(args):
+    """Mermaid 导出（增强版：模块分组 + CDC 高亮 + 图例注释）"""
+    errors = check_tools()
+    if errors:
+        for e in errors:
+            print(f"错误: {e}", file=sys.stderr)
+        return {'success': False}
+    
+    from navisv.graph.graphviz_exporter import export_risk_mermaid
+    
+    output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
+    try:
+        dd = DesignDriver([args.file], output_dir=output_dir,
+                         include_dirs=args.include or [], cache=True)
+        dd.build()
+        dg = dd.design_graph
+        
+        module_prefix = args.subgraph if args.subgraph else ''
+        
+        mermaid = export_risk_mermaid(
+            dg,
+            module_prefix=module_prefix,
+            max_nodes=200,
+            rankdir=args.rankdir,
+            cdc_highlight=args.cdc_highlight,
+        )
+        
+        if args.output:
+            with open(args.output, 'w') as f:
+                f.write(mermaid)
+            print(f"\nMermaid 已导出: {args.output}")
+            print(f"  - 模块分组: depth={args.cluster_depth}")
+            print(f"  - CDC 高亮: {'是' if args.cdc_highlight else '否'}")
+            print(f"  - 图例: {'显示' if not args.no_legend else '隐藏'}")
+        elif args.json:
+            print(mermaid)
+        else:
+            lines = mermaid.split('\n')
+            print(f"\nMermaid 内容 ({len(lines)} 行):")
+            for line in lines[:60]:
+                print(f"  {line}")
+            if len(lines) > 60:
+                print(f"  ... 还有 {len(lines) - 60} 行")
         
         return {'success': True}
     finally:
