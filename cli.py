@@ -355,9 +355,17 @@ def main():
     p.add_argument('signal', nargs='?', help='信号路径 (省略则批量分析)')
 
     # navisv dot <file>
-    p = sub.add_parser('dot', help='DOT 导出')
+    p = sub.add_parser('dot', help='DOT 导出 (模块聚类 + CDC 高亮 + 图例)')
     p.add_argument('file', help='设计文件')
     p.add_argument('--subgraph', '-s', help='子图过滤模式 (如 module.*)')
+    p.add_argument('--cdc-highlight', action='store_true',
+                   help='CDC 路径用粉红粗边高亮')
+    p.add_argument('--no-legend', action='store_true',
+                   help='隐藏图例面板')
+    p.add_argument('--cluster-depth', type=int, default=2,
+                   help='模块聚类深度 (默认2, 即子模块级别)')
+    p.add_argument('--rankdir', choices=['LR', 'TB', 'BT', 'RL'], default='LR',
+                   help='图方向 (默认 LR)')
 
     # navisv check <file> or <filelist>
     p = sub.add_parser('check', help='检查源码编译状态')
@@ -756,34 +764,52 @@ def run_coverage(args):
 
 
 def run_dot(args):
-    """DOT 导出"""
+    """DOT 导出（增强版：模块聚类 + CDC 高亮 + 图例）"""
     errors = check_tools()
     if errors:
         for e in errors:
             print(f"错误: {e}", file=sys.stderr)
         return {'success': False}
     
+    from navisv.graph.graphviz_exporter import export_risk_dot
+    
     output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
     try:
-        dd = DesignDriver([args.file], output_dir=output_dir, include_dirs=args.include or [])
+        dd = DesignDriver([args.file], output_dir=output_dir, 
+                         include_dirs=args.include or [], cache=True)
         dd.build()
         dg = dd.design_graph
         
-        dot = dg.export_to_dot(subgraph=args.subgraph)
+        # 从 --subgraph 提取 module_prefix
+        module_prefix = args.subgraph if args.subgraph else ''
+        
+        dot = export_risk_dot(
+            dg,
+            module_prefix=module_prefix,
+            max_nodes=200,
+            max_edges=500,
+            rankdir=args.rankdir,
+            cdc_highlight=args.cdc_highlight,
+            show_legend=not args.no_legend,
+            cluster_depth=args.cluster_depth,
+        )
         
         if args.output:
             with open(args.output, 'w') as f:
                 f.write(dot)
             print(f"\nDOT 已导出: {args.output}")
+            print(f"  - 模块聚类: depth={args.cluster_depth}")
+            print(f"  - CDC 高亮: {'是' if args.cdc_highlight else '否'}")
+            print(f"  - 图例: {'显示' if not args.no_legend else '隐藏'}")
         elif args.json:
             print(dot)
         else:
             lines = dot.split('\n')
             print(f"\nDOT 内容 ({len(lines)} 行):")
-            for line in lines[:30]:
+            for line in lines[:50]:
                 print(f"  {line}")
-            if len(lines) > 30:
-                print(f"  ... 还有 {len(lines) - 30} 行")
+            if len(lines) > 50:
+                print(f"  ... 还有 {len(lines) - 50} 行")
         
         return {'success': True}
     finally:
