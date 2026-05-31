@@ -103,42 +103,38 @@ python3 cli.py check design.sv
 navisv 支持生成带信号关系的可视化图，**每个节点 = 信号，每个边 = 数据/时钟/条件关系**。
 
 ```bash
-# 风险分析图 — 指定图方向 (LR=左右, TB=上下)
-python3 cli.py -f dot --rankdir LR -o /tmp/risk.dot risk design.sv
-dot -Tpng /tmp/risk.dot -o /tmp/risk.png    # 生成 PNG
+# ── DOT 格式（Graphviz，适合生成高清 PNG）────────────────────────
+# 1. 风险分析图
+navisv dot design.sv -o /tmp/risk.dot
+dot -Tpng /tmp/risk.dot -Gbgcolor=white -o /tmp/risk.png
 
-# 验证覆盖图
-python3 cli.py -f dot --rankdir TB -o /tmp/verify.dot verify-map design.sv
-dot -Tpng /tmp/verify.dot -o /tmp/verify.png
+# 2. 验证覆盖图
+navisv dot design.sv -s top.fifo -o /tmp/fifo.dot
+dot -Tpng /tmp/fifo.dot -Gbgcolor=white -o /tmp/fifo.png
 
-# Mermaid (可直接粘贴到 GitHub / Typora)
-python3 cli.py -f mermaid risk design.sv
+# 3. CDC 高亮（跨时钟域路径用粉红粗边标注）
+navisv dot design.sv --cdc-highlight -o /tmp/cdc.dot
+
+# ── Mermaid 格式（可直接粘贴到 GitHub / Typora / 飞书）─────────
+navisv mermaid design.sv -o /tmp/design.mmd
+# 或直接输出到标准输出
+navisv mermaid design.sv -s top.submodule --cdc-highlight
+
+# ── 其他分析命令（均支持 --cdc-highlight）──────────────────────
+navisv temporal design.sv --cdc-highlight        # 时序关系图
+navisv risk design.sv --cdc-highlight           # 风险分析图
 ```
 
-**图方向 `--rankdir`**:
-| 参数 | 排列 | 适用场景 |
-|------|------|---------|
-| `LR` | 左右 | 宽图、数据流从左到右 |
-| `TB` | 上下 | 深图、层级结构从上到下 |
-| `BT` | 下上 | 反向层级 |
-| `RL` | 右左 | 从右到左的数据流 |
+**布局选项**:
+| 参数 | 效果 |
+|------|------|
+| `--rankdir LR` | 左右排列（默认，输入靠左，输出靠右） |
+| `--rankdir TB` | 上下排列（深图/层级结构） |
+| `--subgraph X` | 只显示指定子模块（过滤节点数量） |
+| `--cluster-depth N` | 模块聚类深度（默认2，即子模块级别） |
+| `--no-legend` | 隐藏图例面板 |
 
-**节点标签 (风险图):**
-```
-signal_name
-F=70 T=60       ← 功能复杂度 / 时序复杂度
-高入度(12)      ← 主要风险因素 (critical/high 时显示)
-```
-
-**边标签 (条件控制):**
-```
-sel=TRUE  ← 条件为真时激活
-sel=FALSE ← 条件为假时激活
-(reg)     ← 寄存器路径
-(seq-in)  ← 时序输入
-(seq-out)  ← 时序输出
-```
-
+**图例说明:**
 
 | 节点颜色 | 含义 |
 |---------|------|
@@ -147,57 +143,42 @@ sel=FALSE ← 条件为假时激活
 | 🟡 黄色 | medium (风险≥40) |
 | 🟢 绿色 | low (风险<40) |
 
-
 | 边样式 | 含义 |
 |--------|------|
 | 🔵 蓝虚线 | 组合逻辑驱动 |
 | 🔴 红粗线 | 寄存器时钟驱动 |
 | 🟠 橙实线 | 条件控制 |
+| ⚡ 粉红粗线 | CDC 跨时钟域路径（需加 `--cdc-highlight`） |
 
 ### 实际测试效果
 
-在真实项目上测试的图形输出:
+在真实 UART 控制器项目上测试的图形输出:
 
-**UART 控制器 (229节点/490边)**
-
+**uart_controller 全局视图（完整节点，无限制）**
 ![risk-LR](docs/img/UART_risk_LR.png)
-*风险图 LR (左右排列) — 937KB*
+*风险图 LR — 163KB，Input/Output Port 左右对齐，polyline 柔和折线，正方比例*
 
-![verify-TB](docs/img/UART_verify_TB.png)
-*验证覆盖图 TB (上下排列) — 305KB*
-
-
-**Pipeline 设计 (75节点/209边)**
-
-![pipeline-risk](docs/img/pipeline_risk_LR.png)
-*风险图 LR — 21KB*
-
-![pipeline-verify](docs/img/pipeline_verify_LR.png)
-*验证覆盖图 LR — 22KB*
-
-**测试项目:**
-
-| 项目 | 规模 | risk-LR | verify-LR |
-|------|------|---------|-----------|
-| UART | 229节点×490边 | 937KB ✅ | 590KB ✅ |
-| pipeline | 75节点×209边 | 21KB ✅ | 22KB ✅ |
-| chipsonar | 115节点×418边 | 44KB ✅ | 28KB ✅ |
-
-**Python API (更灵活):**
-```
-signal_name
-F=70 T=60       ← 功能复杂度 / 时序复杂度
-高入度(12)      ← 主要风险因素 (critical/high 时显示)
+**子模块分析示例（uart_tx 状态机）**
+```bash
+# 只看 uart_tx 子模块，带 CDC 高亮
+navisv dot design.sv -s uart_controller.uart_tx --cdc-highlight -o /tmp/uart_tx.dot
+dot -Tpng /tmp/uart_tx.dot -Gbgcolor=white -o /tmp/uart_tx.png
 ```
 
-**边标签 (条件控制):**
-```
-sel=TRUE  ← 条件为真时激活
-sel=FALSE ← 条件为假时激活
-(reg)     ← 寄存器路径
-(seq-in)  ← 时序输入
-(seq-out)  ← 时序输出
-```
+**生成命令对照表**:
+
+| 命令 | 输出格式 | 适用场景 |
+|------|---------|---------|
+| `navisv dot` | Graphviz DOT | 高清 PNG、专业报告 |
+| `navisv mermaid` | Mermaid | 快速预览、嵌入文档 |
+| `navisv temporal` | DOT + Mermaid | 时序路径分析 |
+| `navisv risk` | DOT + Mermaid | 风险等级分析 |
+
+| 项目 | 节点数 | risk 图大小 | 特点 |
+|------|--------|-----------|------|
+| UART | ~150 | 163KB | Input/Output Port 左右对齐，正方比例 |
+| pipeline | 75 | 21KB | 轻量快速 |
+| chipsonar | 115 | 44KB | 中等规模 |
 
 **Python API (更灵活):**
 ```python
@@ -231,7 +212,6 @@ dot = export_verify_dot(dd.design_graph, verify_report=vreport, max_nodes=100)
 | `max_nodes` | 最大节点数，按度数排序裁剪 |
 | `max_edges` | 最大边数，按重要性排序裁剪 |
 | `verify_report` | verify-map 的报告，用于着色覆盖状态 |
-
 
 ### 3. Python API (推荐 Agent 使用)
 
