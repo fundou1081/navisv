@@ -193,17 +193,39 @@ analyzer = RiskAnalyzer(dd.design_graph, 'top')
 analyzer.analyze()
 
 # DOT (Graphviz) - 适合生成高清图
-dot = export_risk_dot(dd.design_graph, module_prefix='top', max_nodes=100, max_edges=200)
+dot = export_risk_dot(
+    dd.design_graph,
+    module_prefix='top',
+    max_nodes=100, max_edges=200,
+    rankdir='LR',              # 布局方向: LR/TB/BT/RL
+    cdc_highlight=True,         # CDC 路径高亮
+    show_legend=True,           # 显示图例
+    cluster_depth=2,            # 模块聚类深度
+)
 
 # Mermaid - 适合粘贴到文档
-mmd = export_risk_mermaid(dd.design_graph, module_prefix='top', max_nodes=80)
+mmd = export_risk_mermaid(
+    dd.design_graph,
+    module_prefix='top',
+    max_nodes=80,
+    rankdir='LR',
+    cdc_highlight=True,
+)
 
 # 验证覆盖图
 from navisv.graph.verify_mapper import VerifyMapper
 from navisv.graph.graphviz_exporter import export_verify_dot
 mapper = VerifyMapper(dd.design_graph)
 vreport = mapper.analyze('top')
-dot = export_verify_dot(dd.design_graph, verify_report=vreport, max_nodes=100)
+dot = export_verify_dot(
+    dd.design_graph,
+    module_prefix='top',
+    max_nodes=100,
+    verify_report=vreport,
+    rankdir='LR',
+    cdc_highlight=True,
+    show_legend=True,
+)
 ```
 
 | 参数 | 说明 |
@@ -211,6 +233,10 @@ dot = export_verify_dot(dd.design_graph, verify_report=vreport, max_nodes=100)
 | `module_prefix` | 模块前缀，按模块筛选节点 |
 | `max_nodes` | 最大节点数，按度数排序裁剪 |
 | `max_edges` | 最大边数，按重要性排序裁剪 |
+| `rankdir` | 布局方向: `LR`（左右，默认）/ `TB`（上下）/ `BT`/`RL` |
+| `cdc_highlight` | `True` 时高亮 CDC 跨时钟域路径（粉红粗边） |
+| `show_legend` | `True` 时显示图例面板（默认） |
+| `cluster_depth` | 模块聚类深度（默认2，子模块级别） |
 | `verify_report` | verify-map 的报告，用于着色覆盖状态 |
 
 ### 3. Python API (推荐 Agent 使用)
