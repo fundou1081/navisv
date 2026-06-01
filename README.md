@@ -94,7 +94,7 @@ Step 3: 输出待验证清单   →  "这 5 个高风险信号完全没有覆盖
 
 ### 1. 安装依赖
 
-**推荐方式 — 一键编译脚本:**
+**推荐方式 — 一键编译脚本 (跨平台):**
 
 ```bash
 # 编译 slang + slang-netlist (Release 模式, 自动并行)
@@ -106,6 +106,26 @@ source .navisv_env
 # 验证
 navisv tools
 ```
+
+**支持的平台:**
+
+| 平台 | 包管理器 |
+|------|---------|
+| macOS (arm64 / x86_64) | Homebrew |
+| Linux (Ubuntu/Debian) | apt |
+| Linux (Fedora/RHEL) | dnf / yum |
+| Linux (Arch/Manjaro) | pacman |
+| Linux (Alpine) | apk |
+| Linux (openSUSE) | zypper |
+| Linux (WSL) | 同 Linux |
+| Windows (Git Bash / MSYS2) | choco / scoop / winget |
+| Windows (Cygwin) | choco / scoop |
+
+脚本会自动:
+- 检测平台和 CPU 核心数
+- 检测已安装的 C++ 编译器 (clang++ / g++ / MSVC)
+- 处理 Windows 的 .exe 后缀差异
+- 提示适合当前平台的依赖安装命令
 
 **脚本高级用法:**
 

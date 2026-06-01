@@ -39,6 +39,147 @@ warn()    { echo -e "${YELLOW}[WARN]${NC} $*"; }
 err()     { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 section() { echo -e "\n${CYAN}═══════════════════════════════════════════════════${NC}"; echo -e "${CYAN}  $*${NC}"; echo -e "${CYAN}═══════════════════════════════════════════════════${NC}"; }
 
+# ── 平台检测 ───────────────────────────────────────────────────────────
+detect_platform() {
+    local uname_s uname_m
+    uname_s=$(uname -s 2>/dev/null || echo "Unknown")
+    uname_m=$(uname -m 2>/dev/null || echo "Unknown")
+
+    PLATFORM_OS="unknown"
+    PLATFORM_ENV="native"     # native / msys2 / cygwin / wsl
+    PLATFORM_PKG_MGR=""        # brew / apt / dnf / pacman / choco / scoop
+    PLATFORM_INSTALL_CMD=""    # 安装 build 工具的提示命令
+    EXE_EXT=""                 # .exe on Windows
+
+    case "$uname_s" in
+        Darwin)
+            PLATFORM_OS="macos"
+            PLATFORM_PKG_MGR="brew"
+            PLATFORM_INSTALL_CMD="xcode-select --install && brew install cmake git"
+            ;;
+        Linux)
+            PLATFORM_OS="linux"
+            # 检测 WSL
+            if [[ -f /proc/version ]] && grep -qiE "microsoft|wsl" /proc/version 2>/dev/null; then
+                PLATFORM_ENV="wsl"
+            fi
+            # 检测发行版
+            if command -v apt &>/dev/null; then
+                PLATFORM_PKG_MGR="apt"
+                PLATFORM_INSTALL_CMD="sudo apt update && sudo apt install -y cmake g++ git build-essential"
+            elif command -v dnf &>/dev/null; then
+                PLATFORM_PKG_MGR="dnf"
+                PLATFORM_INSTALL_CMD="sudo dnf install -y cmake gcc-c++ git make"
+            elif command -v yum &>/dev/null; then
+                PLATFORM_PKG_MGR="yum"
+                PLATFORM_INSTALL_CMD="sudo yum install -y cmake gcc-c++ git make"
+            elif command -v pacman &>/dev/null; then
+                PLATFORM_PKG_MGR="pacman"
+                PLATFORM_INSTALL_CMD="sudo pacman -S --needed cmake gcc git make"
+            elif command -v apk &>/dev/null; then
+                PLATFORM_PKG_MGR="apk"
+                PLATFORM_INSTALL_CMD="sudo apk add cmake g++ git make musl-dev"
+            elif command -v zypper &>/dev/null; then
+                PLATFORM_PKG_MGR="zypper"
+                PLATFORM_INSTALL_CMD="sudo zypper install -y cmake gcc-c++ git make"
+            fi
+            ;;
+        MINGW*|MSYS*|CYGWIN*)
+            PLATFORM_OS="windows"
+            EXE_EXT=".exe"
+            if [[ "$uname_s" == CYGWIN* ]]; then
+                PLATFORM_ENV="cygwin"
+            else
+                PLATFORM_ENV="msys2"
+            fi
+            # Windows 上包管理器
+            if command -v choco &>/dev/null; then
+                PLATFORM_PKG_MGR="choco"
+                PLATFORM_INSTALL_CMD="choco install -y cmake git mingw make"
+            elif command -v scoop &>/dev/null; then
+                PLATFORM_PKG_MGR="scoop"
+                PLATFORM_INSTALL_CMD="scoop install cmake git make"
+            elif command -v winget &>/dev/null; then
+                PLATFORM_PKG_MGR="winget"
+                PLATFORM_INSTALL_CMD="winget install Kitware.CMake Git.MinGit"
+            else
+                PLATFORM_INSTALL_CMD="请安装 cmake, git, make (推荐: choco install cmake git mingw make)"
+            fi
+            ;;
+        *)
+            # Windows 备用检测 (如果 uname 不存在)
+            if [[ -n "${OS:-}" ]] && [[ "$OS" == "Windows_NT" ]]; then
+                PLATFORM_OS="windows"
+                EXE_EXT=".exe"
+            fi
+            ;;
+    esac
+
+    # 架构
+    PLATFORM_ARCH="$uname_m"
+    case "$uname_m" in
+        x86_64|amd64)  PLATFORM_ARCH="x86_64" ;;
+        aarch64|arm64) PLATFORM_ARCH="arm64" ;;
+        i386|i686)     PLATFORM_ARCH="x86" ;;
+    esac
+
+    # 友好的平台描述
+    case "$PLATFORM_OS" in
+        macos)   PLATFORM_DESC="macOS ($PLATFORM_ARCH)" ;;
+        linux)   PLATFORM_DESC="Linux ($PLATFORM_ARCH)$([[ "$PLATFORM_ENV" == "wsl" ]] && echo ' / WSL')" ;;
+        windows) PLATFORM_DESC="Windows ($PLATFORM_ARCH / $PLATFORM_ENV)" ;;
+        *)       PLATFORM_DESC="未知平台 ($uname_s $uname_m)" ;;
+    esac
+}
+
+# ── 检测 CPU 核心数 (跨平台) ──────────────────────────────────────────
+detect_cpu_count() {
+    local n=""
+    # 1. 尝试 nproc (Linux/Cygwin/MSYS2)
+    if command -v nproc &>/dev/null; then
+        n=$(nproc 2>/dev/null)
+    fi
+    # 2. macOS
+    if [[ -z "$n" ]] && command -v sysctl &>/dev/null; then
+        n=$(sysctl -n hw.ncpu 2>/dev/null)
+    fi
+    # 3. Windows 原生 (cmd)
+    if [[ -z "$n" ]] && command -v wmic &>/dev/null; then
+        n=$(wmic cpu get NumberOfLogicalProcessors 2>/dev/null | awk 'NR==2{print $1}')
+    fi
+    # 4. Windows PowerShell
+    if [[ -z "$n" ]] && command -v powershell &>/dev/null; then
+        n=$(powershell -Command "[Environment]::ProcessorCount" 2>/dev/null | tr -d '\r')
+    fi
+    # 5. fallback: /proc/cpuinfo (Linux)
+    if [[ -z "$n" ]] && [[ -r /proc/cpuinfo ]]; then
+        n=$(grep -c ^processor /proc/cpuinfo 2>/dev/null)
+    fi
+    # 6. fallback: 环境变量
+    if [[ -z "$n" ]] && [[ -n "${NUMBER_OF_PROCESSORS:-}" ]]; then
+        n="$NUMBER_OF_PROCESSORS"
+    fi
+    # 7. 硬编码 fallback
+    [[ -z "$n" ]] && n=4
+
+    echo "$n"
+}
+
+# ── 设置脚本生成器 (跨平台) ──────────────────────────────────────────
+setup_script_path() {
+    # 根据 shell 决定 .rc 文件
+    if [[ "$PLATFORM_OS" == "windows" ]]; then
+        SHELL_RC="$HOME/.bashrc"  # Git Bash 默认
+        if [[ -n "${BASH_ENV:-}" ]]; then
+            SHELL_RC="$BASH_ENV"
+        fi
+    elif [[ -n "${ZSH_VERSION:-}" ]] || [[ "$SHELL" == *"zsh"* ]]; then
+        SHELL_RC="$HOME/.zshrc"
+    else
+        SHELL_RC="$HOME/.bashrc"
+    fi
+}
+
 # ── 默认参数 ───────────────────────────────────────────────────────────
 BUILD_TYPE="Release"
 CLEAN_BUILD=0
@@ -47,12 +188,12 @@ SKIP_NETLIST=0
 PREFIX_DIR=""
 SLANG_DIR="$HOME/my_dv_proj/slang"
 NETLIST_DIR="$HOME/my_dv_proj/slang-netlist"
-JOBS=$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
+JOBS=4  # 后面会在 detect_platform 后覆盖
 
 # ── 帮助信息 ───────────────────────────────────────────────────────────
 usage() {
     cat <<EOF
-navisv 依赖安装脚本
+navisv 依赖安装脚本 (跨平台: macOS / Linux / Windows)
 
 用法:
     $0 [选项]
@@ -67,6 +208,11 @@ navisv 依赖安装脚本
     --netlist-dir DIR     slang-netlist 源码目录 (默认 ~/my_dv_proj/slang-netlist)
     --jobs N              并行编译数 (默认: 系统 CPU 核心数 = $JOBS)
     -h, --help            显示此帮助
+
+支持的平台:
+    macOS     Homebrew (arm64 / x86_64)
+    Linux     apt / dnf / yum / pacman / apk / zypper (含 WSL)
+    Windows   choco / scoop / winget (Git Bash / MSYS2 / Cygwin)
 
 示例:
     $0                              # 一键编译两者
@@ -100,6 +246,18 @@ done
 check_prerequisites() {
     section "检查前置条件"
 
+    # 平台检测
+    detect_platform
+    setup_script_path
+    ok "检测到平台: $PLATFORM_DESC"
+    if [[ -n "$PLATFORM_PKG_MGR" ]]; then
+        info "包管理器: $PLATFORM_PKG_MGR"
+    fi
+
+    # 检测 CPU 核心数
+    JOBS=$(detect_cpu_count)
+    info "CPU 核心数: $JOBS"
+
     local missing=0
     for cmd in cmake git make; do
         if ! command -v "$cmd" &>/dev/null; then
@@ -111,24 +269,36 @@ check_prerequisites() {
     if [[ $missing -eq 1 ]]; then
         echo ""
         echo "请先安装缺失的工具:"
-        echo "  macOS:  xcode-select --install && brew install cmake"
-        echo "  Ubuntu: sudo apt install cmake g++ git"
+        echo -e "  ${GREEN}$PLATFORM_INSTALL_CMD${NC}"
         exit 1
     fi
 
     # 检查 C++ 编译器
     if ! command -v g++ &>/dev/null && ! command -v clang++ &>/dev/null; then
-        err "缺少 C++ 编译器 (g++ 或 clang++)"
-        echo "  macOS:  xcode-select --install"
-        echo "  Ubuntu: sudo apt install g++"
-        exit 1
+        # 在 MSYS2 / Git Bash 下检查
+        if [[ "$PLATFORM_OS" == "windows" ]]; then
+            if ! command -v gcc &>/dev/null && ! command -v cl &>/dev/null; then
+                err "Windows 下缺少 C++ 编译器 (g++ 或 MSVC)"
+                echo "  推荐: choco install mingw"
+                exit 1
+            fi
+        else
+            err "缺少 C++ 编译器 (g++ 或 clang++)"
+            echo "  macOS:  xcode-select --install"
+            echo "  Linux:  sudo apt install g++"
+            exit 1
+        fi
     fi
 
     local cxx_compiler
     if command -v clang++ &>/dev/null; then
         cxx_compiler="clang++"
-    else
+    elif command -v g++ &>/dev/null; then
         cxx_compiler="g++"
+    elif command -v cl &>/dev/null; then
+        cxx_compiler="cl.exe (MSVC)"
+    else
+        cxx_compiler="unknown"
     fi
     ok "cmake, git, make, $cxx_compiler 都已安装"
 
@@ -187,17 +357,26 @@ build_slang() {
     fi
 
     # slang 的二进制在项目根目录 (CMake 自定义路径)
-    local slang_bin="$SLANG_DIR/slang"
-    if [[ ! -x "$slang_bin" ]]; then
-        # 某些版本可能在 build/bin 或 build/ 下
-        if [[ -x "$SLANG_DIR/build/bin/slang" ]]; then
-            slang_bin="$SLANG_DIR/build/bin/slang"
-        elif [[ -x "$SLANG_DIR/build/slang" ]]; then
-            slang_bin="$SLANG_DIR/build/slang"
-        else
-            err "未找到 slang 二进制文件"
-            exit 1
+    # Windows 下可能带 .exe 后缀
+    local slang_bin=""
+    for candidate in \
+        "$SLANG_DIR/slang${EXE_EXT}" \
+        "$SLANG_DIR/build/bin/slang${EXE_EXT}" \
+        "$SLANG_DIR/build/slang${EXE_EXT}" \
+        "$SLANG_DIR/build/Release/slang${EXE_EXT}" \
+        "$SLANG_DIR/build/Debug/slang${EXE_EXT}" \
+        "$SLANG_DIR/slang" \
+        "$SLANG_DIR/build/bin/slang" \
+        "$SLANG_DIR/build/slang"; do
+        if [[ -x "$candidate" ]]; then
+            slang_bin="$candidate"
+            break
         fi
+    done
+
+    if [[ -z "$slang_bin" ]]; then
+        err "未找到 slang 二进制文件 (尝试了 .exe 变体)"
+        exit 1
     fi
 
     # 测试
@@ -254,15 +433,24 @@ build_netlist() {
     fi
 
     # slang-netlist 的二进制在 build/tools/driver/ 下
-    local netlist_bin="$NETLIST_DIR/build/tools/driver/slang-netlist"
-    if [[ ! -x "$netlist_bin" ]]; then
-        # 备选路径
-        if [[ -x "$NETLIST_DIR/build/bin/slang-netlist" ]]; then
-            netlist_bin="$NETLIST_DIR/build/bin/slang-netlist"
-        else
-            err "未找到 slang-netlist 二进制文件"
-            exit 1
+    # Windows 下可能带 .exe 后缀
+    local netlist_bin=""
+    for candidate in \
+        "$NETLIST_DIR/build/tools/driver/slang-netlist${EXE_EXT}" \
+        "$NETLIST_DIR/build/bin/slang-netlist${EXE_EXT}" \
+        "$NETLIST_DIR/build/Release/slang-netlist${EXE_EXT}" \
+        "$NETLIST_DIR/build/Debug/slang-netlist${EXE_EXT}" \
+        "$NETLIST_DIR/build/tools/driver/slang-netlist" \
+        "$NETLIST_DIR/build/bin/slang-netlist"; do
+        if [[ -x "$candidate" ]]; then
+            netlist_bin="$candidate"
+            break
         fi
+    done
+
+    if [[ -z "$netlist_bin" ]]; then
+        err "未找到 slang-netlist 二进制文件 (尝试了 .exe 变体)"
+        exit 1
     fi
 
     # 测试
@@ -288,13 +476,13 @@ install_to_prefix() {
     mkdir -p "$PREFIX_DIR"
 
     if [[ -n "${SLANG_BIN:-}" ]] && [[ -x "$SLANG_BIN" ]]; then
-        cp "$SLANG_BIN" "$PREFIX_DIR/"
-        ok "已安装 slang → $PREFIX_DIR/slang"
+        cp "$SLANG_BIN" "$PREFIX_DIR/slang${EXE_EXT}"
+        ok "已安装 slang → $PREFIX_DIR/slang${EXE_EXT}"
     fi
 
     if [[ -n "${NETLIST_BIN:-}" ]] && [[ -x "$NETLIST_BIN" ]]; then
-        cp "$NETLIST_BIN" "$PREFIX_DIR/"
-        ok "已安装 slang-netlist → $PREFIX_DIR/slang-netlist"
+        cp "$NETLIST_BIN" "$PREFIX_DIR/slang-netlist${EXE_EXT}"
+        ok "已安装 slang-netlist → $PREFIX_DIR/slang-netlist${EXE_EXT}"
     fi
 }
 
@@ -329,11 +517,23 @@ print_summary() {
     echo ""
     echo -e "  ${GREEN}source .navisv_env${NC}    # 当前会话"
     echo ""
-    echo "或永久生效 (加到 ~/.zshrc 或 ~/.bashrc):"
+    echo "或永久生效 (加到 $SHELL_RC):"
     echo ""
     echo "  export NAVISV_SLANG_BIN=\"${SLANG_BIN:-}\""
     echo "  export NAVISV_NETLIST_BIN=\"${NETLIST_BIN:-}\""
     echo ""
+
+    # Windows 额外提示
+    if [[ "$PLATFORM_OS" == "windows" ]]; then
+        echo "Windows 下设置环境变量的方式:"
+        echo "  1. PowerShell (当前会话):"
+        echo "     \$env:NAVISV_SLANG_BIN = '${SLANG_BIN:-}'"
+        echo "     \$env:NAVISV_NETLIST_BIN = '${NETLIST_BIN:-}'"
+        echo "  2. 系统设置 (永久):"
+        echo "     setx NAVISV_SLANG_BIN \"${SLANG_BIN:-}\""
+        echo "     setx NAVISV_NETLIST_BIN \"${NETLIST_BIN:-}\""
+        echo ""
+    fi
 
     # 验证
     if [[ -n "${SLANG_BIN:-}" ]] && [[ -n "${NETLIST_BIN:-}" ]]; then
