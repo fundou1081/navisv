@@ -94,6 +94,31 @@ Step 3: 输出待验证清单   →  "这 5 个高风险信号完全没有覆盖
 
 ### 1. 安装依赖
 
+**推荐方式 — 一键编译脚本:**
+
+```bash
+# 编译 slang + slang-netlist (Release 模式, 自动并行)
+./scripts/install_dependencies.sh
+
+# 编译完后 source 环境变量
+source .navisv_env
+
+# 验证
+navisv tools
+```
+
+**脚本高级用法:**
+
+```bash
+./scripts/install_dependencies.sh --clean         # 清理后重新编译
+./scripts/install_dependencies.sh --debug         # Debug 构建
+./scripts/install_dependencies.sh --prefix /opt/navisv/bin   # 安装到指定目录
+./scripts/install_dependencies.sh --skip-netlist  # 只编译 slang
+./scripts/install_dependencies.sh --help          # 查看所有选项
+```
+
+**手动方式 (不推荐):**
+
 ```bash
 # 前置条件: cmake, C++ 编译器
 # macOS: xcode-select --install
