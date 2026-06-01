@@ -2,11 +2,43 @@
 
 > 基于 slang 的 SystemVerilog 语义导航工具，为 AI Agent 提供 RTL 调试能力
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
+[![Tests](https://img.shields.io/badge/tests-239%20passed-brightgreen.svg)](#测试状态)
+
 navisv 将 RTL 设计转化为结构化查询，让 AI Agent 能够直接回答：
 - 这个信号从哪来？到哪去？
 - 这个变量被哪些约束限制？
 - 这个 coverpoint 的 bin 定义合理吗？
 - **哪些关键信号还没有被验证覆盖？** ← navisv 独有的能力
+
+## ✨ 核心特性
+
+- **路径追踪** - 两点间完整路径，自动识别时序/组合/条件关系
+- **验证覆盖缺口检测** - 自动发现未覆盖的高风险信号
+- **CDC 跨时钟域分析** - 识别跨时钟域路径、同步器缺失
+- **约束 / CoverGroup / SVA 查询** - 三者交叉验证
+- **多格式可视化** - Graphviz DOT / Mermaid 两重输出，支持 CDC 高亮
+- **Python API + CLI 双接口** - Agent 可编程、设计师可直接调用
+
+## 📑 目录
+
+- [🔥 杀手级应用: 验证覆盖缺口检测](#-杀手级应用-验证覆盖缺口检测)
+- [快速上手](#快速上手)
+  - [1. 安装依赖](#1-安装依赖)
+  - [2. 5 分钟上手](#2-5-分钟上手)
+  - [2.5 图形可视化 (DOT / Mermaid)](#25-图形可视化-dot--mermaid)
+- [3. Python API (推荐 Agent 使用)](#3-python-api-推荐-agent-使用)
+- [能力总览](#能力总览)
+- [功能一览](#功能一览)
+- [实际效果示例](#实际效果示例)
+- [API 参考](#api-参考)
+- [CLI 命令速查](#cli-命令速查)
+- [架构](#架构)
+- [测试状态](#测试状态)
+- [项目结构](#项目结构)
+- [环境要求](#环境要求)
+- [许可证](#许可证)
 
 ## 🔥 杀手级应用: 验证覆盖缺口检测
 
@@ -918,4 +950,28 @@ navisv/
 
 ## 许可证
 
-MIT
+本项目采用 [MIT 许可证](LICENSE) - 详见 [LICENSE](LICENSE) 文件。
+
+```
+MIT License
+
+Copyright (c) 2026 方浩博 (Fang Haobo)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
