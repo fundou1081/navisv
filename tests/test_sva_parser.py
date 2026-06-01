@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from navisv import DesignDriver
 
-TEST_SVA = '/tmp/test_sva.sv'
+TEST_SVA = os.path.join(os.path.dirname(__file__), 'fixtures', 'test_sva.sv')
 
 
 @pytest.fixture(scope='module')

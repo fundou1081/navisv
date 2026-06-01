@@ -393,25 +393,31 @@ class DesignDriver:
             # 即使解析失败也创建空图
             import networkx as nx
             self._design_graph = DesignGraph(nx.MultiDiGraph())
+            # 即使图构建失败，AST 仍可用于 ConstraintGraph / SVAParser / CallGraph / UVM
+            self._build_constraint_graph()
+            self._build_covergroup_analyzer()
+            self._build_sva_parser()
+            self._build_call_graph()
+            self._build_uvm_tb()
             return
-        
-        self._graph_builder = GraphBuilder(self._ast_parser, self._netlist_parser, 
+
+        self._graph_builder = GraphBuilder(self._ast_parser, self._netlist_parser,
                                                self._ast_json_path, self._source_files)
         graph = self._graph_builder.build()
         self._design_graph = DesignGraph(graph, self._graph_builder._signal_conditions, self._netlist_driver)
-        
+
         # 构建 ConstraintGraph
         self._build_constraint_graph()
-        
+
         # 构建 CovergroupAnalyzer
         self._build_covergroup_analyzer()
-        
+
         # 构建 SVAParser
         self._build_sva_parser()
-        
+
         # 构建 CallGraph
         self._build_call_graph()
-        
+
         # 构建 UVM Testbench
         self._build_uvm_tb()
     
