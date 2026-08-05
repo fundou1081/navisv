@@ -213,6 +213,9 @@
 
       // (Stage 10) 导出菜单 (只需要绑一次)
       bindExportMenu();
+
+      // (Stage 12) 键盘快捷键
+      bindKeyboardShortcuts();
     });
   }
 
@@ -433,6 +436,171 @@
         btn.classList.remove('active');
       }
     });
+  }
+
+  // ---------------------------------------------------------------------
+  // (Stage 12) Keyboard shortcuts
+  //  - Cmd+F / Ctrl+F → focus search (prevent browser find)
+  //  - Esc → close sidebar / clear search / close help (优先级)
+  //  - +/-/0 → zoom in/out/reset
+  //  - C → toggle CDC
+  //  - 1/2/3/4 → toggle port/state/operator/literal
+  //  - ? / / → show help modal
+  //  - 搜索 input 获得焦点时, 只允许 Esc
+  // ---------------------------------------------------------------------
+
+  function isTypingInSearch(target) {
+    if (!target) return false;
+    const tag = target.tagName;
+    return tag === 'INPUT' || tag === 'TEXTAREA' || target.isContentEditable;
+  }
+
+  function openHelp() {
+    const m = document.getElementById('help-modal');
+    if (m) m.removeAttribute('hidden');
+  }
+
+  function closeHelp() {
+    const m = document.getElementById('help-modal');
+    if (m) m.setAttribute('hidden', '');
+  }
+
+  function isHelpOpen() {
+    const m = document.getElementById('help-modal');
+    return m && !m.hasAttribute('hidden');
+  }
+
+  function isSidebarOpen() {
+    const s = document.getElementById('sidebar');
+    return s && !s.classList.contains('sidebar-closed');
+  }
+
+  function closeSidebar() {
+    const s = document.getElementById('sidebar');
+    if (s) s.classList.add('sidebar-closed');
+  }
+
+  function focusSearch() {
+    const s = document.getElementById('search-input');
+    if (s) {
+      s.focus();
+      s.select && s.select();
+    }
+  }
+
+  function clearSearch() {
+    const s = document.getElementById('search-input');
+    if (s && s.value) {
+      s.value = '';
+      applyFilters();
+    }
+  }
+
+  function zoomIn() {
+    zoomAt(1.25, window.innerWidth / 2, window.innerHeight / 2);
+  }
+
+  function zoomOut() {
+    zoomAt(1 / 1.25, window.innerWidth / 2, window.innerHeight / 2);
+  }
+
+  function resetViewAction() {
+    resetView();
+  }
+
+  function toggleCdc() {
+    const btn = document.getElementById('toggle-cdc');
+    if (btn) btn.click();
+  }
+
+  function toggleCheckbox(id) {
+    const cb = document.getElementById(id);
+    if (cb) {
+      cb.checked = !cb.checked;
+      applyFilters();
+    }
+  }
+
+  function handleShortcut(e) {
+    // Esc 总是处理 (包括 input 内)
+    if (e.key === 'Escape') {
+      if (isHelpOpen()) { closeHelp(); e.preventDefault(); return; }
+      if (isSidebarOpen()) { closeSidebar(); e.preventDefault(); return; }
+      // 如果在 input 中, 清除搜索
+      const s = document.getElementById('search-input');
+      if (s && s.value) { clearSearch(); e.preventDefault(); }
+      return;
+    }
+
+    // input/textarea 中跳过其他快捷键
+    if (isTypingInSearch(e.target)) return;
+
+    // Cmd/Ctrl+F → focus search
+    if ((e.metaKey || e.ctrlKey) && (e.key === 'f' || e.key === 'F')) {
+      e.preventDefault();
+      focusSearch();
+      return;
+    }
+
+    // 单字符快捷键
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+
+    switch (e.key) {
+      case '+':
+      case '=':
+        e.preventDefault();
+        zoomIn();
+        break;
+      case '-':
+      case '_':
+        e.preventDefault();
+        zoomOut();
+        break;
+      case '0':
+        e.preventDefault();
+        resetViewAction();
+        break;
+      case 'c':
+      case 'C':
+        e.preventDefault();
+        toggleCdc();
+        break;
+      case '1':
+        e.preventDefault();
+        toggleCheckbox('show-port');
+        break;
+      case '2':
+        e.preventDefault();
+        toggleCheckbox('show-state');
+        break;
+      case '3':
+        e.preventDefault();
+        toggleCheckbox('show-operator');
+        break;
+      case '4':
+        e.preventDefault();
+        toggleCheckbox('show-literal');
+        break;
+      case '?':
+      case '/':
+        e.preventDefault();
+        openHelp();
+        break;
+    }
+  }
+
+  function bindKeyboardShortcuts() {
+    document.addEventListener('keydown', handleShortcut);
+    // close 按钮
+    const closeBtn = document.getElementById('help-close');
+    if (closeBtn) closeBtn.addEventListener('click', closeHelp);
+    // 点击 modal overlay 关闭
+    const modal = document.getElementById('help-modal');
+    if (modal) {
+      modal.addEventListener('click', function (e) {
+        if (e.target === modal) closeHelp();
+      });
+    }
   }
 
   function setupPanZoom() {

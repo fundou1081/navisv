@@ -862,3 +862,217 @@ class TestExportCss:
             content = f.read()
         assert '.export-item' in content
         assert '.export-item:hover' in content
+
+
+class TestKeyboardShortcutsHtml:
+    """Stage 12 - help modal HTML 结构"""
+
+    @pytest.fixture
+    def html(self, tmp_path):
+        return _build_html(tmp_path, view='dataflow', filter_clock_reset=True)
+
+    def test_help_modal_present(self, html):
+        """应有 #help-modal 元素"""
+        with open(html) as f:
+            content = f.read()
+        assert 'id="help-modal"' in content
+
+    def test_help_modal_hidden_by_default(self, html):
+        """help modal 默认应有 hidden 属性"""
+        with open(html) as f:
+            content = f.read()
+        # 应有 'role="dialog"' 和 'hidden' 在 modal 上
+        assert 'role="dialog"' in content
+        assert 'hidden' in content
+
+    def test_modal_close_button_present(self, html):
+        """应有 #help-close × 按钮"""
+        with open(html) as f:
+            content = f.read()
+        assert 'id="help-close"' in content
+
+    def test_shortcut_table_present(self, html):
+        """应有 .shortcut-table 表格"""
+        with open(html) as f:
+            content = f.read()
+        assert 'shortcut-table' in content
+
+    def test_shortcut_keys_documented(self, html):
+        """所有快捷键都应记录在表格里"""
+        with open(html) as f:
+            content = f.read()
+        # 11 个快捷键
+        for key_desc in (
+            'Cmd', 'Ctrl', 'Focus search',
+            'Close sidebar',
+            'Zoom in', 'Zoom out', 'Reset view',
+            'Toggle CDC',
+            'Toggle Port', 'Toggle State', 'Toggle Operator', 'Toggle Literal',
+            'Show this help',
+        ):
+            assert key_desc in content, f"Missing shortcut '{key_desc}' in help table"
+
+    def test_kbd_element_present(self, html):
+        """应使用 <kbd> 标签包裹按键名"""
+        with open(html) as f:
+            content = f.read()
+        assert '<kbd>' in content
+        assert '</kbd>' in content
+
+
+class TestKeyboardShortcutsJs:
+    """Stage 12 - JS 快捷键逻辑"""
+
+    @pytest.fixture
+    def html(self, tmp_path):
+        return _build_html(tmp_path, view='dataflow', filter_clock_reset=True)
+
+    def test_bind_keyboard_shortcuts_function(self, html):
+        """应有 bindKeyboardShortcuts 函数"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function bindKeyboardShortcuts' in content
+
+    def test_handle_shortcut_function(self, html):
+        """应有 handleShortcut 分发函数"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function handleShortcut' in content
+
+    def test_is_typing_in_search_helper(self, html):
+        """应有 isTypingInSearch helper (input focus 检测)"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function isTypingInSearch' in content
+        assert 'INPUT' in content or 'TEXTAREA' in content
+
+    def test_open_close_help_helpers(self, html):
+        """应有 openHelp / closeHelp helpers"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function openHelp' in content
+        assert 'function closeHelp' in content
+
+    def test_close_sidebar_helper(self, html):
+        """应有 closeSidebar helper"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function closeSidebar' in content
+
+    def test_focus_search_helper(self, html):
+        """应有 focusSearch helper"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function focusSearch' in content
+
+    def test_clear_search_helper(self, html):
+        """应有 clearSearch helper (Esc 清空搜索)"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function clearSearch' in content
+
+    def test_zoom_in_out_helpers(self, html):
+        """应有 zoomIn / zoomOut helpers"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function zoomIn' in content
+        assert 'function zoomOut' in content
+
+    def test_toggle_checkbox_helper(self, html):
+        """应有 toggleCheckbox helper (kind 过滤)"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function toggleCheckbox' in content
+
+    def test_cmd_f_prevents_default(self, html):
+        """Cmd/Ctrl+F 应 preventDefault (覆盖浏览器 find)"""
+        with open(html) as f:
+            content = f.read()
+        # metaKey || ctrlKey && 'f'
+        assert 'metaKey' in content
+        assert 'ctrlKey' in content
+        assert "'f'" in content or '"f"' in content
+        assert 'preventDefault()' in content
+
+    def test_esc_handler_priority(self, html):
+        """Esc 应优先处理 (即使在 input 中)"""
+        with open(html) as f:
+            content = f.read()
+        # Esc 应该在 isTypingInSearch 检查之前
+        assert "'Escape'" in content or '"Escape"' in content
+
+    def test_modifier_keys_skip(self, html):
+        """Cmd/Ctrl/Alt 按下时其他快捷键应跳过"""
+        with open(html) as f:
+            content = f.read()
+        assert 'metaKey || e.ctrlKey || e.altKey' in content or 'altKey' in content
+
+    def test_help_close_button_handler(self, html):
+        """help-close 应绑 click handler"""
+        with open(html) as f:
+            content = f.read()
+        assert "getElementById('help-close')" in content
+
+    def test_modal_overlay_click_closes(self, html):
+        """点击 modal overlay (非内容) 应关闭"""
+        with open(html) as f:
+            content = f.read()
+        assert "e.target === modal" in content
+
+    def test_keydown_listener_attached(self, html):
+        """document 应绑 keydown listener"""
+        with open(html) as f:
+            content = f.read()
+        assert "'keydown'" in content
+        assert 'handleShortcut' in content
+
+    def test_bind_keyboard_shortcuts_called(self, html):
+        """render().then() 后应调 bindKeyboardShortcuts()"""
+        with open(html) as f:
+            content = f.read()
+        assert 'bindKeyboardShortcuts()' in content
+
+
+class TestKeyboardShortcutsCss:
+    """Stage 12 - modal CSS 样式"""
+
+    @pytest.fixture
+    def html(self, tmp_path):
+        return _build_html(tmp_path, view='dataflow', filter_clock_reset=True)
+
+    def test_modal_overlay_full_screen(self, html):
+        """.modal-overlay 应 full-screen + 背景遮罩"""
+        with open(html) as f:
+            content = f.read()
+        assert '.modal-overlay' in content
+        assert 'position: fixed' in content
+        assert 'rgba(0, 0, 0, 0.4)' in content or 'rgba(0,0,0,0.4)' in content
+
+    def test_modal_overlay_hidden(self, html):
+        """.modal-overlay[hidden] 应 display: none"""
+        with open(html) as f:
+            content = f.read()
+        assert '.modal-overlay[hidden]' in content
+
+    def test_modal_content_centered(self, html):
+        """.modal-content 应 flex 居中 + white 背景 + 阴影"""
+        with open(html) as f:
+            content = f.read()
+        assert '.modal-content' in content
+        assert 'border-radius' in content
+        assert 'box-shadow' in content
+
+    def test_kbd_style(self, html):
+        """<kbd> 应有 monospace + 背景 + 边框"""
+        with open(html) as f:
+            content = f.read()
+        assert 'kbd' in content
+        assert 'monospace' in content
+        assert 'border:' in content or 'border ' in content
+
+    def test_shortcut_table_style(self, html):
+        """.shortcut-table 应 border-collapse"""
+        with open(html) as f:
+            content = f.read()
+        assert '.shortcut-table' in content
+        assert 'border-collapse' in content

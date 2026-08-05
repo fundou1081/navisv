@@ -91,6 +91,37 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
 </aside>
 <div id="info">Click any node or edge to see details.</div>
 
+<!-- (Stage 12) 快捷键帮助面板: 按 ? 弹窗显示所有快捷键 -->
+<div id="help-modal" class="modal-overlay" hidden role="dialog" aria-label="Keyboard shortcuts">
+  <div class="modal-content">
+    <div class="modal-header">
+      <span class="modal-title">⌨ Keyboard Shortcuts</span>
+      <button type="button" id="help-close" class="modal-close" title="Close">×</button>
+    </div>
+    <div class="modal-body">
+      <table class="shortcut-table">
+        <thead>
+          <tr><th>Key</th><th>Action</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><kbd>Cmd</kbd>+<kbd>F</kbd> / <kbd>Ctrl</kbd>+<kbd>F</kbd></td><td>Focus search</td></tr>
+          <tr><td><kbd>Esc</kbd></td><td>Close sidebar / clear search</td></tr>
+          <tr><td><kbd>+</kbd> / <kbd>=</kbd></td><td>Zoom in</td></tr>
+          <tr><td><kbd>−</kbd></td><td>Zoom out</td></tr>
+          <tr><td><kbd>0</kbd></td><td>Reset view</td></tr>
+          <tr><td><kbd>C</kbd></td><td>Toggle CDC highlight</td></tr>
+          <tr><td><kbd>1</kbd></td><td>Toggle Port nodes</td></tr>
+          <tr><td><kbd>2</kbd></td><td>Toggle State nodes</td></tr>
+          <tr><td><kbd>3</kbd></td><td>Toggle Operator nodes</td></tr>
+          <tr><td><kbd>4</kbd></td><td>Toggle Literal nodes</td></tr>
+          <tr><td><kbd>?</kbd> / <kbd>/</kbd></td><td>Show this help</td></tr>
+        </tbody>
+      </table>
+      <p class="modal-hint">Tip: shortcuts are disabled when typing in search input.</p>
+    </div>
+  </div>
+</div>
+
 <script>
 {elkjs_script}
 </script>
