@@ -22,6 +22,7 @@ Stage 5    真实 RTL 测试                           → 0.5h (2026-08-06) —
 Stage 6    examples + README + push                → 0.5h (2026-08-06)
 Stage 7    HTML viewer pan/zoom (wheel/drag/btns)  → 0.5h (2026-08-06)
 Stage 9    节点/边详情侧边栏 + 跳转源码             → 0.5h (2026-08-06)
+Stage 10   多格式导出 toolbar (SVG/PNG/JSON/Mermaid)  → 0.5h (2026-08-06)
 Stage 6    examples + README + push                → 1h
 ```
 
