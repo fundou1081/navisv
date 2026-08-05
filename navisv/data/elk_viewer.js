@@ -330,14 +330,24 @@
         });
         if (!node) return;
         const p = node.properties || {};
-        info.textContent =
-          'Node: ' + id + '\n' +
-          'Kind: ' + (p.kind || 'N/A') + '\n' +
-          'Direction: ' + (p.direction || 'N/A') + '\n' +
-          'Module: ' + (p.module || 'N/A') + '\n' +
-          'File: ' + (p.file || 'N/A') + '\n' +
-          'Line: ' + (p.line || 'N/A') + '\n' +
-          'Timing: ' + (p.timing || 'N/A');
+        // (Stage 9) 节点详情侧边栏 — 替换 #info 文本式展示
+        const sidebar = document.getElementById('sidebar');
+        const sidebarBody = document.getElementById('sidebar-body');
+        const sidebarTitle = document.getElementById('sidebar-title');
+        if (sidebar && sidebarBody && sidebarTitle) {
+          renderNodeDetails(node, layouted, sidebarBody, sidebarTitle);
+          sidebar.classList.remove('sidebar-closed');
+        } else {
+          // 后备: 底部 #info 文本
+          info.textContent =
+            'Node: ' + id + '\n' +
+            'Kind: ' + (p.kind || 'N/A') + '\n' +
+            'Direction: ' + (p.direction || 'N/A') + '\n' +
+            'Module: ' + (p.module || 'N/A') + '\n' +
+            'File: ' + (p.file || 'N/A') + '\n' +
+            'Line: ' + (p.line || 'N/A') + '\n' +
+            'Timing: ' + (p.timing || 'N/A');
+        }
       });
     });
 
@@ -349,18 +359,195 @@
         });
         if (!edge) return;
         const p = edge.properties || {};
-        info.textContent =
-          'Edge: ' + id + '\n' +
-          'Timing: ' + (p.timing || 'N/A') + '\n' +
-          'Edge kind: ' + (p.edge_kind || 'N/A') + '\n' +
-          'Condition: ' + (p.condition || '(none)') + '\n' +
-          'Condition kind: ' + (p.condition_kind || 'N/A') + '\n' +
-          'Control signals: ' +
-          ((p.condition_signals || []).join(', ') || '(none)') + '\n' +
-          'CDC: ' + (p.cdc ? 'YES' : 'no') + '\n' +
-          'Path count: ' + (p.path_count || 1);
+        // (Stage 9) 边详情侧边栏
+        const sidebar = document.getElementById('sidebar');
+        const sidebarBody = document.getElementById('sidebar-body');
+        const sidebarTitle = document.getElementById('sidebar-title');
+        if (sidebar && sidebarBody && sidebarTitle) {
+          renderEdgeDetails(edge, layouted, sidebarBody, sidebarTitle);
+          sidebar.classList.remove('sidebar-closed');
+        } else {
+          info.textContent =
+            'Edge: ' + id + '\n' +
+            'Timing: ' + (p.timing || 'N/A') + '\n' +
+            'Edge kind: ' + (p.edge_kind || 'N/A') + '\n' +
+            'Condition: ' + (p.condition || '(none)') + '\n' +
+            'Condition kind: ' + (p.condition_kind || 'N/A') + '\n' +
+            'Control signals: ' +
+            ((p.condition_signals || []).join(', ') || '(none)') + '\n' +
+            'CDC: ' + (p.cdc ? 'YES' : 'no') + '\n' +
+            'Path count: ' + (p.path_count || 1);
+        }
       });
     });
+
+    // (Stage 9) 侧边栏关闭按钮
+    const closeBtn = document.getElementById('sidebar-close');
+    if (closeBtn) {
+      closeBtn.addEventListener('click', function () {
+        const sb = document.getElementById('sidebar');
+        if (sb) sb.classList.add('sidebar-closed');
+      });
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // (Stage 9) Sidebar rendering
+  // ---------------------------------------------------------------------
+
+  // 辅助: 转义 HTML (防 XSS)
+  function escHtml(s) {
+    return escapeHtml(String(s));
+  }
+
+  // 辅助: 找节点label (elkjs 把 text 放在 labels[0].text)
+  function getNodeLabel(node) {
+    return (node.labels && node.labels[0] && node.labels[0].text) || node.id || '';
+  }
+
+  // 辅助: 节点入边 (target == nodeId)
+  function getIncomingEdges(nodeId, layouted) {
+    return (layouted.edges || []).filter(function (e) {
+      return e.targets && e.targets.indexOf(nodeId) >= 0;
+    });
+  }
+
+  // 辅助: 节点出边 (sources[0] == nodeId)
+  function getOutgoingEdges(nodeId, layouted) {
+    return (layouted.edges || []).filter(function (e) {
+      return e.sources && e.sources.indexOf(nodeId) >= 0;
+    });
+  }
+
+  // 辅助: 从 source/target ID 找节点 label
+  function labelForEndpoint(endpointId, layouted) {
+    for (const c of (layouted.children || [])) {
+      if (c.id === endpointId) return getNodeLabel(c);
+    }
+    return endpointId;  // fallback
+  }
+
+  // 跳转源码: file:// + path + #Lline
+  function buildSourceLink(file, line) {
+    if (!file || file === 'N/A') return null;
+    // 简单 URL encode
+    const encoded = file.split('/').map(encodeURIComponent).join('/');
+    return 'file://' + encoded + (line ? '#L' + line : '');
+  }
+
+  // 渲染节点详情 (侧边栏主体)
+  function renderNodeDetails(node, layouted, sidebarBody, sidebarTitle) {
+    const p = node.properties || {};
+    const id = node.id || '';
+    const label = getNodeLabel(node);
+    const kind = p.kind || 'N/A';
+    const incoming = getIncomingEdges(id, layouted);
+    const outgoing = getOutgoingEdges(id, layouted);
+
+    // 标题
+    sidebarTitle.textContent = (kind !== 'N/A' ? kind + ': ' : '') + label;
+
+    let html = '';
+    // 基本信息 (key-value table)
+    html += '<table class="sidebar-props">';
+    html += propRow('ID', id);
+    html += propRow('Kind', kind);
+    html += propRow('Direction', p.direction || 'N/A');
+    html += propRow('Module', p.module || 'N/A');
+    html += propRow('Width', p.width || 'N/A');
+    html += propRow('Timing', p.timing || 'N/A');
+    if (p.file && p.file !== 'N/A') {
+      const srcLink = buildSourceLink(p.file, p.line);
+      html += propRowHtml('Location',
+        '<span class="loc-file">' + escHtml(p.file) + '</span>' +
+        (p.line ? '<span class="loc-line">:' + escHtml(p.line) + '</span>' : '') +
+        (srcLink ? ' <a class="source-link" href="' + srcLink +
+          '" target="_blank" rel="noopener">view source ↗</a>' : ''));
+    } else {
+      html += propRow('File', 'N/A');
+    }
+    html += '</table>';
+
+    // 入边列表
+    html += '<h3 class="sidebar-section">Incoming (' + incoming.length + ')</h3>';
+    if (incoming.length === 0) {
+      html += '<p class="sidebar-empty-mini">No incoming edges.</p>';
+    } else {
+      html += '<ul class="edge-list">';
+      incoming.slice(0, 20).forEach(function (e) {
+        const src = (e.sources && e.sources[0]) || '?';
+        const srcLabel = labelForEndpoint(src, layouted);
+        html += '<li class="edge-item">' + escHtml(srcLabel) +
+                ' <span class="edge-arrow">→</span> ' +
+                escHtml(label) + '</li>';
+      });
+      html += '</ul>';
+      if (incoming.length > 20) {
+        html += '<p class="sidebar-more">… and ' +
+                (incoming.length - 20) + ' more</p>';
+      }
+    }
+
+    // 出边列表
+    html += '<h3 class="sidebar-section">Outgoing (' + outgoing.length + ')</h3>';
+    if (outgoing.length === 0) {
+      html += '<p class="sidebar-empty-mini">No outgoing edges.</p>';
+    } else {
+      html += '<ul class="edge-list">';
+      outgoing.slice(0, 20).forEach(function (e) {
+        const tgt = (e.targets && e.targets[0]) || '?';
+        const tgtLabel = labelForEndpoint(tgt, layouted);
+        html += '<li class="edge-item">' + escHtml(label) +
+                ' <span class="edge-arrow">→</span> ' +
+                escHtml(tgtLabel) + '</li>';
+      });
+      html += '</ul>';
+      if (outgoing.length > 20) {
+        html += '<p class="sidebar-more">… and ' +
+                (outgoing.length - 20) + ' more</p>';
+      }
+    }
+
+    sidebarBody.innerHTML = html;
+  }
+
+  // 渲染边详情 (侧边栏主体)
+  function renderEdgeDetails(edge, layouted, sidebarBody, sidebarTitle) {
+    const p = edge.properties || {};
+    const id = edge.id || '';
+    const src = (edge.sources && edge.sources[0]) || '?';
+    const tgt = (edge.targets && edge.targets[0]) || '?';
+    const srcLabel = labelForEndpoint(src, layouted);
+    const tgtLabel = labelForEndpoint(tgt, layouted);
+
+    sidebarTitle.textContent = srcLabel + ' → ' + tgtLabel;
+
+    let html = '<table class="sidebar-props">';
+    html += propRow('ID', id);
+    html += propRow('Timing', p.timing || 'N/A');
+    html += propRow('Edge kind', p.edge_kind || 'N/A');
+    html += propRow('Condition', p.condition || '(none)');
+    html += propRow('Condition kind', p.condition_kind || 'N/A');
+    const ctrl = (p.condition_signals || []).join(', ') || '(none)';
+    html += propRow('Control signals', ctrl);
+    html += propRow('CDC', p.cdc ? 'YES (跨时钟域)' : 'no');
+    html += propRow('Path count', p.path_count || 1);
+    if (p.color) html += propRow('Color', p.color);
+    html += '</table>';
+    sidebarBody.innerHTML = html;
+  }
+
+  // 辅助: 表格行 (text only)
+  function propRow(label, value) {
+    return '<tr><td class="prop-key">' + escHtml(label) +
+           '</td><td class="prop-val">' + escHtml(value) +
+           '</td></tr>';
+  }
+
+  // 辅助: 表格行 (HTML)
+  function propRowHtml(label, valueHtml) {
+    return '<tr><td class="prop-key">' + escHtml(label) +
+           '</td><td class="prop-val">' + valueHtml + '</td></tr>';
   }
 
   // ---------------------------------------------------------------------

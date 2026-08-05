@@ -69,6 +69,16 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
   <span class="match-count" id="match-count"></span>
 </div>
 <div id="graph"><div style="padding:40px;color:#7f8c8d;">Rendering graph...</div></div>
+<!-- (Stage 9) 节点/边详情侧边栏: 右侧 320px, 默认隐藏 -->
+<aside id="sidebar" class="sidebar-closed" aria-label="Node details">
+  <div class="sidebar-header">
+    <span class="sidebar-title" id="sidebar-title">Details</span>
+    <button type="button" id="sidebar-close" class="sidebar-close" title="Close sidebar">×</button>
+  </div>
+  <div class="sidebar-body" id="sidebar-body">
+    <p class="sidebar-empty">Click any node or edge to see details.</p>
+  </div>
+</aside>
 <div id="info">Click any node or edge to see details.</div>
 
 <script>

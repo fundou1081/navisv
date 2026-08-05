@@ -416,3 +416,222 @@ class TestPanZoomSvg:
             content = f.read()
         # 找到 render().then(...).catch 链
         assert 'setupPanZoom()' in content
+
+
+class TestSidebarHtml:
+    """Stage 9 - sidebar HTML 结构"""
+
+    @pytest.fixture
+    def html(self, tmp_path):
+        return _build_html(tmp_path, view='dataflow', filter_clock_reset=True)
+
+    def test_sidebar_aside_present(self, html):
+        """应有 <aside id='sidebar'>"""
+        with open(html) as f:
+            content = f.read()
+        assert '<aside id="sidebar"' in content
+
+    def test_sidebar_default_closed(self, html):
+        """sidebar 默认应有 sidebar-closed class (隐藏)"""
+        with open(html) as f:
+            content = f.read()
+        assert 'class="sidebar-closed"' in content
+
+    def test_sidebar_header_present(self, html):
+        """应有 .sidebar-header"""
+        with open(html) as f:
+            content = f.read()
+        assert 'class="sidebar-header"' in content
+
+    def test_sidebar_title_present(self, html):
+        """应有 #sidebar-title (动态标题)"""
+        with open(html) as f:
+            content = f.read()
+        assert 'id="sidebar-title"' in content
+
+    def test_sidebar_close_button_present(self, html):
+        """应有 #sidebar-close 按钮"""
+        with open(html) as f:
+            content = f.read()
+        assert 'id="sidebar-close"' in content
+        assert '×' in content or '&#215;' in content  # × 字符
+
+    def test_sidebar_body_present(self, html):
+        """应有 #sidebar-body (内容动态注入)"""
+        with open(html) as f:
+            content = f.read()
+        assert 'id="sidebar-body"' in content
+
+
+class TestSidebarJs:
+    """Stage 9 - sidebar JS 交互逻辑"""
+
+    @pytest.fixture
+    def html(self, tmp_path):
+        return _build_html(tmp_path, view='dataflow', filter_clock_reset=True)
+
+    def test_render_node_details_function(self, html):
+        """应有 renderNodeDetails 函数"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function renderNodeDetails' in content
+
+    def test_render_edge_details_function(self, html):
+        """应有 renderEdgeDetails 函数"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function renderEdgeDetails' in content
+
+    def test_get_incoming_edges_helper(self, html):
+        """应有 getIncomingEdges helper (节点入边)"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function getIncomingEdges' in content
+
+    def test_get_outgoing_edges_helper(self, html):
+        """应有 getOutgoingEdges helper (节点出边)"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function getOutgoingEdges' in content
+
+    def test_label_for_endpoint_helper(self, html):
+        """应有 labelForEndpoint helper (ID → label)"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function labelForEndpoint' in content
+
+    def test_build_source_link_function(self, html):
+        """应有 buildSourceLink 函数 (跳转源码)"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function buildSourceLink' in content
+        assert 'file://' in content
+
+    def test_prop_row_helper(self, html):
+        """应有 propRow helper (key-value 表格行)"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function propRow' in content
+
+    def test_prop_row_html_helper(self, html):
+        """应有 propRowHtml helper (HTML 表格行)"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function propRowHtml' in content
+
+    def test_node_click_shows_sidebar(self, html):
+        """节点 click handler 应显示 sidebar (移除 sidebar-closed)"""
+        with open(html) as f:
+            content = f.read()
+        # renderNodeDetails 调用后 classList.remove('sidebar-closed')
+        assert "classList.remove('sidebar-closed')" in content
+
+    def test_sidebar_close_handler(self, html):
+        """close button 应绑 click handler (添加 sidebar-closed)"""
+        with open(html) as f:
+            content = f.read()
+        # getElementById('sidebar-close').addEventListener('click', ...
+        assert "getElementById('sidebar-close')" in content
+        assert "classList.add('sidebar-closed')" in content
+
+    def test_node_details_includes_incoming(self, html):
+        """节点详情应包含 Incoming 边列表"""
+        with open(html) as f:
+            content = f.read()
+        assert 'Incoming (' in content
+
+    def test_node_details_includes_outgoing(self, html):
+        """节点详情应包含 Outgoing 边列表"""
+        with open(html) as f:
+            content = f.read()
+        assert 'Outgoing (' in content
+
+    def test_node_details_includes_location(self, html):
+        """节点详情应包含 File / Line / source link (用 propRowHtml 因为含 HTML)"""
+        with open(html) as f:
+            content = f.read()
+        assert 'propRowHtml(\'Location\'' in content or 'propRowHtml("Location"' in content
+        assert 'source-link' in content
+        assert 'view source' in content
+
+    def test_edge_details_includes_path_count(self, html):
+        """边详情应包含 Path count"""
+        with open(html) as f:
+            content = f.read()
+        assert 'Path count' in content
+
+    def test_edge_details_includes_cdc_status(self, html):
+        """边详情应包含 CDC 状态"""
+        with open(html) as f:
+            content = f.read()
+        assert '跨时钟域' in content or 'cdc' in content.lower()
+
+
+class TestSidebarCss:
+    """Stage 9 - sidebar CSS 样式"""
+
+    @pytest.fixture
+    def html(self, tmp_path):
+        return _build_html(tmp_path, view='dataflow', filter_clock_reset=True)
+
+    def test_sidebar_position_fixed(self, html):
+        """#sidebar 应 fixed 定位"""
+        with open(html) as f:
+            content = f.read()
+        assert '#sidebar' in content
+        assert 'position: fixed' in content
+
+    def test_sidebar_closed_transform(self, html):
+        """.sidebar-closed 应 translateX 隐藏 (slide out)"""
+        with open(html) as f:
+            content = f.read()
+        assert '.sidebar-closed' in content
+        assert 'translateX' in content
+
+    def test_sidebar_transition(self, html):
+        """sidebar 应有 transition 动画"""
+        with open(html) as f:
+            content = f.read()
+        assert 'transition:' in content or 'transition ' in content
+
+    def test_sidebar_header_style(self, html):
+        """.sidebar-header 应有 flex 布局 + border-bottom"""
+        with open(html) as f:
+            content = f.read()
+        assert '.sidebar-header' in content
+        assert 'border-bottom' in content
+
+    def test_sidebar_props_table(self, html):
+        """.sidebar-props 应有 table 样式"""
+        with open(html) as f:
+            content = f.read()
+        assert '.sidebar-props' in content
+        assert 'border-collapse' in content
+
+    def test_prop_key_style(self, html):
+        """.prop-key 应有等宽字体 + 灰色"""
+        with open(html) as f:
+            content = f.read()
+        assert '.prop-key' in content
+        assert 'Menlo' in content or 'Consolas' in content or 'monospace' in content
+
+    def test_edge_list_style(self, html):
+        """.edge-list 应无 list-style"""
+        with open(html) as f:
+            content = f.read()
+        assert '.edge-list' in content
+        assert 'list-style: none' in content or 'list-style:none' in content
+
+    def test_source_link_style(self, html):
+        """.source-link 应有蓝色背景"""
+        with open(html) as f:
+            content = f.read()
+        assert '.source-link' in content
+        assert '#3498db' in content  # 蓝色
+
+    def test_sidebar_section_style(self, html):
+        """.sidebar-section 应有 border-bottom 分隔"""
+        with open(html) as f:
+            content = f.read()
+        assert '.sidebar-section' in content
+        assert 'uppercase' in content or 'text-transform' in content
