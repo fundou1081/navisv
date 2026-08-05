@@ -51,6 +51,18 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
   <h1>🧭 navisv × elkjs <span class="badge">{view}</span></h1>
   <span class="meta">{meta}</span>
 </div>
+<!-- (Stage 4) 交互工具栏: 搜索 / 节点类型过滤 / CDC toggle -->
+<div id="toolbar">
+  <input type="search" id="search-input" placeholder="🔍 Search nodes (case-insensitive)..." autocomplete="off">
+  <span class="filter-group">
+    <label class="filter-label"><input type="checkbox" id="show-port" checked> Port</label>
+    <label class="filter-label"><input type="checkbox" id="show-state" checked> State</label>
+    <label class="filter-label"><input type="checkbox" id="show-operator" checked> Operator</label>
+    <label class="filter-label"><input type="checkbox" id="show-literal" checked> Literal</label>
+  </span>
+  <button type="button" id="toggle-cdc" class="toggle-button" data-on="false">CDC: off</button>
+  <span class="match-count" id="match-count"></span>
+</div>
 <div id="graph"><div style="padding:40px;color:#7f8c8d;">Rendering graph...</div></div>
 <div id="info">Click any node or edge to see details.</div>
 

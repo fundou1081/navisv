@@ -1,15 +1,16 @@
-/* elk_viewer.js — navisv × elkjs 最小交互式渲染器
+/* elk_viewer.js — navisv × elkjs 交互式渲染器
  *
  * 用法: 由 elk_html_template.py 嵌入到生成的 HTML 中。
  * 输入: GRAPH_DATA (navisv ElkExporter 输出的 elkjs JSON)
  * 输出: 渲染到 #graph 容器的 SVG,带颜色/箭头/端口
  *
- * 设计目标 (Stage 2 范围):
- *   - ELK.layout() → SVG, 端口对齐, 颜色按 properties
- *   - 节点/边可点击 (info 面板在 <div id="info"> 显示)
- *   - 简单的 CSS hover 高亮
- *
- * Stage 4 会扩展: 搜索/视图切换/CDC toggle/缩放/拖拽
+ * 设计目标:
+ *   Stage 2: ELK.layout() → SVG, 端口对齐, 颜色按 properties
+ *            节点/边可点击 (info 面板在 <div id="info"> 显示)
+ *            简单的 CSS hover 高亮
+ *   Stage 4: 搜索框 (按名字过滤节点)
+ *            节点类型过滤器 (Port/State/Operator/Literal 复选框)
+ *            CDC toggle (高亮/隐藏跨时钟域边)
  */
 
 (function () {
@@ -257,9 +258,121 @@
     });
   }
 
+  // ---------------------------------------------------------------------
+  // (Stage 4) 交互层: 搜索 / 节点类型过滤器 / CDC toggle
+  // ---------------------------------------------------------------------
+  let currentLayouted = null;  // 保存最近渲染的 layouted 给 filters 用
+
+  function getNodeKind(node) {
+    return (node.properties && node.properties.kind) || '';
+  }
+
+  function getNodeLabel(node) {
+    return (node.labels && node.labels[0] && node.labels[0].text) || node.id || '';
+  }
+
+  function applyFilters() {
+    if (!currentLayouted) return;
+    const query = (document.getElementById('search-input') || {}).value || '';
+    const q = query.trim().toLowerCase();
+    const showPort = (document.getElementById('show-port') || {}).checked;
+    const showState = (document.getElementById('show-state') || {}).checked;
+    const showOperator = (document.getElementById('show-operator') || {}).checked;
+    const showLiteral = (document.getElementById('show-literal') || {}).checked;
+    const cdcOn = (document.getElementById('toggle-cdc') || {}).dataset.on === 'true';
+
+    let matchCount = 0;
+    let visibleCount = 0;
+    let totalNodes = 0;
+
+    // 按节点过滤
+    document.querySelectorAll('.node').forEach(function (g) {
+      totalNodes++;
+      const id = g.dataset.nodeId;
+      const node = (currentLayouted.children || []).find(function (c) { return c.id === id; });
+      if (!node) return;
+      const kind = getNodeKind(node);
+      const label = getNodeLabel(node);
+
+      // kind 过滤
+      let visible = true;
+      if (kind === 'Port' && !showPort) visible = false;
+      else if (kind === 'State' && !showState) visible = false;
+      else if (kind === 'Operator' && !showOperator) visible = false;
+      else if (kind === 'Literal' && !showLiteral) visible = false;
+
+      // search 过滤 (case-insensitive substring match on label + id)
+      const isMatch = !q || label.toLowerCase().indexOf(q) >= 0 || id.toLowerCase().indexOf(q) >= 0;
+      if (q && isMatch) matchCount++;
+
+      g.classList.toggle('dimmed', !visible);
+      g.classList.toggle('hidden', !visible);
+      g.classList.toggle('highlighted', q && isMatch && visible);
+      if (visible) visibleCount++;
+    });
+
+    // 边过滤: CDC toggle + 隐含节点过滤 (两端有 hidden 节点的边也隐藏)
+    const visibleNodes = new Set();
+    document.querySelectorAll('.node:not(.hidden)').forEach(function (g) {
+      visibleNodes.add(g.dataset.nodeId);
+    });
+
+    document.querySelectorAll('.edge').forEach(function (line) {
+      const id = line.dataset.edgeId;
+      const edge = (currentLayouted.edges || []).find(function (e) { return e.id === id; });
+      if (!edge) return;
+      const isCdc = edge.properties && edge.properties.cdc;
+
+      // CDC toggle: CDC on 时高亮 (增加 stroke-width), off 时 dim (透明度降低)
+      line.classList.toggle('cdc-highlighted', cdcOn && !!isCdc);
+      line.classList.toggle('cdc-dimmed', !cdcOn && !!isCdc);
+
+      // 两端节点都隐藏时, 边也隐藏
+      const src = edge.sources && edge.sources[0];
+      const tgt = edge.targets && edge.targets[0];
+      const endpointsVisible = visibleNodes.has(src) || visibleNodes.has(tgt);
+      line.classList.toggle('hidden', !endpointsVisible);
+    });
+
+    // 匹配计数
+    const mc = document.getElementById('match-count');
+    if (mc) {
+      if (q) {
+        mc.textContent = `${matchCount}/${totalNodes} match`;
+      } else {
+        mc.textContent = `${visibleCount}/${totalNodes} visible`;
+      }
+    }
+  }
+
+  function bindFilterControls() {
+    const search = document.getElementById('search-input');
+    if (search) search.addEventListener('input', applyFilters);
+
+    ['show-port', 'show-state', 'show-operator', 'show-literal'].forEach(function (id) {
+      const cb = document.getElementById(id);
+      if (cb) cb.addEventListener('change', applyFilters);
+    });
+
+    const cdcBtn = document.getElementById('toggle-cdc');
+    if (cdcBtn) {
+      cdcBtn.addEventListener('click', function () {
+        const on = cdcBtn.dataset.on === 'true';
+        cdcBtn.dataset.on = on ? 'false' : 'true';
+        cdcBtn.textContent = 'CDC: ' + (on ? 'off' : 'on');
+        cdcBtn.classList.toggle('active', !on);
+        applyFilters();
+      });
+    }
+  }
+
   // 启动 (GRAPH_DATA 由模板嵌入)
   if (typeof GRAPH_DATA !== 'undefined') {
-    render(GRAPH_DATA).catch(function (err) {
+    render(GRAPH_DATA).then(function (layouted) {
+      currentLayouted = layouted;
+      bindFilterControls();
+      applyFilters();  // 初始化时也跑一遍 (确保 cdc-dimmed 等初始状态)
+    }).catch(function (err) {
       const container = document.getElementById('graph');
       if (container) {
         container.innerHTML =

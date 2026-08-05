@@ -255,6 +255,72 @@ navisv elk <file.sv> [-o path.{html,svg,png,json}] [options]
 - TestElkCliErrorHandling (2): missing file + invalid view
 - TestElkCliE2E (1): 真实 counter.sv 端到端
 
+### 2.6 (Stage 4) HTML viewer 交互层增强
+
+**位置**: `navisv/data/elk_viewer.js` + `navisv/data/elk_viewer.css` + `navisv/graph/elk_html_template.py`
+
+**新增交互功能**:
+1. **搜索框** (`#search-input`): case-insensitive substring match on label + id
+   - 命中节点加 `.highlighted` (橙色加粗边框 + drop-shadow)
+   - 未命中加 `.dimmed` (opacity 0.15)
+   - 实时显示 `N/M match` 计数
+2. **节点类型过滤** (`#show-port/state/operator/literal`): 复选框, 默认全选
+   - 取消勾选 → 节点加 `.dimmed` (opacity 0.15)
+   - 两端节点都隐藏的边也 `.hidden` (display none)
+3. **CDC toggle** (`#toggle-cdc`): 按钮, 默认 off
+   - off: CDC 边加 `.cdc-dimmed` (opacity 0.25)
+   - on: CDC 边加 `.cdc-highlighted` (红色加粗 + drop-shadow), 按钮变红
+
+**HTML 模板结构**:
+```html
+<div id="header">
+  <h1>🧭 navisv × elkjs <span class="badge">{view}</span></h1>
+  <span class="meta">{meta}</span>
+</div>
+<!-- (Stage 4) 交互工具栏: 搜索 / 节点类型过滤 / CDC toggle -->
+<div id="toolbar">
+  <input type="search" id="search-input" placeholder="🔍 Search nodes...">
+  <span class="filter-group">
+    <label class="filter-label"><input type="checkbox" id="show-port" checked> Port</label>
+    <label class="filter-label"><input type="checkbox" id="show-state" checked> State</label>
+    <label class="filter-label"><input type="checkbox" id="show-operator" checked> Operator</label>
+    <label class="filter-label"><input type="checkbox" id="show-literal" checked> Literal</label>
+  </span>
+  <button type="button" id="toggle-cdc" class="toggle-button" data-on="false">CDC: off</button>
+  <span class="match-count" id="match-count"></span>
+</div>
+<div id="graph">...</div>
+<div id="info">...</div>
+```
+
+**JS 函数**:
+- `applyFilters()`: 应用当前所有过滤条件到 DOM
+- `bindFilterControls()`: 绑事件 (input/change/click)
+- `currentLayouted` 闭包变量: 缓存最近渲染的 ELK 输出给 filters 用
+
+**CSS 状态类**:
+- `.node-rect`/`.node-shape`: 基础样式 (hover, transition)
+- `.highlighted`: 搜索命中 (橙色边框 + drop-shadow)
+- `.dimmed`: 过滤掉 (opacity 0.15)
+- `.hidden`: 完全隐藏 (display none, 两端节点都隐藏的边)
+- `.cdc-highlighted`: CDC on (红色加粗 + drop-shadow)
+- `.cdc-dimmed`: CDC off (opacity 0.25)
+- `#toolbar`: 工具栏容器 (flex layout)
+- `#search-input`: 搜索框 (focus 高亮)
+- `.toggle-button`: CDC 按钮 (active 状态变红)
+- `.match-count`: 计数显示 (右对齐)
+
+**测试** (Stage 4): `tests/test_elk_viewer.py` 23 tests
+- TestToolbarHtml (5): 5 个 toolbar HTML 元素
+- TestToolbarJs (6): 6 个 JS 函数 + 事件
+- TestToolbarCss (8): 8 个 CSS 状态类/选择器
+- TestToolbarBehavior (4): 行为验证 (lowercase match, endpoint visibility, match count format, init apply)
+
+**限制**:
+- 视图切换 (dataflow ↔ controlflow ↔ modules) 暂未实现 — 需要重新运行 CLI 加 `--view`
+- 缩放/拖拽暂未实现 (需要外部库如 svg-pan-zoom, 后续 Stage 4.5 加)
+- 行为验证只测代码完整性, 真实浏览器行为需手动验证 (Mac/Chrome)
+
 ---
 
 ## 3. 数据格式 (elkjs 原生 JSON)

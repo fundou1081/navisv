@@ -138,3 +138,114 @@ body {
   white-space: pre-wrap;
   min-height: 60px;
 }
+
+/* ---------------------------------------------------------------------
+ * (Stage 4) 交互工具栏样式
+ * --------------------------------------------------------------------- */
+
+#toolbar {
+  background: white;
+  padding: 10px 20px;
+  margin: 0 16px;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+#search-input {
+  flex: 1;
+  min-width: 200px;
+  padding: 7px 12px;
+  border: 1px solid #bdc3c7;
+  border-radius: 6px;
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+#search-input:focus {
+  border-color: #3498db;
+  box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.15);
+}
+
+.filter-group {
+  display: inline-flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.filter-label {
+  font-size: 12px;
+  color: #34495e;
+  cursor: pointer;
+  user-select: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.filter-label input[type="checkbox"] {
+  cursor: pointer;
+  margin: 0;
+}
+
+.toggle-button {
+  padding: 6px 12px;
+  border: 1px solid #bdc3c7;
+  border-radius: 6px;
+  background: white;
+  color: #34495e;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.toggle-button:hover {
+  background: #ecf0f1;
+}
+
+.toggle-button.active {
+  background: #e74c3c;
+  border-color: #c0392b;
+  color: white;
+}
+
+.match-count {
+  font-size: 11px;
+  color: #7f8c8d;
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  margin-left: auto;
+}
+
+/* ---------------------------------------------------------------------
+ * (Stage 4) 过滤状态样式 (applyFilters 切换 class)
+ * --------------------------------------------------------------------- */
+
+.node.hidden,
+.edge.hidden {
+  display: none;
+}
+
+.node.dimmed {
+  opacity: 0.15;
+}
+
+.node.highlighted .node-rect,
+.node.highlighted .node-shape {
+  stroke: #f39c12;
+  stroke-width: 4;
+  filter: drop-shadow(0 0 4px rgba(243, 156, 18, 0.5));
+}
+
+.edge.cdc-highlighted {
+  stroke: #e74c3c !important;
+  stroke-width: 4 !important;
+  filter: drop-shadow(0 0 3px rgba(231, 76, 60, 0.4));
+}
+
+.edge.cdc-dimmed {
+  opacity: 0.25;
+}
