@@ -27,6 +27,7 @@ Stage 12   keyboard shortcuts + help modal (11 keys)    → 0.5h (2026-08-06)
 Stage 13   node kind emoji icons (📡📦⚙️🔢)              → 0.3h (2026-08-06)
 Stage 14   修 DesignDriver netlist silent failure bug      → 0.5h (2026-08-06)
 Stage 16   viewer theme switcher (Light/Dark/Auto)         → 0.5h (2026-08-06)
+Stage 18   viewer share URL (encode state to hash)         → 0.5h (2026-08-06)
 Stage 6    examples + README + push                → 1h
 ```
 
