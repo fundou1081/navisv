@@ -380,6 +380,25 @@ def main():
     p.add_argument('--rankdir', choices=['LR', 'TB', 'BT', 'RL'], default='LR',
                    help='图方向 (默认 LR)')
 
+    # navisv elk <file> --view {dataflow,controlflow,modules}
+    p = sub.add_parser('elk', help='ELK layered 可视化 (HTML/SVG/PNG)')
+    p.add_argument('file', help='设计文件 (SystemVerilog)')
+    p.add_argument('--view', choices=['dataflow', 'controlflow', 'modules'], default='dataflow',
+                   help='视图: dataflow (默认, 组合+时序路径) / controlflow (控制结构: if/case/always_ff) / modules (架构)')
+    p.add_argument('--output', '-o', help='输出文件路径 (后缀决定格式: .html/.svg/.png; 默认 <file>.elk.html)')
+    p.add_argument('--filter-clock-reset', action=argparse.BooleanOptionalAction, default=True,
+                   help='过滤 CLOCK/RESET/FF-update 边, 只显示数据流 (Stage 2.9, 默认开启)')
+    p.add_argument('--max-nodes', type=int, default=500,
+                   help='节点上限 (默认 500)')
+    p.add_argument('--scope', help='子模块聚焦路径 (e.g. top.cpu.alu)')
+    p.add_argument('--cdc-highlight', action='store_true',
+                   help='高亮跨时钟域边')
+    p.add_argument('--direction', choices=['RIGHT', 'DOWN', 'LEFT', 'UP'], default='RIGHT',
+                   help='ELK 布局方向 (默认 RIGHT)')
+    p.add_argument('--include', '-I', action='append', help='include 目录')
+    p.add_argument('--preserve-operators', action=argparse.BooleanOptionalAction, default=True,
+                   help='保留 Operator/Literal 节点 (Stage 2.5, 默认开启)')
+
     # navisv check <file> or <filelist>
     p = sub.add_parser('check', help='检查源码编译状态')
     p.add_argument('file', nargs='*', help='设计文件 (可多个, 或与 -F 互斥)')
@@ -521,6 +540,8 @@ def main():
             run_dot(args)
         elif args.command == 'mermaid':
             run_mermaid(args)
+        elif args.command == 'elk':
+            run_elk(args)
         elif args.command == 'fanin-cone':
             run_fanin_cone(args)
         elif args.command == 'constraints':
@@ -878,6 +899,116 @@ def run_mermaid(args):
                 print(f"  {line}")
             if len(lines) > 60:
                 print(f"  ... 还有 {len(lines) - 60} 行")
+
+        return {'success': True}
+    finally:
+        shutil.rmtree(output_dir, ignore_errors=True)
+
+
+def run_elk(args):
+    """ELK layered 可视化 (HTML/SVG/PNG/JSON)
+
+    Stages:
+        Stage 2.5  Operator / Literal 节点
+        Stage 2.6  AST 驱动的具体运算符符号
+        Stage 2.7  真实 ELK layered 布局
+        Stage 2.8  PORT_IN/OUT FIRST/LAST 锚点
+        Stage 2.9  过滤 CLOCK/RESET/FF-update 边
+        Stage 3    CLI 入口 + 3 视图集成 (本函数)
+    """
+    errors = check_tools()
+    if errors:
+        for e in errors:
+            print(f'错误: {e}', file=sys.stderr)
+        return {'success': False}
+
+    import glob as _glob
+    from navisv.parsers.ast_parser import ASTParser
+    from navisv.parsers.netlist_parser import NetlistParser
+    from navisv.graph.graph_builder import GraphBuilder
+    from navisv.graph.elk_exporter import ElkExporter
+    from navisv.tools.elk_layout import run_elk_layout
+    from navisv.tools.render_svg import render_svg
+
+    output_dir = tempfile.mkdtemp(prefix='navisv_elk_')
+    try:
+        # cache=False: ELK 需要 GraphBuilder (dataflow graph), 不只是 DesignGraph (module hierarchy)
+        dd = DesignDriver([args.file], output_dir=output_dir,
+                         include_dirs=args.include or [], cache=False)
+        dd.build()
+        ast = ASTParser(_glob.glob(f'{output_dir}/*ast*.json')[0]).parse()
+        nl = NetlistParser(_glob.glob(f'{output_dir}/*netlist*.json')[0]).parse()
+        gb = GraphBuilder(
+            ast, nl, ast_json_path=f'{output_dir}/ast.json',
+            source_files=[args.file],
+            preserve_operators=args.preserve_operators,
+        )
+        gb.build()
+
+        # (Stage 3) 按 view 选择 ElkExporter
+        # controlflow/modules view 暂用 dataflow 配置, 后续 Stage 4+ 加 scope/compound
+        filter_cr = args.filter_clock_reset if args.view == 'dataflow' else False
+        exporter = ElkExporter(
+            view=args.view,
+            filter_clock_reset=filter_cr,
+            cdc_highlight=args.cdc_highlight,
+            max_nodes=args.max_nodes,
+            scope=args.scope,
+        ).from_graph_builder(gb)
+        elk_json = exporter.to_elk_json()
+
+        # (Stage 3) 输出路径: 默认 <file>.elk.html
+        if args.output is None:
+            base = os.path.splitext(os.path.basename(args.file))[0]
+            args.output = f'{base}.elk.html'
+        ext = os.path.splitext(args.output)[1].lower()
+
+        if ext == '.html':
+            exporter.export_html(args.output)
+        elif ext in ('.svg', '.png'):
+            positioned = run_elk_layout(elk_json, direction=args.direction)
+            svg = render_svg(
+                positioned,
+                title=f'navisv {args.view} — {os.path.basename(args.file)}',
+                subtitle=f'filter_clock_reset={args.filter_clock_reset}, cdc_highlight={args.cdc_highlight}',
+            )
+            if ext == '.svg':
+                with open(args.output, 'w') as f:
+                    f.write(svg)
+            else:  # .png
+                import subprocess
+                tmp_svg = f'/tmp/_elk_{os.getpid()}.svg'
+                with open(tmp_svg, 'w') as f:
+                    f.write(svg)
+                try:
+                    subprocess.run(
+                        ['rsvg-convert', '-w', '1600', tmp_svg, '-o', args.output],
+                        check=True, capture_output=True,
+                    )
+                except (subprocess.CalledProcessError, FileNotFoundError) as e:
+                    print(f'警告: rsvg-convert 失败 ({e}), SVG 已保存到 {tmp_svg}')
+                    return {'success': False}
+                finally:
+                    if os.path.exists(tmp_svg):
+                        os.remove(tmp_svg)
+        else:
+            with open(args.output, 'w') as f:
+                json.dump(elk_json, f, indent=2, default=str)
+
+        # (Stage 3) 报告元数据
+        props = elk_json.get('properties', {})
+        print(f'\n✅ ELK 输出: {args.output}')
+        print(f'  view: {args.view}')
+        print(f'  filter_clock_reset: {filter_cr}')
+        print(f'  direction: {args.direction}')
+        print(f'  children: {len(elk_json["children"])}')
+        print(f'  edges: {len(elk_json["edges"])}')
+        if props.get('filtered_edges'):
+            print(f'  filtered_edges: {props["filtered_edges"]}')
+        if props.get('self_loops_removed'):
+            print(f'  self_loops_removed: {props["self_loops_removed"]}')
+        if props.get('orphan_nodes_removed'):
+            print(f'  orphan_nodes_removed: {props["orphan_nodes_removed"]}')
 
         return {'success': True}
     finally:

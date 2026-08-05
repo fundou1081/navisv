@@ -195,6 +195,46 @@ feat(elk): Stage 2.8 — port FIRST/LAST layer constraint (from sv_query)
 
 ---
 
+## Stage 3: CLI + 3 视图 (2026-08-06)
+
+**背景**: 之前的 Stages 1-2.9 都只能通过 Python API 调用, 没在 CLI 暴露。`navisv elk` 是用户主要的调用入口。
+
+### 任务
+- [x] `cli.py`: 加 `elk` 子命令 (`add_parser('elk', help='ELK layered 可视化 (HTML/SVG/PNG)')`)
+  - 10 个选项: file, --view, --output, --filter-clock-reset, --max-nodes, --scope, --cdc-highlight, --direction, --include, --preserve-operators
+- [x] `cli.py`: 加 `run_elk()` 函数 (跟 run_dot/run_mermaid 同 pattern, ~110 行)
+  - DesignDriver(cache=False) → GraphBuilder → ElkExporter → ELK layout → render
+  - 输出路由按后缀 (.html/.svg/.png/.json)
+  - 元数据报告 (children/edges/filtered_edges/orphan_nodes_removed)
+- [x] `cli.py`: 加 `elif args.command == 'elk': run_elk(args)` dispatcher
+- [x] `tests/test_cli_elk.py`: +14 个 CLI 集成测试 (subprocess 调 `cli.py elk`)
+  - argparse (2): --help + main --help 包含 elk
+  - dataflow view (6): HTML/SVG/PNG/JSON 输出 + metadata + no-filter-clock-reset
+  - other views (3): controlflow / modules / direction DOWN
+  - error handling (2): missing file + invalid view
+  - E2E (1): 真实 counter.sv 端到端
+
+### 验收
+- `navisv elk tests/fixtures/elk_counter.sv` → `elk_counter.elk.html` (1.6MB, bundled elkjs)
+- `navisv elk <file> -o out.svg` → SVG (dataflow, filter_clock_reset 默认开)
+- `navisv elk <file> -o out.png` → PNG (rsvg-convert 1600px)
+- `navisv elk <file> --view controlflow` → controlflow (filter 自动关)
+- `navisv elk <file> --no-filter-clock-reset` → 跟 Stage 2.7 行为一致
+- 14 CLI tests pass, 382 navisv tests total pass (零回归)
+
+### Bugfix
+1. `DesignDriver(cache=True)` 返回 `DesignGraph` (module hierarchy, 4 节点), 不是 `GraphBuilder` (dataflow)。ELK 需要 dataflow → `cache=False`
+2. `render_svg()` 不接受 `direction=` 参数 (TypeError "unexpected keyword argument 'direction'") → 移除
+3. 测试 helper `_run_cli()` 必须传 'elk' 子命令 (subprocess.run 不继承 pytest cwd)
+4. 默认输出文件名是 `<basename>.elk.html` (e.g. `elk_counter.elk.html` for `tests/fixtures/elk_counter.sv`)
+
+### Commit
+```
+feat(elk): Stage 3 — CLI navisv elk <file.sv> with 3 views (dataflow/controlflow/modules)
+```
+
+---
+
 ## Stage 1: ElkExporter 骨架 + DataFlowGraph → elk JSON (2h)
 
 **目标**: Python 端能产出 elkjs 兼容的 JSON 字符串，先不生成 HTML。

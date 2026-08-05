@@ -194,6 +194,67 @@ ElkExporter(view='dataflow', filter_clock_reset=True).from_graph_builder(gb)
 
 **限制**: 默认 `filter_clock_reset=False` (向后兼容)。Stage 3+ CLI 应该默认开启。
 
+### 2.5 (Stage 3) CLI 入口 + 3 视图集成
+
+**位置**: `cli.py` 新增 `elk` 子命令 (`run_elk()`)
+
+**用法**:
+```bash
+navisv elk <file.sv> [-o path.{html,svg,png,json}] [options]
+
+# 选项
+--view {dataflow,controlflow,modules}    默认 dataflow
+--output/-o <path>                       默认 <basename>.elk.html (后缀决定格式)
+--filter-clock-reset/--no-filter-clock-reset   默认开启
+--max-nodes <int>                        默认 500
+--scope <module.path>                    子模块聚焦
+--cdc-highlight                          高亮跨时钟域边
+--direction {RIGHT,DOWN,LEFT,UP}         默认 RIGHT
+--include/-I <dir>                       slang include 路径
+--preserve-operators/--no-preserve-operators   默认开启 (Stage 2.5)
+```
+
+**输出格式** (按后缀自动选择):
+- `.html` → `export_html()` (bundled elkjs + viewer)
+- `.svg`  → `run_elk_layout()` + `render_svg()` (静态 SVG)
+- `.png`  → SVG → `rsvg-convert` (PNG, 需要 rsvg-convert)
+- `.json` / 其他 → ELK JSON dump
+
+**3 个视图** (Stage 3 起步, 后续 Stage 4+ 深化):
+- `dataflow` (默认): 完整数据流图, 算子/字面量节点, 过滤 FF 边 (Stage 2.5-2.9)
+- `controlflow`: 复用 dataflow 配置但**关闭** `filter_clock_reset` (Stage 4 加 if/case scope)
+- `modules`: 模块层级 (复用 dataflow 配置, Stage 4+ 加 arch 集成)
+
+**默认行为**:
+- `filter_clock_reset=True` (Stage 2.9 默认值, 跟 Stage 2.7/2.8 的默认 False 不同 — CLI 应该用干净视图)
+- `direction=RIGHT` (跟 Stage 2.7/2.8 一致)
+- `view=dataflow` (跟现有 main view 一致)
+
+**stdout 元数据** (用户友好):
+```
+✅ ELK 输出: counter.elk.html
+  view: dataflow
+  filter_clock_reset: True
+  direction: RIGHT
+  children: 10
+  edges: 11
+  filtered_edges: 4
+  orphan_nodes_removed: 1
+```
+
+**踩坑 (开发期)**:
+1. `DesignDriver(cache=True)` 返回 `DesignGraph` (模块层级, 4 节点), 不是 `GraphBuilder` (数据流, 10+ 节点)。ELK 需要 dataflow → `cache=False`
+2. `render_svg()` 不接受 `direction=` 参数 (会 TypeError) — 移除
+3. argparse 顶层有 `sub.add_parser()` → `cli.py` 直接调 `<file>` 会报 "invalid choice", 必须 `cli.py elk <file>`
+4. `_run_cli()` 测试 helper 必须包含 'elk' 子命令 (subprocess.run 不继承 pytest cwd)
+
+**测试** (Stage 3): `tests/test_cli_elk.py` 14 tests
+- TestElkCliArgparse (2): --help + main --help 包含 elk
+- TestElkCliDataflowView (6): HTML/SVG/PNG 默认输出 + metadata + no-filter-clock-reset
+- TestElkCliOtherViews (3): controlflow / modules / direction DOWN
+- TestElkCliErrorHandling (2): missing file + invalid view
+- TestElkCliE2E (1): 真实 counter.sv 端到端
+
 ---
 
 ## 3. 数据格式 (elkjs 原生 JSON)
