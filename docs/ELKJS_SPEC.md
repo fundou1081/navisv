@@ -160,6 +160,40 @@ is_input = direction in ("input", "inout", "In")
 - navisv 把 counter.count 分类成 State (output port), 所以不会变 LAST — ELK 自由放
 - Stage 5 picorv32 测试时再验证多个 output port 是否全部 LAST
 
+### 2.4 (Stage 2.9) 过滤 CLOCK/RESET/FF-update 边
+
+**来源**: 借鉴 sv_query `DATAFLOW_VIZ_SPEC.md` §4 "边分类规则"
+
+sv_query spec 原文: 
+- `kind == CLOCK` → 不入图
+- `kind == RESET` → 不入图
+- `kind == BIT_SELECT` → 不入图
+- `muxed_pairs` → 不入图 (条件 mux 边)
+
+navisv 映射 (`ElkExporter.filter_clock_reset: bool = False`):
+- `edge_kind == "PosEdge"` → 过滤 (posedge clk)
+- `edge_kind in {NegEdge, LevelEdge}` → 过滤 (negedge rst_n / async reset)
+- `timing == "sequential_output"` → 过滤 (FF loop-back)
+- `condition` 字段 set 且 `condition_kind == "if"` → 过滤 (FF-update data/enable 边)
+
+**效果**: counter.sv 16 边 → 11 边 (4 条 FF 路径过滤, 1 条 self-loop 永久过滤, 1 个 orphan clk 节点移除)
+
+**踩坑 (重要)**: navisv 真实 EdgeAttr 把 always_ff 的 clk/rst/data 路径都打成 `timing='unknown'` + `condition='<signal>'` + `condition_kind='if'`。只检查 `timing`/`edge_kind` 字段不够, **必须检查 `condition` 字段**。
+
+**API**:
+```python
+ElkExporter(view='dataflow', filter_clock_reset=True).from_graph_builder(gb)
+```
+
+**元数据** (output JSON `properties` 字段):
+- `filtered_edges`: 被 filter_clock_reset 过滤的边数
+- `self_loops_removed`: 永远过滤的 self-loop 数 (跟 filter_clock_reset 无关)
+- `orphan_nodes_removed`: 过滤后无任何边的节点数 (sv_query 要求 0 orphan)
+
+**孤儿节点移除**: 过滤后若某节点没有任何入/出边, 自动从 children 中移除 (sv_query spec "0 orphan" 要求)。
+
+**限制**: 默认 `filter_clock_reset=False` (向后兼容)。Stage 3+ CLI 应该默认开启。
+
 ---
 
 ## 3. 数据格式 (elkjs 原生 JSON)

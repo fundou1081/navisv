@@ -133,6 +133,9 @@ class ElkExporter:
     cdc_highlight: bool = False
     max_nodes: int = 500
     scope: Optional[str] = None
+    # (Stage 2.9) 借鉴 sv_query DATAFLOW_VIZ_SPEC.md §4: 过滤掉 CLOCK/RESET/self-loop 边
+    # 让数据流视图更纯净, 时序触发关系不画, 跟 sv_query 一致
+    filter_clock_reset: bool = False
 
     graph: Optional[nx.MultiDiGraph] = field(default=None, init=False)
     node_data: Dict[str, Dict[str, Any]] = field(default_factory=dict, init=False)
@@ -261,14 +264,41 @@ class ElkExporter:
 
         # 4. 边 → elkjs edges (仅 source/target 都在 node_ids_in_graph 中)
         edge_idx = 0
+        # (Stage 2.9) 借鉴 sv_query DATAFLOW_VIZ_SPEC.md §4: 过滤 CLOCK/RESET/self-loop/loop-back 边
+        # self_loop_count 永远追踪 (默认也会被滤); filtered_edges 只在 filter_clock_reset=True 时 > 0
+        self_loop_count = 0
+        filtered_count = 0
+        kept_srcs: Set[str] = set()
+        kept_tgts: Set[str] = set()
         for (src, tgt, key), attrs in self.edge_data.items():
             if src not in node_ids_in_graph or tgt not in node_ids_in_graph:
                 continue
-            if src == tgt:  # 跳过 self-loop
+            if src == tgt:  # 永远过滤 self-loop (跟旧版兼容)
+                self_loop_count += 1
+                continue
+            if self._should_skip_edge(src, tgt, attrs):
+                filtered_count += 1
                 continue
             elk_edge = self._edge_to_elk(src, tgt, attrs, edge_idx)
             elk_json["edges"].append(elk_edge)
             edge_idx += 1
+            kept_srcs.add(src)
+            kept_tgts.add(tgt)
+
+        # (Stage 2.9) 移除 orphan 节点 (过滤后没有任何边的节点)
+        if filtered_count > 0:
+            kept_nodes = kept_srcs | kept_tgts
+            before = len(elk_json["children"])
+            elk_json["children"] = [c for c in elk_json["children"] if c["id"] in kept_nodes]
+            orphan_count = before - len(elk_json["children"])
+        else:
+            orphan_count = 0
+
+        # (Stage 2.9) 元数据: viewer 调试用
+        elk_json.setdefault("properties", {})
+        elk_json["properties"]["filtered_edges"] = filtered_count
+        elk_json["properties"]["self_loops_removed"] = self_loop_count
+        elk_json["properties"]["orphan_nodes_removed"] = orphan_count
 
         return elk_json
 
@@ -427,6 +457,60 @@ class ElkExporter:
     # -----------------------------------------------------------------------
     # scope / 截断
     # -----------------------------------------------------------------------
+
+    def _should_skip_edge(self, src: str, tgt: str,
+                          attrs: Dict[str, Any]) -> bool:
+        """(Stage 2.9) 借鉴 sv_query DATAFLOW_VIZ_SPEC.md §4: 过滤不画 CLOCK/RESET/self-loop
+
+        sv_query spec 原文 (§4 "边分类规则"):
+        - kind == CLOCK (时钟边)        → 不入图
+        - kind == RESET (复位边)        → 不入图
+        - kind == BIT_SELECT (位选边)   → 不入图
+        - muxed_pairs (无条件 mux 边)   → 不入图
+        - 所有出边都是条件边的节点       → 不入图
+
+        navisv 映射:
+        - CLOCK: edge_kind='PosEdge' (posedge clk)
+        - RESET: edge_kind='NegEdge' (negedge rst_n) 或 edge_kind='LevelEdge'
+        - BIT_SELECT: navisv 目前没有显式分类, 后续添加
+        - self-loop: src == tgt (count→count)
+        - loop-back from FF: timing='sequential_output'
+
+        Returns:
+            True: 过滤掉 (不入图)
+            False: 保留
+        """
+        # 永远过滤 self-loop (由 to_elk_json 独立处理, 这里只管 filter_clock_reset)
+        # 借鉴 sv_query: CLOCK/RESET 边只在 filter_clock_reset=True 时过滤
+        if not self.filter_clock_reset:
+            return False
+
+        edge_kind = attrs.get("edge_kind") or ""
+        timing = attrs.get("timing") or ""
+        condition = attrs.get("condition") or ""
+
+        # CLOCK 边 (PosEdge = posedge clk)
+        if edge_kind == "PosEdge":
+            return True
+        # RESET 边 (NegEdge = negedge rst_n, LevelEdge = async reset level)
+        if edge_kind in ("NegEdge", "LevelEdge"):
+            return True
+        # FF loop-back (count → count 是 sequential_output)
+        if timing == "sequential_output":
+            return True
+        # sequential_input 到 State (FF enable/load/clear)
+        if timing == "sequential_input":
+            # 这些边是 always_ff 的 enable/clk-edge 路径
+            # sv_query 也会过滤 (muxed_pairs 已经在 scope 表达)
+            return True
+        # (Stage 2.9 fix) navisv 真实 EdgeAttr 把 always_ff 的 clk/rst/data 都打成
+        # timing='unknown' + condition='<signal>' + condition_kind='if'
+        # sv_query spec: muxed_pairs (条件 mux 边) 不入图
+        # 直接过滤任何带 condition 的边 — 它们都是 FF 路径的 mux
+        if condition and (attrs.get("condition_kind") or "") == "if":
+            return True
+
+        return False
 
     def _filter_by_scope(self) -> Set[str]:
         """按 scope 过滤节点;None = 全图"""

@@ -947,6 +947,219 @@ class TestStage28EndToEnd:
 
 
 # ---------------------------------------------------------------------------
+# Tests: Stage 2.9 - Edge filter (CLOCK/RESET/self-loop/loop-back)
+# ---------------------------------------------------------------------------
+
+
+def _make_counter_like_graph() -> nx.MultiDiGraph:
+    """合成一个 counter.sv 风格的图: clk/rst_n/enable + dataflow operators + count State"""
+    g = nx.MultiDiGraph()
+    # 输入端口
+    g.add_node("m.clk", kind="Port", name="clk", direction="In",
+               location={"file": "x.sv", "line": 1})
+    g.add_node("m.rst_n", kind="Port", name="rst_n", direction="In",
+               location={"file": "x.sv", "line": 2})
+    g.add_node("m.enable", kind="Port", name="enable", direction="In",
+               location={"file": "x.sv", "line": 3})
+    # 数据流算子
+    g.add_node("op_not", kind="Operator", name="!", timing="combinational",
+               location={"file": "x.sv", "line": 10},
+               attributes={"operator_kind": "UnaryNot"})
+    g.add_node("op_4b0", kind="Literal", name="4'b0", timing="combinational",
+               location={"file": "x.sv", "line": 11},
+               attributes={"value": "4'b0"})
+    g.add_node("op_le", kind="Operator", name="<=", timing="combinational",
+               location={"file": "x.sv", "line": 12},
+               attributes={"operator_kind": "BinaryLE"})
+    g.add_node("op_if", kind="Operator", name="if", timing="combinational",
+               location={"file": "x.sv", "line": 13},
+               attributes={"operator_kind": "If"})
+    g.add_node("op_add", kind="Operator", name="+", timing="combinational",
+               location={"file": "x.sv", "line": 14},
+               attributes={"operator_kind": "BinaryOp"})
+    g.add_node("op_merge1", kind="Operator", name="merge", timing="combinational",
+               location={"file": "x.sv", "line": 15},
+               attributes={"operator_kind": "Merge"})
+    g.add_node("op_merge2", kind="Operator", name="merge", timing="combinational",
+               location={"file": "x.sv", "line": 16},
+               attributes={"operator_kind": "Merge"})
+    # 状态 (FF output)
+    g.add_node("m.count", kind="State", name="count",
+               location={"file": "x.sv", "line": 5})
+
+    # 数据流 (combinational, 保留)
+    g.add_edge("m.rst_n", "op_not", key=0, timing="combinational", edge_kind="None")
+    g.add_edge("m.enable", "op_if", key=0, timing="combinational", edge_kind="None")
+    g.add_edge("op_4b0", "op_le", key=0, timing="combinational", edge_kind="None")
+    g.add_edge("op_not", "op_le", key=0, timing="combinational", edge_kind="None")
+    g.add_edge("op_le", "op_merge1", key=0, timing="combinational", edge_kind="None")
+    g.add_edge("m.count", "op_add", key=0, timing="combinational", edge_kind="None")
+    g.add_edge("op_add", "op_merge2", key=0, timing="combinational", edge_kind="None")
+    g.add_edge("op_if", "op_merge2", key=0, timing="combinational", edge_kind="None")
+
+    # 时序触发 (CLOCK/RESET/loop, 过滤)
+    g.add_edge("m.clk", "m.count", key=0, timing="sequential_input", edge_kind="PosEdge")
+    g.add_edge("m.rst_n", "m.count", key=0, timing="sequential_input", edge_kind="NegEdge")
+    g.add_edge("m.count", "m.count", key=0, timing="sequential_output", edge_kind="None")  # self-loop
+    g.add_edge("op_merge1", "m.count", key=0, timing="sequential_input", edge_kind="None")
+    g.add_edge("op_merge2", "m.count", key=0, timing="sequential_input", edge_kind="None")
+
+    return g
+
+
+@pytest.fixture
+def counter_like_graph() -> nx.MultiDiGraph:
+    return _make_counter_like_graph()
+
+
+class TestStage29EdgeFilter:
+    """Stage 2.9 - 借鉴 sv_query DATAFLOW_VIZ_SPEC.md §4: 过滤 CLOCK/RESET/self-loop"""
+
+    def test_default_keeps_all_edges(self, counter_like_graph):
+        """filter_clock_reset=False (默认) 时保留所有非 self-loop 边, 跟旧版兼容"""
+        exporter = ElkExporter(view="dataflow").from_networkx(counter_like_graph)
+        result = exporter.to_elk_json()
+        # 13 总边 - 1 self-loop = 12 (跟 Stage 2.7 行为一致)
+        assert len(result["edges"]) == 12
+        # 默认 filtered_edges == 0 (只有 self_loops_removed > 0)
+        assert result["properties"]["filtered_edges"] == 0
+        assert result["properties"]["self_loops_removed"] == 1
+
+    def test_filter_clock_reset_removes_clock_edge(self, counter_like_graph):
+        """filter_clock_reset=True 时 clk → count (PosEdge) 被过滤"""
+        exporter = ElkExporter(
+            view="dataflow", filter_clock_reset=True
+        ).from_networkx(counter_like_graph)
+        result = exporter.to_elk_json()
+        # ELK edge 格式: sources/targets 是数组
+        for e in result["edges"]:
+            assert "m.clk" not in e["sources"], "CLOCK edge should be filtered"
+
+    def test_filter_clock_reset_removes_reset_edge(self, counter_like_graph):
+        """rst_n → count (NegEdge) 被过滤, 但 rst_n → op_not 保留"""
+        exporter = ElkExporter(
+            view="dataflow", filter_clock_reset=True
+        ).from_networkx(counter_like_graph)
+        result = exporter.to_elk_json()
+        rst_n_edges = [e for e in result["edges"] if "m.rst_n" in e["sources"]]
+        assert len(rst_n_edges) == 1
+        assert "op_not" in rst_n_edges[0]["targets"]
+
+    def test_filter_clock_reset_removes_self_loop(self, counter_like_graph):
+        """self-loop 永远被过滤"""
+        exporter = ElkExporter(
+            view="dataflow", filter_clock_reset=True
+        ).from_networkx(counter_like_graph)
+        result = exporter.to_elk_json()
+        # 所有边的 src 和 tgt 必不同
+        for e in result["edges"]:
+            assert e["sources"][0] != e["targets"][0], "self-loop should be filtered"
+
+    def test_filter_keeps_combinational_edges(self, counter_like_graph):
+        """所有 combinational 边应保留"""
+        exporter = ElkExporter(
+            view="dataflow", filter_clock_reset=True
+        ).from_networkx(counter_like_graph)
+        result = exporter.to_elk_json()
+        comb_edges = [
+            ("m.rst_n", "op_not"),
+            ("m.enable", "op_if"),
+            ("op_4b0", "op_le"),
+            ("op_not", "op_le"),
+            ("op_le", "op_merge1"),
+            ("m.count", "op_add"),
+            ("op_add", "op_merge2"),
+            ("op_if", "op_merge2"),
+        ]
+        actual_pairs = {(e["sources"][0], e["targets"][0]) for e in result["edges"]}
+        for src, tgt in comb_edges:
+            assert (src, tgt) in actual_pairs, f"Missing combinational edge {src} → {tgt}"
+
+    def test_orphan_nodes_removed_after_filter(self, counter_like_graph):
+        """过滤后没有任何边的节点应被删除 (sv_query 要求 0 orphan)"""
+        counter_like_graph.add_node("m.isolated", kind="Port", name="isolated",
+                                     direction="In",
+                                     location={"file": "x.sv", "line": 99})
+        exporter = ElkExporter(
+            view="dataflow", filter_clock_reset=True
+        ).from_networkx(counter_like_graph)
+        result = exporter.to_elk_json()
+        node_ids = {c["id"] for c in result["children"]}
+        assert "m.isolated" not in node_ids, "孤立节点应被移除"
+        # m.clk 也是 orphan (只有被过滤的边)
+        assert "m.clk" not in node_ids
+        assert result["properties"]["orphan_nodes_removed"] >= 2
+
+    def test_filter_metadata(self, counter_like_graph):
+        """properties.filtered_edges + self_loops_removed 应分别记录"""
+        exporter = ElkExporter(
+            view="dataflow", filter_clock_reset=True
+        ).from_networkx(counter_like_graph)
+        result = exporter.to_elk_json()
+        # 4 条 sequential_input (clk, rst_n, merge1→count, merge2→count)
+        assert result["properties"]["filtered_edges"] == 4
+        assert result["properties"]["self_loops_removed"] == 1
+
+
+class TestStage29EndToEnd:
+    """Stage 2.9 - counter.sv end-to-end with filter"""
+
+    @pytest.fixture(scope="class")
+    def counter_filtered_json(self):
+        """Build counter.sv and export with filter_clock_reset=True"""
+        import glob, os, shutil
+        from navisv.drivers.design_driver import DesignDriver
+        from navisv.parsers.ast_parser import ASTParser
+        from navisv.parsers.netlist_parser import NetlistParser
+        from navisv.graph.graph_builder import GraphBuilder
+        from navisv.graph.elk_exporter import ElkExporter
+
+        out = '/tmp/navisv_stage29_test'
+        if os.path.exists(out):
+            shutil.rmtree(out)
+        counter_path = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), 'fixtures', 'elk_counter.sv')
+        )
+        DesignDriver([counter_path], output_dir=out, cache=False).build()
+        ast = ASTParser(glob.glob(f'{out}/*ast*.json')[0]).parse()
+        nl = NetlistParser(glob.glob(f'{out}/*netlist*.json')[0]).parse()
+        gb = GraphBuilder(
+            ast, nl, ast_json_path=f'{out}/ast.json',
+            source_files=[counter_path], preserve_operators=True,
+        )
+        gb.build()
+        exporter = ElkExporter(
+            view="dataflow", filter_clock_reset=True
+        ).from_graph_builder(gb)
+        return exporter.to_elk_json()
+
+    def test_no_clock_edge_in_output(self, counter_filtered_json):
+        """counter.clk → counter.count 不应在 output 中"""
+        for e in counter_filtered_json["edges"]:
+            assert "counter.clk" not in e["sources"], \
+                "CLOCK edge should be filtered"
+
+    def test_no_self_loop(self, counter_filtered_json):
+        """0 个 self-loop"""
+        for e in counter_filtered_json["edges"]:
+            assert e["sources"][0] != e["targets"][0]
+
+    def test_filtered_count_in_metadata(self, counter_filtered_json):
+        """filtered_edges > 0 (counter.sv 至少有 clk + rst_n + self-loop)"""
+        assert counter_filtered_json["properties"]["filtered_edges"] >= 2
+
+    def test_dataflow_still_connected(self, counter_filtered_json):
+        """过滤后图仍连通 — 关键 dataflow 边都保留"""
+        pairs = {(e["sources"][0], e["targets"][0]) for e in counter_filtered_json["edges"]}
+        # 关键数据流: rst_n 应流向 combinational op
+        rst_targets = {tgt for src, tgt in pairs if src == "counter.rst_n"}
+        assert rst_targets, "rst_n 应至少有 1 个 combinational 目标"
+        # enable 应流向 combinational op
+        enable_targets = {tgt for src, tgt in pairs if src == "counter.enable"}
+        assert enable_targets, "enable 应至少有 1 个 combinational 目标"
+
+
+# ---------------------------------------------------------------------------
 # Tests: Stage 2.6 - AST op symbol extraction
 # ---------------------------------------------------------------------------
 

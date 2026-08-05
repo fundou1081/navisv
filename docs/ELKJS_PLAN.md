@@ -15,6 +15,7 @@ Stage 2.5  Operator / Literal 节点 (菱形 + 虚线)    → 1.5h (插队, 2026
 Stage 2.6  AST 驱动的具体运算符符号 (!, +, <=)      → 1h (插队, 2026-08-05)
 Stage 2.7  真实 ELK layered + 清晰边渲染            → 1h (插队, 2026-08-06)
 Stage 2.8  PORT_IN/OUT 锚点 (FIRST/LAST)           → 0.5h (插队, 2026-08-06)
+Stage 2.9  过滤 CLOCK/RESET/FF-update 边            → 1h (插队, 2026-08-06)
 Stage 3    CLI + 3 视图                            → 2h
 Stage 4    交互层 (搜索/高亮/CDC toggle)           → 1.5h
 Stage 5    真实 RTL 测试                           → 1h

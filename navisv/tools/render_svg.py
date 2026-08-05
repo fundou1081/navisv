@@ -63,10 +63,11 @@ def _compute_bbox(positioned: Dict) -> Tuple[float, float, float, float, float, 
     min_x, max_x = min(xs), max(xs)
     min_y, max_y = min(ys), max(ys)
     padding = 50
+    title_h = 70  # (Stage 2.9) title (y=35) + subtitle (y=55) 留空间
     legend_h = 110
     w = int(max_x - min_x + 2 * padding)
-    h = int(max_y - min_y + 2 * padding + legend_h)
-    return min_x, min_y, w, h, -min_x + padding, -min_y + padding
+    h = int(max_y - min_y + 2 * padding + legend_h + title_h)
+    return min_x, min_y, w, h, -min_x + padding, -min_y + padding + title_h
 
 
 def _render_markers() -> List[str]:
