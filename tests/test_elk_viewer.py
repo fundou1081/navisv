@@ -1508,3 +1508,199 @@ class TestShareUrlCss:
         with open(html) as f:
             content = f.read()
         assert '[data-theme="dark"] .toast' in content
+
+
+class TestContextMenuHtml:
+    """Stage 20 - context menu HTML 结构"""
+
+    @pytest.fixture
+    def html(self, tmp_path):
+        return _build_html(tmp_path, view='dataflow', filter_clock_reset=True)
+
+    def test_context_menu_present(self, html):
+        """应有 #context-menu 元素"""
+        with open(html) as f:
+            content = f.read()
+        assert 'id="context-menu"' in content
+
+    def test_context_menu_hidden_by_default(self, html):
+        """context menu 默认应有 hidden 属性"""
+        with open(html) as f:
+            content = f.read()
+        assert 'class="context-menu"' in content
+        assert 'hidden' in content
+
+    def test_context_menu_role(self, html):
+        """应有 role='menu' ARIA 属性"""
+        with open(html) as f:
+            content = f.read()
+        assert 'role="menu"' in content
+
+    def test_context_menu_items(self, html):
+        """应有 6 个菜单项 (highlight/hide/copy-name/view-source/filter-incoming/filter-outgoing)"""
+        with open(html) as f:
+            content = f.read()
+        for action in ('highlight', 'hide', 'copy-name', 'view-source',
+                      'filter-incoming', 'filter-outgoing'):
+            assert f'data-action="{action}"' in content, f"Missing ctx-item '{action}'"
+
+    def test_context_menu_item_class(self, html):
+        """菜单项应有 .ctx-item CSS 类"""
+        with open(html) as f:
+            content = f.read()
+        assert 'class="ctx-item"' in content
+
+
+class TestContextMenuJs:
+    """Stage 20 - context menu JS 逻辑"""
+
+    @pytest.fixture
+    def html(self, tmp_path):
+        return _build_html(tmp_path, view='dataflow', filter_clock_reset=True)
+
+    def test_bind_context_menu_function(self, html):
+        """应有 bindContextMenu 函数"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function bindContextMenu' in content
+
+    def test_show_context_menu_function(self, html):
+        """应有 showContextMenu 函数"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function showContextMenu' in content
+        assert 'clientX' in content
+        assert 'clientY' in content
+
+    def test_close_context_menu_function(self, html):
+        """应有 closeContextMenu 函数"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function closeContextMenu' in content
+
+    def test_do_context_action_function(self, html):
+        """应有 doContextAction 函数 (分发 6 个 action)"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function doContextAction' in content
+        # 6 个 case
+        for action in ("'highlight'", '"highlight"',
+                      "'hide'", '"hide"',
+                      "'copy-name'", '"copy-name"',
+                      "'view-source'", '"view-source"',
+                      "'filter-incoming'", '"filter-incoming"',
+                      "'filter-outgoing'", '"filter-outgoing"'):
+            assert action in content, f"Missing action {action}"
+
+    def test_copy_to_clipboard_function(self, html):
+        """应有 copyToClipboard helper (clipboard API)"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function copyToClipboard' in content
+        assert 'navigator.clipboard' in content
+
+    def test_fallback_copy_text(self, html):
+        """应有 fallbackCopyText (textarea + execCommand)"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function fallbackCopyText' in content
+        assert 'execCommand' in content
+        assert 'textarea' in content
+
+    def test_contextmenu_event_listener(self, html):
+        """bindContextMenu 应绑 contextmenu event"""
+        with open(html) as f:
+            content = f.read()
+        assert "'contextmenu'" in content
+        assert 'preventDefault' in content
+
+    def test_closest_node_or_edge(self, html):
+        """contextmenu handler 应检查 closest('.node') 或 .edge"""
+        with open(html) as f:
+            content = f.read()
+        assert "closest('.node')" in content
+        assert "closest('.edge')" in content
+
+    def test_view_source_uses_window_open(self, html):
+        """view-source action 应调 window.open (新窗口)"""
+        with open(html) as f:
+            content = f.read()
+        assert 'window.open' in content
+        assert '_blank' in content
+
+    def test_click_outside_closes_menu(self, html):
+        """点击 menu 外应关闭"""
+        with open(html) as f:
+            content = f.read()
+        assert "closest('#context-menu')" in content
+
+    def test_esc_closes_menu(self, html):
+        """Esc 应关闭 menu (preventDefault)"""
+        with open(html) as f:
+            content = f.read()
+        assert "'Escape'" in content
+        assert 'isContextMenuOpen' in content
+
+    def test_highlight_uses_classlist_add(self, html):
+        """highlight action 应给节点加 highlighted class"""
+        with open(html) as f:
+            content = f.read()
+        assert "classList.add('highlighted')" in content
+
+    def test_hide_uses_classlist_add(self, html):
+        """hide action 应给节点加 hidden class"""
+        with open(html) as f:
+            content = f.read()
+        assert "classList.add('hidden')" in content
+
+    def test_filter_actions_use_search_input(self, html):
+        """filter-incoming/outgoing 应设 search input 值"""
+        with open(html) as f:
+            content = f.read()
+        assert "search-input" in content
+        assert 'search.value' in content
+        assert 'applyFilters()' in content
+
+    def test_bind_context_menu_called(self, html):
+        """render().then() 后应调 bindContextMenu()"""
+        with open(html) as f:
+            content = f.read()
+        assert 'bindContextMenu()' in content
+
+
+class TestContextMenuCss:
+    """Stage 20 - context menu CSS 样式"""
+
+    @pytest.fixture
+    def html(self, tmp_path):
+        return _build_html(tmp_path, view='dataflow', filter_clock_reset=True)
+
+    def test_context_menu_position_fixed(self, html):
+        """.context-menu 应 fixed 定位 + z-index"""
+        with open(html) as f:
+            content = f.read()
+        assert '.context-menu' in content
+        assert 'position: fixed' in content
+        assert 'z-index' in content
+
+    def test_context_menu_hidden_display_none(self, html):
+        """.context-menu[hidden] 应 display: none"""
+        with open(html) as f:
+            content = f.read()
+        assert '.context-menu[hidden]' in content
+        assert 'display: none' in content
+
+    def test_ctx_item_style(self, html):
+        """.ctx-item 应有 padding + hover 背景"""
+        with open(html) as f:
+            content = f.read()
+        assert '.ctx-item' in content
+        assert '.ctx-item:hover' in content
+
+    def test_dark_context_menu_inherits_vars(self, html):
+        """dark mode .context-menu 应用 var() 自动适配"""
+        with open(html) as f:
+            content = f.read()
+        # .context-menu 用 var(--bg-card) 等会自动适配
+        assert 'var(--bg-card)' in content
+        assert 'var(--text-primary)' in content

@@ -240,6 +240,9 @@
 
       // (Stage 18) 分享 URL: 从 hash 恢复状态 + 监听变化
       bindShareUrl();
+
+      // (Stage 20) 右键菜单
+      bindContextMenu();
     });
   }
 
@@ -870,6 +873,158 @@
     // Share 按钮
     const shareBtn = document.getElementById('share-url');
     if (shareBtn) shareBtn.addEventListener('click', copyShareUrl);
+  }
+
+  // ---------------------------------------------------------------------
+  // (Stage 20) 右键菜单 — 节点/边 context menu
+  //  - 6 个 actions: highlight / hide / copy-name / view-source /
+  //    filter-incoming / filter-outgoing
+  //  - 隐藏浏览器默认菜单 (preventDefault)
+  //  - 点击外部 / Esc 关闭
+  //  - copy-name 用 navigator.clipboard + textarea fallback
+  // ---------------------------------------------------------------------
+
+  let contextTarget = null;  // 当前右键点击的节点或边
+
+  function showContextMenu(x, y, target, kind) {
+    const menu = document.getElementById('context-menu');
+    if (!menu) return;
+    contextTarget = { el: target, kind: kind };
+    // 定位: 不超出窗口
+    menu.style.left = Math.min(x, window.innerWidth - 200) + 'px';
+    menu.style.top = Math.min(y, window.innerHeight - 220) + 'px';
+    menu.removeAttribute('hidden');
+  }
+
+  function closeContextMenu() {
+    const menu = document.getElementById('context-menu');
+    if (menu) menu.setAttribute('hidden', '');
+    contextTarget = null;
+  }
+
+  function isContextMenuOpen() {
+    const m = document.getElementById('context-menu');
+    return m && !m.hasAttribute('hidden');
+  }
+
+  function copyToClipboard(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(text).catch(function () {
+        return Promise.resolve(fallbackCopyText(text));
+      });
+    }
+    return Promise.resolve(fallbackCopyText(text));
+  }
+
+  function fallbackCopyText(text) {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); } catch (e) { /* ignore */ }
+    document.body.removeChild(ta);
+  }
+
+  function doContextAction(action) {
+    if (!contextTarget) return;
+    const id = contextTarget.el.dataset.nodeId || contextTarget.el.dataset.edgeId;
+    const isNode = !!contextTarget.el.dataset.nodeId;
+    let node = null, edge = null;
+    if (isNode) {
+      node = (currentLayouted.children || []).find(function (c) { return c.id === id; });
+    } else {
+      edge = (currentLayouted.edges || []).find(function (e) { return e.id === id; });
+    }
+
+    switch (action) {
+      case 'highlight':
+        if (isNode && node) {
+          contextTarget.el.classList.add('highlighted');
+        }
+        showToastHighlight();
+        break;
+      case 'hide':
+        if (isNode && node) {
+          contextTarget.el.classList.add('hidden');
+        }
+        break;
+      case 'copy-name':
+        if (isNode && node) {
+          copyToClipboard(getNodeLabel(node));
+          showToast();
+        }
+        break;
+      case 'view-source': {
+        const p = isNode ? (node && node.properties) : (edge && edge.properties);
+        if (p && p.file && p.file !== 'N/A') {
+          const srcLink = buildSourceLink(p.file, p.line);
+          if (srcLink) window.open(srcLink, '_blank', 'noopener');
+        }
+        break;
+      }
+      case 'filter-incoming':
+      case 'filter-outgoing':
+        if (isNode && node) {
+          const search = document.getElementById('search-input');
+          if (search) {
+            search.value = getNodeLabel(node);
+            applyFilters();
+          }
+        }
+        break;
+    }
+    closeContextMenu();
+  }
+
+  function showToastHighlight() {
+    const toast = document.getElementById('toast');
+    if (!toast) return;
+    toast.textContent = '⭐ Highlighted';
+    toast.classList.add('toast-show');
+    setTimeout(function () {
+      toast.textContent = '✅ URL copied to clipboard';
+      toast.classList.remove('toast-show');
+    }, 1500);
+  }
+
+  function bindContextMenu() {
+    const svg = document.getElementById('graph-svg');
+    if (!svg) return;
+    // 节点/边右键
+    svg.addEventListener('contextmenu', function (e) {
+      const node = e.target.closest('.node');
+      const edge = e.target.closest('.edge');
+      if (node || edge) {
+        e.preventDefault();
+        const target = node || edge;
+        const kind = node ? 'node' : 'edge';
+        showContextMenu(e.clientX, e.clientY, target, kind);
+      }
+    });
+    // 点击菜单项
+    const menu = document.getElementById('context-menu');
+    if (menu) {
+      menu.querySelectorAll('.ctx-item').forEach(function (item) {
+        item.addEventListener('click', function () {
+          doContextAction(item.dataset.action);
+        });
+      });
+    }
+    // 点击其他位置关闭
+    document.addEventListener('click', function (e) {
+      if (isContextMenuOpen() && !e.target.closest('#context-menu')) {
+        closeContextMenu();
+      }
+    });
+    // Esc 关闭
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && isContextMenuOpen()) {
+        closeContextMenu();
+        e.preventDefault();
+      }
+    });
   }
 
   function setupPanZoom() {

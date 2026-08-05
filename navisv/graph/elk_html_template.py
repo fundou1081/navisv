@@ -98,6 +98,15 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
   </div>
 </aside>
 <div id="info">Click any node or edge to see details.</div>
+<!-- (Stage 20) 节点/边右键菜单: 默认隐藏, 右键节点/边时弹出 -->
+<div id="context-menu" class="context-menu" hidden role="menu">
+  <button type="button" class="ctx-item" data-action="highlight" role="menuitem">⭐ Highlight</button>
+  <button type="button" class="ctx-item" data-action="hide" role="menuitem">👁 Hide</button>
+  <button type="button" class="ctx-item" data-action="copy-name" role="menuitem">📋 Copy name</button>
+  <button type="button" class="ctx-item" data-action="view-source" role="menuitem">↗ View source</button>
+  <button type="button" class="ctx-item" data-action="filter-incoming" role="menuitem">⇠ Filter incoming</button>
+  <button type="button" class="ctx-item" data-action="filter-outgoing" role="menuitem">⇢ Filter outgoing</button>
+</div>
 <!-- (Stage 18) Share 复制成功 toast 提示 -->
 <div id="toast" class="toast" hidden>✅ URL copied to clipboard</div>
 
