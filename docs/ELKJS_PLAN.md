@@ -13,6 +13,7 @@ Stage 1    ElkExporter 骨架 + 数据流转换           → 2h
 Stage 2    HTML viewer + bundled elkjs              → 1.5h
 Stage 2.5  Operator / Literal 节点 (菱形 + 虚线)    → 1.5h (插队, 2026-08-05)
 Stage 2.6  AST 驱动的具体运算符符号 (!, +, <=)      → 1h (插队, 2026-08-05)
+Stage 2.7  真实 ELK layered + 清晰边渲染            → 1h (插队, 2026-08-06)
 Stage 3    CLI + 3 视图                            → 2h
 Stage 4    交互层 (搜索/高亮/CDC toggle)           → 1.5h
 Stage 5    真实 RTL 测试                           → 1h
@@ -111,6 +112,54 @@ Stage 2.5 的 Operator label 仍是 netlist kind (`if`/`<=`/`merge`)。
 ### Commit
 ```
 feat(elk): Stage 2.6 — operator labels show specific symbols (!, +, <=, if)
+```
+
+---
+
+## Stage 2.7: 真实 ELK Layered Layout + 清晰边渲染 (2026-08-06)
+
+**背景**: 用户反馈「这个图有些抽象，连接关系看不清，混淆」
+
+Stage 2.6 的 PNG 用手写 BFS 布局, 节点散乱 + 边穿越混乱。Stage 2.7 引入真 ELK layered 算法 + orthogonal edge routing。
+
+### 任务
+- [x] `navisv/tools/run_elk.js`: Node.js 调 ELK.bundled.js 跑真 layered layout
+  - `elk.algorithm = 'layered'`, `elk.direction = 'RIGHT'`, `elk.edgeRouting = 'ORTHOGONAL'`
+  - 接受 `--direction={DOWN|RIGHT|UP|LEFT}` 参数
+- [x] `navisv/tools/render_svg.py`: 把 ELK 输出 JSON 渲染成 SVG
+  - **Inline stroke 属性** (避开 rsvg-convert CSS quirk — Stage 2.6 踩过坑)
+  - 4 个 arrow markers (blue/red/purple/gray) 在 `<defs>`
+  - 节点按 kind 渲染 (Operator=菱形, Literal=虚线矩形, etc.)
+  - 边按时序着色 (combinational=蓝, sequential=红, clock=紫)
+  - 两栏 legend (节点 + 边)
+- [x] `navisv/tools/elk_layout.py`: Python wrapper
+  - `run_elk_layout(elk_json, direction)` — subprocess 调 Node.js + 读输出
+  - `run_layout_and_render(elk_json, svg_path, ...)` — one-shot
+  - CLI: `python -m navisv.tools.elk_layout <in.json> <out.svg> --direction=RIGHT`
+- [x] `navisv/tools/__init__.py`: 包初始化
+- [x] `tests/test_render_svg.py`: +31 个测试
+  - TestStripFileTag (4) — label 去 file.sv:N 后缀
+  - TestRenderMarkers (3) — `<defs>` 4 个箭头
+  - TestRenderNode (7) — Port/State/Operator/Literal 形状 + offset + file tag 去除
+  - TestRenderEdge (5) — combinational/sequential 颜色 + inline stroke + bend points
+  - TestComputeBBox (2) — 节点 + 边范围
+  - TestRenderSvgEndToEnd (5) — render_svg() 完整流程 + HTML escape
+  - TestRunElkLayout (4) — Node.js subprocess + direction
+  - TestStage27EndToEnd (1) — counter.sv 端到端
+
+### 验收
+- counter.sv 端到端: 11 节点 + 15 边清晰可见, 水平 flow, orthogonal routing
+- PNG: 74KB, 1322x469, 节点位置合理, 箭头清晰, legend 完整
+- 31 render_svg tests pass, 349 navisv tests pass, 0 regression
+
+### 关键 bugfix
+1. **CSS class 不被 rsvg-convert 解析** — Stage 2.6 PNG 只有箭头看不到边。改用 inline stroke + stroke-width, 边立刻可见
+2. **测试 fixture 错位** — fixture edges 含 `sections` (ELK 输出), 但 ELK input 不能含 sections。拆为 2 个 fixture: input vs output
+3. **HTML escape** — SVG text 中 `<` → `&lt;`, `'` → `&#x27;`, 测试 assertion 用转义后形式
+
+### Commit
+```
+feat(elk): Stage 2.7 — real ELK layered layout + clear edge rendering
 ```
 
 ---

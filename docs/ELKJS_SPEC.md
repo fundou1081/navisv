@@ -72,6 +72,62 @@ Stage 2.6 修正 Operator label 显示的符号为 AST 提取的真实运算符:
 - 只看第一个 operator (顶层 RHS / 顶层 condition), 深层嵌套不展开
 - Counter 示例: `op_5 = !` (LogicalNot), `op_9 = +` (Add), `op_8 = if` (NamedValue condition), `op_6 = <=` (literal RHS)
 
+### 2.2 (Stage 2.7) 真实 ELK Layered Layout + 清晰边渲染
+
+Stage 2.6 之前的 PNG 用 BFS 手写布局, 节点散乱 + 边穿越混在一起的接口。Stage 2.7 引入真 ELK layered 算法 + orthogonal edge routing。
+
+**调用方式**:
+```python
+from navisv.tools.elk_layout import run_layout_and_render
+run_layout_and_render(elk_json, 'out.svg', title='counter', direction='RIGHT')
+```
+
+**ELK 配置** (`navisv/tools/run_elk.js`):
+| Option | Value | 作用 |
+|---|---|---|
+| `elk.algorithm` | `layered` | 层级化算法 |
+| `elk.direction` | `RIGHT` (default) | 水平流, 数据流向清晰 |
+| `elk.edgeRouting` | `ORTHOGONAL` | 边走直角拐弯, 避免交叉 |
+| `elk.layered.spacing.nodeNodeBetweenLayers` | `40` | 层间间距 |
+| `elk.spacing.nodeNode` | `25` | 同层节点间距 |
+| `elk.spacing.edgeNode` | `15` | 边-节点间距 |
+| `elk.spacing.edgeEdge` | `12` | 边-边间距 |
+| `elk.layered.crossingMinimization.semiInteractive` | `true` | 减少交叉 |
+| `elk.layered.nodePlacement.bk.fixedAlignment` | `BALANCED` | 节点居中对齐 |
+
+**SVG 渲染策略** (`navisv/tools/render_svg.py`):
+- **Inline stroke 属性** (不走 CSS class) — 避开 rsvg-convert 对 `<style>` 的 CSS quirk (Stage 2.6 踩过坑)
+- **Arrow markers** — `<defs>` 中预定义 `arrow-blue/red/purple/gray` 4 个箭头, 边用 `marker-end="url(#xxx)"`
+- **节点形状按 kind**:
+  - Port → 圆角矩形 (蓝边)
+  - State → 圆角矩形 (绿边)
+  - Operator → 菱形 (`<polygon>`)
+  - Literal → 虚线矩形 (`stroke-dasharray="4,2"`)
+- **边按时序着色**:
+  - combinational → `#2980b9` (蓝)
+  - sequential → `#c0392b` (红)
+  - clock → `#8e44ad` (紫)
+  - unknown → `#7f8c8d` (灰)
+- **Legend 两栏** (节点 + 边) 在图底部
+
+**End-to-end**:
+```
+GraphBuilder(preserve_operators=True)
+  ↓
+ElkExporter.to_elk_json()
+  ↓
+run_elk_layout()  # Node.js → ELK.bundled.js → positioned JSON
+  ↓
+render_svg()  # positioned JSON → SVG with orthogonal routing
+  ↓
+rsvg-convert → PNG
+```
+
+**踩坑史**:
+1. **CSS class 不工作**: rsvg-convert 不解析 SVG `<style>` 内的 class selectors → 用 inline stroke
+2. **fixture 错位**: 测试 fixture edges 含 `sections` 字段, 但 sections 是 ELK **输出**字段, 不是输入 → 拆为 `_make_positioned_json()` (ELK input) 和 `_make_positioned_with_layout()` (ELK output) 两个 fixture
+3. **HTML escape**: SVG text 中 `<` 转 `&lt;`, `'` 转 `&#x27;` → 测试用 `&lt;=` 和 `4&#x27;b0`
+
 ---
 
 ## 3. 数据格式 (elkjs 原生 JSON)
