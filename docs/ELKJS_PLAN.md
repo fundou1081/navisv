@@ -20,6 +20,7 @@ Stage 3    CLI + 3 视图                            → 2h
 Stage 4    交互层 (搜索/高亮/CDC toggle)           → 1.5h (2026-08-06)
 Stage 5    真实 RTL 测试                           → 0.5h (2026-08-06) — 受 slang-netlist 限制
 Stage 6    examples + README + push                → 0.5h (2026-08-06)
+Stage 7    HTML viewer pan/zoom (wheel/drag/btns)  → 0.5h (2026-08-06)
 Stage 6    examples + README + push                → 1h
 ```
 
