@@ -857,6 +857,127 @@ mermaid = cg.to_mermaid()
 
 ---
 
+## 🎨 交互式可视化 (navisv elk)
+
+`navisv elk` 用 [elkjs](https://github.com/kieler/elkjs) (Eclipse Layout Kernel 的 JS 实现) 做交互式可视化。输出可以是:
+
+- **HTML** (默认): 自包含 viewer, 带 bundled elkjs (~1.6MB), 离线可用, file:// 协议能开
+- **SVG**: 静态 SVG, 可贴到文档里
+- **PNG**: SVG → rsvg-convert → 1600px 宽
+- **JSON**: ELK JSON dump (给高级用户调 elkjs 客户端)
+
+### 快速上手
+
+```bash
+# 默认: dataflow view, HTML viewer, 纯数据流 (过滤 CLOCK/RESET/FF-update 边)
+navisv elk design.sv
+
+# 输出 PNG (适合贴到 issue / 文档)
+navisv elk design.sv -o out.png
+
+# 关闭 FF-update 边过滤 (跟 Stage 2.7 行为一致, 显示全部边)
+navisv elk design.sv --no-filter-clock-reset
+
+# 控制流视图 (always_ff / case / if)
+navisv elk design.sv --view controlflow
+
+# 模块架构视图
+navisv elk design.sv --view modules
+
+# TOP 方向 (上下布局)
+navisv elk design.sv -d DOWN -o out.svg
+```
+
+### HTML viewer 交互功能
+
+打开生成的 `.html` 后:
+
+1. **搜索框**: 输入子串 (case-insensitive), 命中节点橙色高亮
+2. **节点类型过滤器**: Port / State / Operator / Literal 复选框, 取消勾选淡出
+3. **CDC toggle 按钮**: 开关跨时钟域边高亮 (off 时淡出, on 时红色加粗)
+4. **点击节点/边**: 底部 info 面板显示完整属性 (kind, direction, file, line, timing 等)
+
+### counter.sv 例子
+
+```bash
+$ navisv elk tests/fixtures/elk_counter.sv -o counter.png
+✅ ELK 输出: counter.png
+  view: dataflow
+  filter_clock_reset: True
+  direction: RIGHT
+  children: 10
+  edges: 11
+  filtered_edges: 4
+  orphan_nodes_removed: 1
+```
+
+效果:
+
+![counter.sv navisv elk dataflow view](examples/counter_dataflow.png)
+
+输入端口 (clk, rst_n, enable) 垂直对齐在最左列, count State 在右, 中间是 operators (`!`, `if`, `<=`, `+`, merge, merge) 和 4'b0 literal。
+
+### 4 种视图对比
+
+| 视图 | CLI flag | elkjs 算法 | 数据来源 | 何时用 |
+|------|---------|-----------|---------|--------|
+| **dataflow** | `--view dataflow` (默认) | `layered` (RIGHT) | `GraphBuilder` + operator/literal 节点 | 看信号怎么从 A 流到 B |
+| **controlflow** | `--view controlflow` | `layered` | 关闭 FF 边过滤 | 看 always_ff 触发链 |
+| **modules** | `--view modules` | `layered` | 复用 dataflow | 看模块层级 |
+
+### 10  个选项详解
+
+```
+navisv elk <file.sv> [options]
+
+位置参数:
+  file                                       SV 设计文件
+
+选项:
+  --view {dataflow,controlflow,modules}      默认: dataflow
+  --output/-o <path.{html,svg,png,json}>     默认: <basename>.elk.html
+  --filter-clock-reset/--no-filter-clock-reset  默认: 开 (纯数据流)
+  --max-nodes <int>                          默认: 500
+  --scope <module.path>                      子模块聚焦
+  --cdc-highlight                            高亮跨时钟域
+  --direction {RIGHT,DOWN,LEFT,UP}           默认: RIGHT
+  --include/-I <dir>                         slang include 路径
+  --preserve-operators/--no-preserve-operators  默认: 开 (Stage 2.5)
+```
+
+### Python API
+
+```python
+from navisv.graph.graph_builder import GraphBuilder
+from navisv.graph.elk_exporter import ElkExporter
+from navisv.tools.elk_layout import run_layout_and_render
+
+gb = GraphBuilder(ast, nl, ast_json_path='ast.json',
+                  source_files=['design.sv'], preserve_operators=True)
+gb.build()
+
+exporter = ElkExporter(
+    view='dataflow',
+    filter_clock_reset=True,
+    cdc_highlight=True,
+    max_nodes=500,
+).from_graph_builder(gb)
+
+# 输出 HTML (1.6MB, 带 bundled elkjs)
+exporter.export_html('/tmp/out.html')
+
+# 输出 SVG/PNG (走 run_layout_and_render)
+from navisv.tools.elk_layout import run_elk_layout
+from navisv.tools.render_svg import render_svg
+elk_json = exporter.to_elk_json()
+positioned = run_elk_layout(elk_json, direction='RIGHT')
+svg = render_svg(positioned, title='my design', subtitle='...')
+```
+
+详见 [docs/ELKJS_SPEC.md](./docs/ELKJS_SPEC.md) 和 [docs/ELKJS_PLAN.md](./docs/ELKJS_PLAN.md)。
+
+---
+
 ## CLI 命令速查
 
 ```bash
@@ -883,6 +1004,15 @@ navisv cg-quality design.sv var cg cp -t data    # 质量评估
 # 编译检查
 navisv check design.sv                           # 语法检查
 navisv check -F filelist.f                       # filelist 检查
+
+# 交互式可视化 (elkjs)
+navisv elk design.sv                             # HTML viewer (默认 dataflow)
+navisv elk design.sv -o out.png                  # PNG (rsvg-convert)
+navisv elk design.sv -o out.svg --direction DOWN # SVG, 上下布局
+navisv elk design.sv --view controlflow          # 控制流视图
+navisv elk design.sv --view modules              # 模块架构视图
+navisv elk design.sv --no-filter-clock-reset     # 显示全部边 (含 FF-update)
+navisv elk design.sv --cdc-highlight             # 高亮跨时钟域
 
 # 通用
 navisv --json <command>                          # JSON 输出
