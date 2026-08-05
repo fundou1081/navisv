@@ -652,6 +652,45 @@ body {
   background: var(--bg-card);
 }
 
+/* ---------------------------------------------------------------------
+ * (Stage 18) Share URL 按钮 + toast 提示
+ * --------------------------------------------------------------------- */
+
+.share-btn {
+  background: var(--bg-input);
+}
+
+:root[data-theme="dark"] .share-btn:hover {
+  background: var(--bg-hover);
+}
+
+.toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%) translateY(20px);
+  background: #27ae60;
+  color: white;
+  padding: 10px 20px;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  font-size: 13px;
+  z-index: 2000;
+  opacity: 0;
+  transition: opacity 0.2s, transform 0.2s;
+  pointer-events: none;
+}
+
+.toast.toast-show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+:root[data-theme="dark"] .toast {
+  background: #2ecc71;
+  color: #1a1d23;
+}
+
 .modal-overlay {
   position: fixed;
   top: 0;

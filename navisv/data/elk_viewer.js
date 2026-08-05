@@ -237,6 +237,9 @@
 
       // (Stage 16) 主题切换
       bindThemeSelect();
+
+      // (Stage 18) 分享 URL: 从 hash 恢复状态 + 监听变化
+      bindShareUrl();
     });
   }
 
@@ -685,6 +688,188 @@
       if (mq.addEventListener) mq.addEventListener('change', handler);
       else if (mq.addListener) mq.addListener(handler);  // 旧浏览器 fallback
     }
+  }
+
+  // ---------------------------------------------------------------------
+  // (Stage 18) Share URL — encode viewer state to URL hash
+  //  - search / filters / CDC / pan / zoom / theme → #key=val&key=val
+  //  - 启动时 restoreFromHash() 恢复状态
+  //  - 状态变化时 debounced updateHash() 写 location.hash
+  //  - Share 按钮复制完整 URL 到 clipboard + toast 提示
+  // ---------------------------------------------------------------------
+
+  // 收集当前 UI 状态
+  function getStateFromUI() {
+    const search = (document.getElementById('search-input') || {}).value || '';
+    const showPort = (document.getElementById('show-port') || {}).checked;
+    const showState = (document.getElementById('show-state') || {}).checked;
+    const showOperator = (document.getElementById('show-operator') || {}).checked;
+    const showLiteral = (document.getElementById('show-literal') || {}).checked;
+    const cdcOn = (document.getElementById('toggle-cdc') || {}).dataset.on === 'true';
+    const themeSel = document.getElementById('theme-select');
+    const theme = themeSel ? themeSel.value : 'auto';
+    return {
+      q: search,
+      f: [
+        showPort ? 'p' : '',
+        showState ? 's' : '',
+        showOperator ? 'o' : '',
+        showLiteral ? 'l' : ''
+      ].join(''),
+      cdc: cdcOn ? '1' : '0',
+      t: theme,
+      v: viewState.scale.toFixed(2) + ',' + viewState.tx + ',' + viewState.ty,
+    };
+  }
+
+  // 编码状态到 hash string
+  function encodeState(state) {
+    const parts = [];
+    if (state.q) parts.push('q=' + encodeURIComponent(state.q));
+    if (state.f) parts.push('f=' + state.f);
+    if (state.cdc === '1') parts.push('cdc=1');
+    if (state.t && state.t !== 'auto') parts.push('t=' + state.t);
+    if (state.v && state.v !== '1.00,0,0') parts.push('v=' + state.v);
+    return parts.join('&');
+  }
+
+  // 解码 hash string 到 state 对象
+  function decodeState(hash) {
+    const s = (hash || '').replace(/^#/, '');
+    const state = {};
+    if (!s) return state;
+    s.split('&').forEach(function (kv) {
+      const i = kv.indexOf('=');
+      if (i < 0) return;
+      const k = kv.substring(0, i);
+      const v = decodeURIComponent(kv.substring(i + 1));
+      state[k] = v;
+    });
+    return state;
+  }
+
+  // 把 state 应用到 UI
+  function applyState(state) {
+    if (state.q !== undefined) {
+      const search = document.getElementById('search-input');
+      if (search) search.value = state.q;
+    }
+    if (state.f !== undefined) {
+      const f = state.f;
+      const cbPort = document.getElementById('show-port');
+      const cbState = document.getElementById('show-state');
+      const cbOp = document.getElementById('show-operator');
+      const cbLit = document.getElementById('show-literal');
+      if (cbPort) cbPort.checked = f.indexOf('p') >= 0;
+      if (cbState) cbState.checked = f.indexOf('s') >= 0;
+      if (cbOp) cbOp.checked = f.indexOf('o') >= 0;
+      if (cbLit) cbLit.checked = f.indexOf('l') >= 0;
+    }
+    if (state.cdc !== undefined) {
+      const btn = document.getElementById('toggle-cdc');
+      if (btn) {
+        const on = state.cdc === '1';
+        btn.dataset.on = on ? 'true' : 'false';
+        btn.textContent = 'CDC: ' + (on ? 'on' : 'off');
+        btn.classList.toggle('active', on);
+      }
+    }
+    if (state.t !== undefined) {
+      const sel = document.getElementById('theme-select');
+      if (sel) {
+        sel.value = state.t;
+        saveTheme(state.t);
+        applyTheme(state.t);
+      }
+    }
+    if (state.v !== undefined) {
+      const parts = state.v.split(',');
+      if (parts.length === 3) {
+        viewState.scale = parseFloat(parts[0]) || 1;
+        viewState.tx = parseFloat(parts[1]) || 0;
+        viewState.ty = parseFloat(parts[2]) || 0;
+        applyViewTransform();
+      }
+    }
+  }
+
+  // debounce: 300ms 后写 hash (避免频繁 history)
+  let hashUpdateTimer = null;
+  function updateHash() {
+    if (hashUpdateTimer) clearTimeout(hashUpdateTimer);
+    hashUpdateTimer = setTimeout(function () {
+      const state = getStateFromUI();
+      const encoded = encodeState(state);
+      const newHash = encoded ? '#' + encoded : '';
+      if (location.hash !== newHash) {
+        // 用 replaceState 避免污染历史栈
+        try {
+          history.replaceState(null, '', newHash || location.pathname + location.search);
+        } catch (e) {
+          location.hash = newHash;
+        }
+      }
+    }, 300);
+  }
+
+  function restoreFromHash() {
+    const state = decodeState(location.hash);
+    applyState(state);
+  }
+
+  function copyShareUrl() {
+    const url = location.href;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(url).then(showToast).catch(fallbackCopy);
+    } else {
+      fallbackCopy();
+    }
+    function fallbackCopy() {
+      const ta = document.createElement('textarea');
+      ta.value = url;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); showToast(); } catch (e) { /* ignore */ }
+      document.body.removeChild(ta);
+    }
+  }
+
+  function showToast() {
+    const toast = document.getElementById('toast');
+    if (!toast) return;
+    toast.classList.add('toast-show');
+    setTimeout(function () { toast.classList.remove('toast-show'); }, 1500);
+  }
+
+  function bindShareUrl() {
+    // 启动恢复
+    restoreFromHash();
+    // 监听状态变化, debounced 写 hash
+    const search = document.getElementById('search-input');
+    if (search) search.addEventListener('input', updateHash);
+    ['show-port', 'show-state', 'show-operator', 'show-literal'].forEach(function (id) {
+      const cb = document.getElementById(id);
+      if (cb) cb.addEventListener('change', updateHash);
+    });
+    const cdcBtn = document.getElementById('toggle-cdc');
+    if (cdcBtn) cdcBtn.addEventListener('click', updateHash);
+    const themeSel = document.getElementById('theme-select');
+    if (themeSel) themeSel.addEventListener('change', updateHash);
+    // pan/zoom (用我们现有的 zoomAt 函数已经更新 viewState, 需要在变换后调用 updateHash)
+    // 简单处理: 用 setInterval 检查 viewState 是否变化 (100ms)
+    let lastV = '';
+    setInterval(function () {
+      const v = viewState.scale.toFixed(2) + ',' + viewState.tx + ',' + viewState.ty;
+      if (v !== lastV) {
+        lastV = v;
+        updateHash();
+      }
+    }, 300);
+    // Share 按钮
+    const shareBtn = document.getElementById('share-url');
+    if (shareBtn) shareBtn.addEventListener('click', copyShareUrl);
   }
 
   function setupPanZoom() {

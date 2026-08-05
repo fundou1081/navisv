@@ -1322,3 +1322,189 @@ class TestThemeSwitcherCss:
         with open(html) as f:
             content = f.read()
         assert '[data-theme="dark"] #graph svg' in content
+
+
+class TestShareUrlHtml:
+    """Stage 18 - share URL button + toast HTML"""
+
+    @pytest.fixture
+    def html(self, tmp_path):
+        return _build_html(tmp_path, view='dataflow', filter_clock_reset=True)
+
+    def test_share_button_present(self, html):
+        """应有 #share-url 按钮"""
+        with open(html) as f:
+            content = f.read()
+        assert 'id="share-url"' in content
+
+    def test_share_button_class(self, html):
+        """share 按钮应有 .share-btn 类"""
+        with open(html) as f:
+            content = f.read()
+        assert 'share-btn' in content
+
+    def test_share_button_title(self, html):
+        """share 按钮应有 title 提示"""
+        with open(html) as f:
+            content = f.read()
+        # title 属性
+        assert 'title=' in content
+        assert 'shareable URL' in content or 'share' in content.lower()
+
+    def test_toast_element_present(self, html):
+        """应有 #toast 提示元素"""
+        with open(html) as f:
+            content = f.read()
+        assert 'id="toast"' in content
+
+    def test_toast_hidden_by_default(self, html):
+        """toast 默认应有 hidden 属性"""
+        with open(html) as f:
+            content = f.read()
+        # <div id="toast" class="toast" hidden>
+        assert 'class="toast"' in content
+
+
+class TestShareUrlJs:
+    """Stage 18 - share URL JS 逻辑"""
+
+    @pytest.fixture
+    def html(self, tmp_path):
+        return _build_html(tmp_path, view='dataflow', filter_clock_reset=True)
+
+    def test_get_state_from_ui_function(self, html):
+        """应有 getStateFromUI 函数"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function getStateFromUI' in content
+
+    def test_encode_state_function(self, html):
+        """应有 encodeState 函数 (state → hash string)"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function encodeState' in content
+        assert 'encodeURIComponent' in content
+
+    def test_decode_state_function(self, html):
+        """应有 decodeState 函数 (hash string → state)"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function decodeState' in content
+        # decodeURIComponent 应在 decodeState 里
+        assert content.count('decodeURIComponent') >= 1
+
+    def test_apply_state_function(self, html):
+        """应有 applyState 函数 (state → UI)"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function applyState' in content
+
+    def test_update_hash_function(self, html):
+        """应有 updateHash 函数 (debounced 写 hash)"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function updateHash' in content
+        assert 'replaceState' in content or 'location.hash' in content
+
+    def test_debounce_uses_setTimeout(self, html):
+        """updateHash 应有 debounce (setTimeout)"""
+        with open(html) as f:
+            content = f.read()
+        assert 'clearTimeout' in content
+        assert 'setTimeout' in content
+
+    def test_restore_from_hash_function(self, html):
+        """应有 restoreFromHash 函数"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function restoreFromHash' in content
+        assert 'location.hash' in content
+
+    def test_copy_share_url_function(self, html):
+        """应有 copyShareUrl 函数 (clipboard API)"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function copyShareUrl' in content
+        assert 'navigator.clipboard' in content
+
+    def test_fallback_uses_textarea(self, html):
+        """无 clipboard API 时应用 textarea fallback"""
+        with open(html) as f:
+            content = f.read()
+        assert 'createElement(\'textarea\')' in content or 'createElement("textarea")' in content
+        assert 'execCommand' in content
+
+    def test_show_toast_function(self, html):
+        """应有 showToast 函数"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function showToast' in content
+
+    def test_toast_show_class(self, html):
+        """toast 应用 toast-show class 显示"""
+        with open(html) as f:
+            content = f.read()
+        assert "classList.add('toast-show')" in content
+        assert "classList.remove('toast-show')" in content
+
+    def test_bind_share_url_function(self, html):
+        """应有 bindShareUrl 函数"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function bindShareUrl' in content
+
+    def test_bind_share_url_listeners(self, html):
+        """bindShareUrl 应绑各种 change/input/click listener"""
+        with open(html) as f:
+            content = f.read()
+        assert "'input'" in content  # search
+        assert "'change'" in content  # filters + theme
+        assert "'click'" in content   # cdc + share
+
+    def test_pan_zoom_polling(self, html):
+        """pan/zoom 状态变化应用 setInterval 轮询 (因为 zoomAt 没回调)"""
+        with open(html) as f:
+            content = f.read()
+        assert 'setInterval' in content
+
+    def test_bind_share_url_called_after_render(self, html):
+        """render().then() 后应调 bindShareUrl()"""
+        with open(html) as f:
+            content = f.read()
+        assert 'bindShareUrl()' in content
+
+
+class TestShareUrlCss:
+    """Stage 18 - share URL CSS"""
+
+    @pytest.fixture
+    def html(self, tmp_path):
+        return _build_html(tmp_path, view='dataflow', filter_clock_reset=True)
+
+    def test_share_btn_style(self, html):
+        """.share-btn 应有 CSS 样式"""
+        with open(html) as f:
+            content = f.read()
+        assert '.share-btn' in content
+
+    def test_toast_style(self, html):
+        """.toast 应有 fixed 定位 + 背景 + 透明度过渡"""
+        with open(html) as f:
+            content = f.read()
+        assert '.toast' in content
+        assert 'position: fixed' in content
+        assert 'opacity' in content
+        assert 'transition' in content
+
+    def test_toast_show_state(self, html):
+        """.toast.toast-show 应显示 (opacity: 1)"""
+        with open(html) as f:
+            content = f.read()
+        assert '.toast.toast-show' in content
+        assert 'opacity: 1' in content
+
+    def test_dark_toast_style(self, html):
+        """dark 模式 .toast 应有不同颜色"""
+        with open(html) as f:
+            content = f.read()
+        assert '[data-theme="dark"] .toast' in content

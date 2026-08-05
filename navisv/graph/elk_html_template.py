@@ -72,6 +72,8 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
     <option value="light">☀️ Light</option>
     <option value="dark">🌙 Dark</option>
   </select>
+  <!-- (Stage 18) 分享 URL: 复制带状态的链接 -->
+  <button type="button" id="share-url" class="zoom-btn share-btn" title="Copy shareable URL with current view state">🔗 Share</button>
   <!-- (Stage 10) 多格式导出菜单: SVG / PNG / JSON / Mermaid -->
   <div class="dropdown" id="export-dropdown">
     <button type="button" id="export-btn" class="zoom-btn export-trigger" title="Export current view">Export ▼</button>
@@ -96,6 +98,8 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
   </div>
 </aside>
 <div id="info">Click any node or edge to see details.</div>
+<!-- (Stage 18) Share 复制成功 toast 提示 -->
+<div id="toast" class="toast" hidden>✅ URL copied to clipboard</div>
 
 <!-- (Stage 12) 快捷键帮助面板: 按 ? 弹窗显示所有快捷键 -->
 <div id="help-modal" class="modal-overlay" hidden role="dialog" aria-label="Keyboard shortcuts">
