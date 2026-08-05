@@ -496,3 +496,111 @@ class TestErrorHandling:
             graph = None
         with pytest.raises(ValueError, match="DesignGraph.graph is None"):
             ElkExporter().from_design_graph(FakeDG())
+
+
+# ---------------------------------------------------------------------------
+# Tests: export_html (Stage 2)
+# ---------------------------------------------------------------------------
+
+class TestExportHTML:
+    def test_export_html_creates_file(self, exporter, tmp_path):
+        """export_html 应生成有效 HTML 文件"""
+        out = tmp_path / "out.html"
+        result = exporter.export_html(str(out))
+
+        assert result == out
+        assert out.exists()
+
+    def test_export_html_contains_bundled_elkjs(self, exporter, tmp_path):
+        """HTML 应含 bundled elkjs.js 代码 (不依赖 CDN)"""
+        out = tmp_path / "out.html"
+        exporter.export_html(str(out))
+        html = out.read_text()
+
+        # elk.bundled.js 包含 ELK 全局对象
+        assert "ELK" in html
+        # 不应引用外部 CDN
+        assert "unpkg.com" not in html
+        assert "cdn.jsdelivr" not in html
+
+    def test_export_html_contains_embedded_json(self, exporter, tmp_path):
+        """HTML 应含嵌入的 GRAPH_DATA JSON"""
+        out = tmp_path / "out.html"
+        exporter.export_html(str(out))
+        html = out.read_text()
+
+        assert "const GRAPH_DATA = " in html
+        # JSON 应含节点 (counter.clk 等)
+        assert "counter.clk" in html
+        assert "counter.count_q" in html
+
+    def test_export_html_contains_viewer_js(self, exporter, tmp_path):
+        """HTML 应含 viewer 交互 JS"""
+        out = tmp_path / "out.html"
+        exporter.export_html(str(out))
+        html = out.read_text()
+
+        # viewer.js 中的关键函数/标记
+        assert "setupClickHandlers" in html
+        assert "ELK.layout" in html
+        assert "data-node-id" in html
+        assert "data-edge-id" in html
+
+    def test_export_html_contains_css(self, exporter, tmp_path):
+        """HTML 应含嵌入 CSS"""
+        out = tmp_path / "out.html"
+        exporter.export_html(str(out))
+        html = out.read_text()
+
+        assert "elk_viewer" in html or "#header" in html
+        assert ".node-rect" in html
+
+    def test_export_html_title_default(self, exporter, tmp_path):
+        """默认 title 应包含 view 和节点/边数"""
+        out = tmp_path / "out.html"
+        exporter.export_html(str(out))
+        html = out.read_text()
+
+        assert "<title>" in html
+        assert "dataflow" in html
+        # 默认 title: 'navisv: dataflow (5 nodes / 4 edges)'
+        assert "5 nodes" in html
+        assert "4 edges" in html
+
+    def test_export_html_title_custom(self, exporter, tmp_path):
+        """自定义 title 应覆盖默认"""
+        out = tmp_path / "out.html"
+        exporter.export_html(str(out), title="My Custom Title")
+        html = out.read_text()
+
+        assert "My Custom Title" in html
+
+    def test_export_html_size_includes_bundled_elkjs(self, exporter, tmp_path):
+        """HTML 文件大小应包含 bundled elkjs (≥1.5MB)"""
+        out = tmp_path / "out.html"
+        exporter.export_html(str(out))
+        size = out.stat().st_size
+        # bundled elkjs ≈ 1.6MB + viewer.js + viewer.css + JSON
+        assert size > 1_500_000, f"HTML too small: {size} bytes"
+
+    def test_export_html_is_single_file(self, exporter, tmp_path):
+        """HTML 应是单文件,不创建额外依赖"""
+        out = tmp_path / "out.html"
+        before = set(tmp_path.iterdir())
+        exporter.export_html(str(out))
+        after = set(tmp_path.iterdir())
+
+        # 只多了一个 .html 文件,没有 .js / .css 副文件
+        new_files = after - before
+        assert new_files == {out}, f"Unexpected files: {new_files}"
+
+    def test_export_html_meta_includes_view_and_counts(self, exporter, tmp_path):
+        """meta 应包含 view 名和节点/边数"""
+        out = tmp_path / "out.html"
+        exporter.export_html(str(out))
+        html = out.read_text()
+
+        # meta 区域
+        assert "view: dataflow" in html
+        assert "5 nodes" in html
+        assert "4 edges" in html

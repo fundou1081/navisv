@@ -444,6 +444,52 @@ class ElkExporter:
         """返回 JSON 字符串 (给 HTML 模板嵌入用)"""
         return json.dumps(self.to_elk_json(), indent=indent)
 
+    # -----------------------------------------------------------------------
+    # 输出: 自包含 HTML viewer (Stage 2)
+    # -----------------------------------------------------------------------
+
+    def export_html(self, output_path: str, title: Optional[str] = None) -> Path:
+        """导出自包含 HTML viewer (Stage 2)
+
+        单文件 HTML 含:
+          - bundled elkjs.js (≈1.6MB, 离线可用)
+          - 嵌入的 elk JSON
+          - 嵌入的 CSS + 交互 JS
+          - 点击节点/边 → 显示详情到 #info 面板
+
+        Args:
+            output_path: 输出 .html 文件路径
+            title: 浏览器标签标题 (默认 'navisv × elkjs')
+
+        Returns:
+            Path: 写入的文件路径
+
+        Raises:
+            FileNotFoundError: 缺少 navisv/data/ 资源文件
+        """
+        # 延迟导入避免循环依赖 (elk_html_template 独立模块)
+        from navisv.graph.elk_html_template import build_html, meta_from_json
+
+        elk_json = self.to_elk_json()
+
+        if title is None:
+            n_nodes = len(elk_json.get("children", []))
+            n_edges = len(elk_json.get("edges", []))
+            scope_part = f" [{self.scope}]" if self.scope else ""
+            title = f"navisv: {self.view}{scope_part} ({n_nodes} nodes / {n_edges} edges)"
+
+        html = build_html(
+            elk_json=elk_json,
+            title=title,
+            view=self.view,
+            meta=meta_from_json(elk_json, self.view),
+        )
+
+        out = Path(output_path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(html, encoding="utf-8")
+        return out
+
 
 # ---------------------------------------------------------------------------
 # 工厂函数
