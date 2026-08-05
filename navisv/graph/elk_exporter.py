@@ -328,14 +328,21 @@ class ElkExporter:
         }
 
         # 输入/输出端口: 固定到 WEST/EAST,elkjs 自动对齐数据流方向
+        # (Stage 2.8) layerConstraint FIRST/LAST 强制端口在最左/最右层
+        # 参考 sv_query elk_bridge.py: port_in=FIRST (左列), port_out=LAST (右列)
         if kind in ("Port", "Input", "Output", "Inout"):
-            port_side = "WEST" if direction in ("input", "inout") else "EAST"
+            is_input = direction in ("input", "inout", "In")
+            port_side = "WEST" if is_input else "EAST"
             elk_node["ports"] = [{
                 "id": f"{node_path}.port",
                 "labels": [{"text": name}],
                 "layoutOptions": {"portConstraints.fixedSide": port_side},
             }]
             elk_node["properties"]["portSide"] = port_side
+            elk_node["layoutOptions"] = {
+                "elk.layered.layering.layerConstraint":
+                    "FIRST" if is_input else "LAST",
+            }
 
         return elk_node
 

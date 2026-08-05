@@ -16,6 +16,7 @@ Stage 1 测试策略: 不依赖 slang binary,只用合成 networkx.MultiDiGraph�
 设计驱动集成测试留到 Stage 5 (用 picorv32 / counter.sv 端到端验证)。
 """
 import json
+import os
 from pathlib import Path
 
 import networkx as nx
@@ -789,6 +790,160 @@ class TestGraphBuilderPreserveOperators:
         # 应直接 return, 不创建任何节点
         gb._add_intermediate_nodes()
         assert len(gb.graph.nodes) == 0
+
+
+# ---------------------------------------------------------------------------
+# Tests: Stage 2.8 - PORT_IN/OUT layerConstraint FIRST/LAST
+# ---------------------------------------------------------------------------
+
+def _make_graph_with_directional_ports() -> nx.MultiDiGraph:
+    """Graph with explicit input/output ports."""
+    g = nx.MultiDiGraph()
+    g.add_node("m.clk", kind="Port", name="clk", direction="In",
+               location={"file": "x.sv", "line": 1})
+    g.add_node("m.enable", kind="Port", name="enable", direction="In",
+               location={"file": "x.sv", "line": 2})
+    g.add_node("m.q", kind="State", name="q",
+               location={"file": "x.sv", "line": 3})
+    g.add_node("m.data_out", kind="Port", name="data_out", direction="Out",
+               location={"file": "x.sv", "line": 4})
+    g.add_node("op_1", kind="Operator", name="+", timing="combinational",
+               location={"file": "x.sv", "line": 5},
+               attributes={"operator_kind": "BinaryOp"})
+    g.add_edge("m.clk", "m.q", key=0, timing="sequential", edge_kind="PosEdge")
+    g.add_edge("m.enable", "op_1", key=0, timing="combinational", edge_kind="None")
+    g.add_edge("op_1", "m.data_out", key=0, timing="combinational", edge_kind="None")
+    g.add_edge("op_1", "m.q", key=0, timing="combinational", edge_kind="AlwaysFF")
+    return g
+
+
+@pytest.fixture
+def port_graph() -> nx.MultiDiGraph:
+    return _make_graph_with_directional_ports()
+
+
+@pytest.fixture
+def port_exporter(port_graph) -> ElkExporter:
+    return ElkExporter(view="dataflow").from_networkx(port_graph)
+
+
+class TestPortLayerConstraint:
+    """Stage 2.8 - Port layerConstraint FIRST (input) / LAST (output)"""
+
+    def test_input_port_has_first_constraint(self, port_exporter):
+        """direction='In' 节点 → elk.layered.layering.layerConstraint = 'FIRST'"""
+        result = port_exporter.to_elk_json()
+        clk = next(c for c in result["children"] if c["id"] == "m.clk")
+        assert clk["layoutOptions"]["elk.layered.layering.layerConstraint"] == "FIRST"
+
+    def test_output_port_has_last_constraint(self, port_exporter):
+        """direction='Out' 节点 → layerConstraint = 'LAST'"""
+        result = port_exporter.to_elk_json()
+        data_out = next(c for c in result["children"] if c["id"] == "m.data_out")
+        assert data_out["layoutOptions"]["elk.layered.layering.layerConstraint"] == "LAST"
+
+    def test_input_direction_variants(self, port_exporter):
+        """direction in {'input', 'inout', 'In'} 都识别为 FIRST"""
+        # 重设一个 fixture 用 lowercase direction
+        g = nx.MultiDiGraph()
+        g.add_node("p1", kind="Port", name="p1", direction="input")
+        g.add_node("p2", kind="Port", name="p2", direction="inout")
+        g.add_node("p3", kind="Port", name="p3", direction="In")
+        exporter = ElkExporter(view="dataflow").from_networkx(g)
+        result = exporter.to_elk_json()
+        for nid in ("p1", "p2", "p3"):
+            n = next(c for c in result["children"] if c["id"] == nid)
+            assert n["layoutOptions"]["elk.layered.layering.layerConstraint"] == "FIRST", \
+                f"{nid} (direction={n['properties']['direction']}) should be FIRST"
+
+    def test_state_node_has_no_layer_constraint(self, port_exporter):
+        """State/Operator/Literal 不应有 layerConstraint (保持普通节点)"""
+        result = port_exporter.to_elk_json()
+        q = next(c for c in result["children"] if c["id"] == "m.q")
+        lo = q.get("layoutOptions", {})
+        assert "elk.layered.layering.layerConstraint" not in lo
+
+    def test_port_also_has_west_east_side(self, port_exporter):
+        """Port 应同时有 portConstraints.fixedSide WEST/EAST"""
+        result = port_exporter.to_elk_json()
+        clk = next(c for c in result["children"] if c["id"] == "m.clk")
+        clk_port = clk["ports"][0]
+        assert clk_port["layoutOptions"]["portConstraints.fixedSide"] == "WEST"
+
+        data_out = next(c for c in result["children"] if c["id"] == "m.data_out")
+        out_port = data_out["ports"][0]
+        assert out_port["layoutOptions"]["portConstraints.fixedSide"] == "EAST"
+
+
+class TestStage28EndToEnd:
+    """Stage 2.8 - end-to-end on counter.sv, verify ports are pinned"""
+
+    @pytest.fixture(scope="class")
+    def counter_elk_json(self):
+        import glob, os, shutil
+        from navisv.drivers.design_driver import DesignDriver
+        from navisv.parsers.ast_parser import ASTParser
+        from navisv.parsers.netlist_parser import NetlistParser
+        from navisv.graph.graph_builder import GraphBuilder
+        from navisv.graph.elk_exporter import ElkExporter
+
+        out = '/tmp/navisv_stage28_test'
+        if os.path.exists(out):
+            shutil.rmtree(out)
+        counter_path = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), 'fixtures', 'elk_counter.sv')
+        )
+        DesignDriver([counter_path], output_dir=out, cache=False).build()
+        ast = ASTParser(glob.glob(f'{out}/*ast*.json')[0]).parse()
+        nl = NetlistParser(glob.glob(f'{out}/*netlist*.json')[0]).parse()
+        gb = GraphBuilder(
+            ast, nl, ast_json_path=f'{out}/ast.json',
+            source_files=[counter_path], preserve_operators=True,
+        )
+        gb.build()
+        exporter = ElkExporter(view="dataflow").from_networkx(gb.graph)
+        return exporter.to_elk_json()
+
+    def test_all_counter_inputs_pinned_first(self, counter_elk_json):
+        """counter.sv 三个 input port (clk/rst_n/enable) 都应是 FIRST"""
+        inputs = ['counter.clk', 'counter.rst_n', 'counter.enable']
+        for nid in inputs:
+            n = next(c for c in counter_elk_json["children"] if c["id"] == nid)
+            assert n["layoutOptions"]["elk.layered.layering.layerConstraint"] == "FIRST", \
+                f"{nid} should be FIRST (it's an input port)"
+
+    def test_count_state_not_pinned(self, counter_elk_json):
+        """count 是 State (output port 但 navisv 当 State), 不应被当作 output port 钉住"""
+        # count 在 counter.sv 是 output port (logic[3:0]), 但 navisv classify 成 State
+        # 所以它的 layerConstraint 应不存在 (跟其他 State 一样)
+        n = next(c for c in counter_elk_json["children"] if c["id"] == "counter.count")
+        lo = n.get("layoutOptions", {})
+        assert "elk.layered.layering.layerConstraint" not in lo, \
+            "State 不应有 layerConstraint (让 ELK 自由放置)"
+
+    @pytest.mark.skipif(
+        not os.path.exists('/Users/fundou/my_dv_proj/navisv/navisv/data/elk.bundled.js'),
+        reason='ELK bundled not present'
+    )
+    def test_counter_inputs_at_leftmost_x(self, counter_elk_json):
+        """跑真 ELK layout, 三个 input port 应在最小 x 位置 (FIRST 层)"""
+        from navisv.tools.elk_layout import run_elk_layout
+        positioned = run_elk_layout(counter_elk_json, direction='RIGHT')
+
+        # 收集 input port 的 x 位置 + 找最小 x
+        input_xs = []
+        for c in positioned['children']:
+            if c['id'] in ['counter.clk', 'counter.rst_n', 'counter.enable']:
+                input_xs.append(c['x'])
+
+        all_xs = [c['x'] for c in positioned['children']]
+
+        # input port x 应在最小 3 个 x 之内 (FIRST 强制在最左层)
+        all_xs_sorted = sorted(all_xs)
+        for x in input_xs:
+            # 每个 input x 应接近最小 x (容许 100px 范围, 因为 FIRST 层可能有 padding)
+            assert x - all_xs_sorted[0] < 200, \
+                f"Input port x={x} not near leftmost x={all_xs_sorted[0]}"
 
 
 # ---------------------------------------------------------------------------

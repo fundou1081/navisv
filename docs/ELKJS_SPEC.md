@@ -128,6 +128,38 @@ rsvg-convert → PNG
 2. **fixture 错位**: 测试 fixture edges 含 `sections` 字段, 但 sections 是 ELK **输出**字段, 不是输入 → 拆为 `_make_positioned_json()` (ELK input) 和 `_make_positioned_with_layout()` (ELK output) 两个 fixture
 3. **HTML escape**: SVG text 中 `<` 转 `&lt;`, `'` 转 `&#x27;` → 测试用 `&lt;=` 和 `4&#x27;b0`
 
+### 2.3 (Stage 2.8) PORT_IN/OUT 锚点 (FIRST/LAST)
+
+**来源**: 借鉴 sv_query `DATAFLOW_VIZ_SPEC.md` §1 + `VIZ_DATA_SVG_SPEC.md` §3.2
+
+Port 节点加 `elk.layered.layering.layerConstraint`:
+- direction ∈ {`input`, `inout`, `In`} → **`FIRST`** (强制在 ELK 最左层)
+- direction ∈ {`output`, `Out`} → **`LAST`** (强制在 ELK 最右层)
+
+**效果**: counter.sv 三个 input port (clk/rst_n/enable) 垂直对齐在最左列, count 输出在最右列, 数据流方向 100% 清晰。
+
+**ELK JSON 片段**:
+```json
+{
+  "id": "counter.clk",
+  "layoutOptions": {"elk.layered.layering.layerConstraint": "FIRST"},
+  "ports": [{
+    "id": "counter.clk.port",
+    "layoutOptions": {"portConstraints.fixedSide": "WEST"}
+  }]
+}
+```
+
+**踩坑**: slang-netlist 用 `In`/`Out` (首字母大写), navisv 默认用 `input`/`output`。两套都识别:
+```python
+is_input = direction in ("input", "inout", "In")
+```
+
+**限制**:
+- `direction` 是 State/Net 时不加 layerConstraint (跟普通节点一样)
+- navisv 把 counter.count 分类成 State (output port), 所以不会变 LAST — ELK 自由放
+- Stage 5 picorv32 测试时再验证多个 output port 是否全部 LAST
+
 ---
 
 ## 3. 数据格式 (elkjs 原生 JSON)

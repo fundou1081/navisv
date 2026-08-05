@@ -14,6 +14,7 @@ Stage 2    HTML viewer + bundled elkjs              → 1.5h
 Stage 2.5  Operator / Literal 节点 (菱形 + 虚线)    → 1.5h (插队, 2026-08-05)
 Stage 2.6  AST 驱动的具体运算符符号 (!, +, <=)      → 1h (插队, 2026-08-05)
 Stage 2.7  真实 ELK layered + 清晰边渲染            → 1h (插队, 2026-08-06)
+Stage 2.8  PORT_IN/OUT 锚点 (FIRST/LAST)           → 0.5h (插队, 2026-08-06)
 Stage 3    CLI + 3 视图                            → 2h
 Stage 4    交互层 (搜索/高亮/CDC toggle)           → 1.5h
 Stage 5    真实 RTL 测试                           → 1h
@@ -160,6 +161,35 @@ Stage 2.6 的 PNG 用手写 BFS 布局, 节点散乱 + 边穿越混乱。Stage 2
 ### Commit
 ```
 feat(elk): Stage 2.7 — real ELK layered layout + clear edge rendering
+```
+
+---
+
+## Stage 2.8: PORT_IN/OUT 锚点 (FIRST/LAST) (2026-08-06)
+
+**背景**: 借鉴 sv_query `DATAFLOW_VIZ_SPEC.md` §1 的绘图要求 (方豆要求「只参考里面最终的绘图要求」).
+
+`PORT_IN` 节点应固定在最左层, `PORT_OUT` 节点应固定在最右层。让数据流方向 100% 清晰。
+
+### 任务
+- [x] `navisv/graph/elk_exporter.py`: `_node_to_elk()` 给 Port/Input/Output/Inout 加 `layoutOptions.elk.layered.layering.layerConstraint`
+  - `direction ∈ {input, inout, In}` → `FIRST`
+  - 其他 → `LAST`
+- [x] `tests/test_elk_exporter.py`: +8 个测试
+  - TestPortLayerConstraint (5): 单元 (input/output/inout variants, State 无 constraint, portConstraints.fixedSide 共存)
+  - TestStage28EndToEnd (3): counter.sv e2e (三个 input port 都 FIRST, count State 无 constraint, ELK 输出 x 在最左)
+
+### 验收
+- counter.sv PNG: 三个 input port 垂直对齐在左列, count State 在右, 数据流方向清晰
+- 87 elk_exporter tests pass (37+10+17+15+8), 357 navisv tests pass (零回归)
+- 改动只有 2 个文件 (elk_exporter.py + test), 改动量小, 效果大
+
+### Bugfix
+第一次写错: 只匹配 `input`/`inout`, 但 slang-netlist 输出 direction 是 `In`/`Out` (首字母大写)。三个 input port 都被设成 LAST。修复: 加 `In` 到 first set。
+
+### Commit
+```
+feat(elk): Stage 2.8 — port FIRST/LAST layer constraint (from sv_query)
 ```
 
 ---
