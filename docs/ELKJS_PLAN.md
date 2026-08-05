@@ -9,15 +9,54 @@
 ## 总览
 
 ```
-Stage 1  ElkExporter 骨架 + 数据流转换  → 2h
-Stage 2  HTML viewer + bundled elkjs    → 1.5h
-Stage 3  CLI + 3 视图                    → 2h
-Stage 4  交互层 (搜索/高亮/CDC toggle)   → 1.5h
-Stage 5  真实 RTL 测试                   → 1h
-Stage 6  examples + README + push        → 1h
+Stage 1    ElkExporter 骨架 + 数据流转换           → 2h
+Stage 2    HTML viewer + bundled elkjs              → 1.5h
+Stage 2.5  Operator / Literal 节点 (菱形 + 虚线)    → 1.5h (插队, 2026-08-05)
+Stage 3    CLI + 3 视图                            → 2h
+Stage 4    交互层 (搜索/高亮/CDC toggle)           → 1.5h
+Stage 5    真实 RTL 测试                           → 1h
+Stage 6    examples + README + push                → 1h
 ```
 
 每阶段结束 = 一个 git commit + 一个可工作的演示。
+
+---
+
+## Stage 2.5: Operator / Literal 节点 (2026-08-05)
+
+**背景**: 用户反馈「我希望有 运算符 节点，能在图里看出来代码的逻辑，数据流」
+**位置**: 在 Stage 2 之后、Stage 3 之前插队
+
+### 任务
+- [x] `navisv/graph/graph_builder.py`: 加 `preserve_operators=False` 参数 (默认 False, 保持向后兼容)
+- [x] `navisv/graph/graph_builder.py`: 加 `_add_intermediate_nodes()` 方法
+  - Assignment / Conditional / Case / Merge → kind='Operator', label='<=' / 'if' / 'case' / 'merge'
+  - Constant → kind='Literal', label=node.value (e.g. "4'b0")
+  - graph 节点 path: `op_<id>` / `const_<id>`
+- [x] `navisv/graph/graph_builder.py`: 改 `_add_edges()` — preserve_operators=True 时用 op_<id>/const_<id> 而不 collapse
+- [x] `navisv/graph/elk_exporter.py`: KIND_COLORS 加 Operator/Literal; KIND_SIZES 定义小尺寸
+- [x] `navisv/graph/elk_exporter.py`: `_node_to_elk()` 加 `shape="diamond"` 提示 + properties 加 operator_kind/value
+- [x] `navisv/data/elk_viewer.js`: Operator → `<polygon>` 菱形; Literal → 虚线小矩形
+- [x] `navisv/data/elk_viewer.css`: Operator / Literal 样式
+- [x] viewer legend 加 Operator / Literal 条目
+- [x] `tests/test_elk_exporter.py`: 17 个新测试 (TestOperatorNode / TestLiteralNode / TestKindColorsExtended / TestViewerRendersOperatorAndLiteral / TestGraphBuilderPreserveOperators)
+
+### 验收
+- counter.sv: 4 nodes / 3 edges → 11 nodes / 16 edges
+- 6 个 Operator (2 `if` + 2 `<=` + 2 `merge`)
+- 1 个 Literal (`4'b0`)
+- HTML 含 `<polygon>` (Operator 菱形) + `stroke-dasharray` (Literal 虚线)
+- legend 含 Operator/Literal
+- 47 + 17 = 64 tests pass (elk_exporter), 303 pass (全 navisv), 0 regression
+
+### 限制 / 待办
+- Operator 显示的 label 是 netlist kind (`if`/`<=`/`merge`)，不是具体运算符符号 (`+`/`-`/`==`/`&&`/`!`)。pyslang 集成留到 Stage 4+ 或单独路线图。
+- 用户还可能想看: 位选/片选 (`[7:0]`)、类型转换 (`int'()`)、三元 (`?:`) — 都需要 pyslang AST。
+
+### Commit
+```
+feat(elk): Stage 2.5 — Operator / Literal nodes (diamond + dashed rect)
+```
 
 ---
 

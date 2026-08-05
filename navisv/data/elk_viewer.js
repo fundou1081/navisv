@@ -95,16 +95,49 @@
         const y = node.y + off;
         const color =
           (node.properties && node.properties.color) || '#34495e';
+        const kind = (node.properties && node.properties.kind) || '';
         const lbl =
           node.labels && node.labels[0] ? node.labels[0].text : node.id;
-        svg +=
-          '<g class="node" data-node-id="' + node.id + '">' +
-          '<rect class="node-rect" x="' + x + '" y="' + y +
-          '" width="' + node.width + '" height="' + node.height +
-          '" rx="6" fill="white" stroke="' + color + '" stroke-width="2"/>' +
-          '<text class="node-label" x="' + (x + node.width / 2) +
-          '" y="' + (y + node.height / 2 + 4) + '">' +
-          escapeHtml(lbl) + '</text>';
+        const isOperator = (kind === 'Operator');
+        const isLiteral = (kind === 'Literal');
+
+        svg += '<g class="node node-' + kind.toLowerCase() +
+               '" data-node-id="' + node.id + '">';
+
+        if (isOperator) {
+          // 菱形: 中心点 (x+w/2, y+h/2),四个角点
+          const cx = x + node.width / 2;
+          const cy = y + node.height / 2;
+          const pts = [
+            [cx, y],               // top
+            [x + node.width, cy],  // right
+            [cx, y + node.height], // bottom
+            [x, cy]                // left
+          ].map(function (p) { return p.join(','); }).join(' ');
+          svg +=
+            '<polygon class="node-shape operator" points="' + pts +
+            '" fill="white" stroke="' + color + '" stroke-width="2"/>' +
+            '<text class="node-label" x="' + cx + '" y="' + (cy + 4) +
+            '">' + escapeHtml(lbl) + '</text>';
+        } else if (isLiteral) {
+          // 小矩形,颜色淡
+          svg +=
+            '<rect class="node-shape literal" x="' + x + '" y="' + y +
+            '" width="' + node.width + '" height="' + node.height +
+            '" rx="4" fill="#ecf0f1" stroke="' + color +
+            '" stroke-width="1.5" stroke-dasharray="3,2"/>' +
+            '<text class="node-label literal" x="' + (x + node.width / 2) +
+            '" y="' + (y + node.height / 2 + 4) + '">' +
+            escapeHtml(lbl) + '</text>';
+        } else {
+          svg +=
+            '<rect class="node-rect" x="' + x + '" y="' + y +
+            '" width="' + node.width + '" height="' + node.height +
+            '" rx="6" fill="white" stroke="' + color + '" stroke-width="2"/>' +
+            '<text class="node-label" x="' + (x + node.width / 2) +
+            '" y="' + (y + node.height / 2 + 4) + '">' +
+            escapeHtml(lbl) + '</text>';
+        }
         if (node.ports) {
           node.ports.forEach(function (port) {
             const side =
@@ -129,24 +162,37 @@
         svg += '</g>';
       });
 
-      // Legend (固定右上角)
+      // Legend (固定右上角) - 包含 Operator / Literal (Stage 2.5)
       svg += '<g class="legend" transform="translate(' + (off + 10) + ',' + (off + 10) + ')">';
       svg +=
-        '<rect x="0" y="0" width="180" height="76" fill="white"' +
+        '<rect x="0" y="0" width="190" height="118" fill="white"' +
         ' stroke="#bdc3c7" rx="4" opacity="0.95"/>';
       svg += '<text class="legend-title" x="10" y="18">Legend</text>';
+      // State
       svg +=
         '<rect x="10" y="28" width="14" height="10" fill="white"' +
         ' stroke="#27ae60" stroke-width="2"/>' +
         '<text class="legend-text" x="30" y="37">State (Reg)</text>';
+      // Port
       svg +=
         '<rect x="10" y="44" width="14" height="10" fill="white"' +
         ' stroke="#3498db" stroke-width="2"/>' +
         '<text class="legend-text" x="30" y="53">Port (in/out)</text>';
+      // Operator (菱形)
       svg +=
-        '<line x1="10" y1="64" x2="24" y2="64" stroke="#16a085"' +
+        '<polygon points="10,72 17,64 24,72 17,80" fill="white"' +
+        ' stroke="#e67e22" stroke-width="2"/>' +
+        '<text class="legend-text" x="30" y="72">Operator (if/&lt;=)</text>';
+      // Literal (虚线)
+      svg +=
+        '<rect x="10" y="88" width="14" height="10" fill="#ecf0f1"' +
+        ' stroke="#7f8c8d" stroke-width="1.5" stroke-dasharray="2,2"/>' +
+        '<text class="legend-text" x="30" y="97">Literal (4&#39;h1)</text>';
+      // AlwaysFF (边)
+      svg +=
+        '<line x1="10" y1="108" x2="24" y2="108" stroke="#16a085"' +
         ' stroke-width="2"/>' +
-        '<text class="legend-text" x="30" y="67">AlwaysFF</text>';
+        '<text class="legend-text" x="30" y="111">AlwaysFF</text>';
       svg += '</g>';
 
       svg += '</svg>';

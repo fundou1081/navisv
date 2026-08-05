@@ -83,6 +83,14 @@ KIND_COLORS: Dict[str, str] = {
     "Input": "#2980b9",     # input port → 深蓝
     "Output": "#e67e22",    # output port → 橙
     "Inout": "#8e44ad",
+    "Operator": "#e67e22",  # (Stage 2.5) 运算符节点 (if/<=/merge/case) → 橙
+    "Literal": "#7f8c8d",   # (Stage 2.5) 字面量 (4'h1 等) → 灰
+}
+
+# (Stage 2.5) 节点 kind → 自定义宽高 (默认 160x50)
+KIND_SIZES: Dict[str, tuple] = {
+    "Operator": (90, 50),   # 菱形运算符，较小
+    "Literal": (80, 36),    # 字面量，最小
 }
 
 # 边 timing → 颜色
@@ -300,8 +308,9 @@ class ElkExporter:
         elk_node: Dict[str, Any] = {
             "id": node_path,
             "labels": [{"text": label_text}],
-            "width": 160,
-            "height": 50,
+            "width": KIND_SIZES.get(kind, (160, 50))[0],
+            "height": KIND_SIZES.get(kind, (160, 50))[1],
+            "shape": "diamond" if kind == "Operator" else None,  # elkjs shape hint
             "properties": {
                 "kind": kind,
                 "name": name,
@@ -312,6 +321,9 @@ class ElkExporter:
                 "source": self.source_map.get(node_path, ""),
                 "color": node_color,
                 "timing": attrs.get("timing", "unknown"),
+                # (Stage 2.5) Operator/Literal 特有字段
+                "operator_kind": attrs.get("attributes", {}).get("operator_kind", ""),
+                "value": attrs.get("attributes", {}).get("value", ""),
             },
         }
 

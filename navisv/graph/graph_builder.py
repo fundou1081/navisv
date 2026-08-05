@@ -101,11 +101,24 @@ class GraphBuilder:
     """
 
     def __init__(self, ast_parser: ASTParser, netlist_parser: NetlistParser,
-                 ast_json_path: str = None, source_files: list = None):
+                 ast_json_path: str = None, source_files: list = None,
+                 preserve_operators: bool = False):
+        """构造 GraphBuilder
+
+        Args:
+            ast_parser: 已解析的 ASTParser
+            netlist_parser: 已解析的 NetlistParser
+            ast_json_path: slang --ast-json 输出路径 (可选, 用于提取源码片段)
+            source_files: 源文件路径列表 (用于读取源码)
+            preserve_operators: 是否保留中间节点 (Conditional/Assignment/Merge/Constant) 作为图节点。
+                False (默认) - 保留现有行为, 中间节点 collapse 成 source→target 边
+                True - 中间节点作为 Operator/Literal kind 保留, 数据流可见
+        """
         self.ast = ast_parser
         self.netlist = netlist_parser
         self.ast_json_path = ast_json_path
         self.source_files = source_files or []
+        self.preserve_operators = preserve_operators
         self.graph: nx.MultiDiGraph = None
 
         # 缓存
@@ -239,6 +252,9 @@ class GraphBuilder:
         # 1. 添加 Named Nodes (Port + State)
         self._add_named_nodes()
 
+        # 1.5 (Stage 2.5) 添加 Operator/Literal 中间节点 (仅 preserve_operators=True)
+        self._add_intermediate_nodes()
+
         # 2. 分析 AST 获取条件信息
         self._ast_analyzer = ASTAnalyzer(self.ast, {path: path for path in self.graph.nodes}, self._node_attrs, self.graph, self.source_files)
         self._ast_analyzer.analyze()
@@ -320,6 +336,61 @@ class GraphBuilder:
         self.graph.add_node(path, **attr.to_dict())
         self._node_attrs[path] = attr
 
+    def _add_intermediate_nodes(self):
+        """(Stage 2.5) 为中间节点 (Operator/Literal) 创建图节点
+
+        仅在 preserve_operators=True 时生效。
+        - Assignment / Conditional / Case / Merge -> kind='Operator'
+        - Constant -> kind='Literal' (使用 netlist node.value)
+
+        生成的图节点 path 格式: 'op_<id>' 或 'const_<id>'
+        """
+        if not self.preserve_operators:
+            return
+
+        # Operator kind -> 显示符号
+        operator_label = {
+            'Assignment': '<=',
+            'Conditional': 'if',
+            'Case': 'case',
+            'Merge': 'merge',
+        }
+
+        for node in self.netlist.nodes:
+            if node.kind in ('Assignment', 'Conditional', 'Case', 'Merge') and not node.path:
+                op_path = f"op_{node.id}"
+                if op_path in self._node_attrs:
+                    continue
+                label = operator_label.get(node.kind, node.kind.lower())
+                attr = NodeAttr(
+                    name=label,
+                    path=op_path,
+                    kind='Operator',
+                    bit_width=node.bounds,
+                    timing='combinational',
+                    module='',
+                    location=node.location,
+                    attributes={'operator_kind': node.kind, 'netlist_id': node.id},
+                )
+                self._add_node(op_path, attr)
+
+            elif node.kind == 'Constant' and not node.path:
+                const_path = f"const_{node.id}"
+                if const_path in self._node_attrs:
+                    continue
+                value_str = node.value if node.value is not None else '?'
+                attr = NodeAttr(
+                    name=str(value_str),
+                    path=const_path,
+                    kind='Literal',
+                    bit_width=node.bounds,
+                    timing='combinational',
+                    module='',
+                    location=node.location,
+                    attributes={'value': node.value, 'netlist_id': node.id},
+                )
+                self._add_node(const_path, attr)
+
     def _add_edges(self):
         """从 Netlist 添加边"""
         # 收集所有无 path 的 Assignment/Conditional 节点的入边和出边信息
@@ -381,6 +452,19 @@ class GraphBuilder:
 
             src_path = src_node.path if src_node.path else ''
             tgt_path = tgt_node.path if tgt_node.path else ''
+
+            # (Stage 2.5) preserve_operators=True: 中间节点用 op_<id> / const_<id> 作为图节点路径
+            if self.preserve_operators:
+                if not src_path:
+                    if src_node.kind in ('Assignment', 'Conditional', 'Case', 'Merge'):
+                        src_path = f"op_{src_node.id}"
+                    elif src_node.kind == 'Constant':
+                        src_path = f"const_{src_node.id}"
+                if not tgt_path:
+                    if tgt_node.kind in ('Assignment', 'Conditional', 'Case', 'Merge'):
+                        tgt_path = f"op_{tgt_node.id}"
+                    elif tgt_node.kind == 'Constant':
+                        tgt_path = f"const_{tgt_node.id}"
 
             # 如果 source 没有 path 但有 symbol.path 且不等于 tgt_path,使用 symbol.path
             if not src_path and edge.symbol and edge.symbol.get('path'):

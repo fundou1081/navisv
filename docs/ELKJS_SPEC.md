@@ -30,6 +30,26 @@ elkjs 强在不同算法适配不同语义，navisv 把"一刀切 DOT"拆成多�
 
 **MVP 范围**：Stage 3 实现 `dataflow` + `controlflow` + `modules` 三视图。`cdc-highlight` 作为 toggle，在 dataflow 上叠加。
 
+### 2.1 (Stage 2.5) Operator / Literal 节点
+
+Stage 2.5 新增：把 graph_builder 中间节点（Conditional/Assignment/Case/Merge/Constant）作为一等公民图节点保留，让"代码逻辑 + 数据流"在一张图里完全可见。
+
+启用方式：`GraphBuilder(..., preserve_operators=True)`
+
+| Kind | netlist source | 节点形状 | 颜色 | 示例 label |
+|------|---------------|---------|------|-----------|
+| **Operator** | Assignment / Conditional / Case / Merge | **菱形 ◇** | 橙 `#e67e22` | `<=` / `if` / `case` / `merge` |
+| **Literal** | Constant | **虚线小矩形** | 灰 `#7f8c8d` | `4'h0` / `8'h00` |
+
+**counter.sv 渲染对比**：
+
+| 配置 | 节点数 | 边数 | 说明 |
+|------|--------|------|------|
+| `preserve_operators=False` (默认) | 4 | 3 | 只显示 State/Port，中间节点被 collapse |
+| `preserve_operators=True` | 11 | 16 | Operator (6) + Literal (1) + State/Port (4) |
+
+**限制**：当前 Operator 显示的 label 是 netlist kind（`if` / `<=` / `merge`），不是具体的运算符符号（`+` / `-` / `==` / `&&` / `!`）。要拿到具体符号需要 pyslang AST 集成（Stage 4+ 或 pyslang 路线图）。
+
 ---
 
 ## 3. 数据格式 (elkjs 原生 JSON)
@@ -59,6 +79,27 @@ navisv Python 端产出 elkjs 输入格式：
       "children": [  // compound node：模块嵌套
         {"id": "alu.add_inst.reg_q", "labels": [{"text": "reg_q"}]}
       ]
+    },
+    {
+      "id": "op_5",                      // (Stage 2.5) Operator
+      "labels": [{"text": "if"}],
+      "width": 90, "height": 50,
+      "shape": "diamond",                 // viewer 画菱形
+      "properties": {
+        "kind": "Operator",
+        "operator_kind": "Conditional",   // netlist kind
+        ...
+      }
+    },
+    {
+      "id": "const_7",                   // (Stage 2.5) Literal
+      "labels": [{"text": "4'b0"}],
+      "width": 80, "height": 36,
+      "properties": {
+        "kind": "Literal",
+        "value": "4'b0",                  // netlist value
+        ...
+      }
     }
   ],
   "edges": [
@@ -80,6 +121,7 @@ navisv Python 端产出 elkjs 输入格式：
 3. **`layoutOptions` per edge** — 单条边单独着色（CDC 高亮用）
 4. **`labels`** — 节点/边可附加多行文本（源码摘要 + 行号）
 5. **`properties`** (扩展) — 嵌入 navisv 自定义数据 (节点类型、文件路径、源码片段) 给交互层用
+6. **(Stage 2.5) `shape` hint** — Operator 节点设 `"shape": "diamond"`，viewer 据此用 `<polygon>` 渲染
 
 ### 3.2 properties 扩展 (交互层用)
 
@@ -90,11 +132,14 @@ navisv Python 端产出 elkjs 输入格式：
   "id": "alu.reg_q",
   "labels": [{"text": "reg_q"}],
   "properties": {
-    "kind": "reg",                         // "reg" | "wire" | "input" | "output" | "instance" | "module"
+    "kind": "reg",                         // "reg" | "wire" | "input" | "output" | "instance" | "module" | "Operator" | "Literal"
     "file": "alu.sv",
     "line": 42,
     "source": "logic [7:0] reg_q;",        // 源码片段（≤200 chars）
-    "scope": "alu"
+    "scope": "alu",
+    // (Stage 2.5)
+    "operator_kind": "Conditional",        // 仅 Operator kind
+    "value": "4'b0"                         // 仅 Literal kind
   }
 }
 ```

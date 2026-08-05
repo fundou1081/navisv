@@ -604,3 +604,188 @@ class TestExportHTML:
         assert "view: dataflow" in html
         assert "5 nodes" in html
         assert "4 edges" in html
+
+
+# ---------------------------------------------------------------------------
+# Tests: Stage 2.5 - Operator / Literal 节点映射
+# ---------------------------------------------------------------------------
+
+def _make_graph_with_ops() -> nx.MultiDiGraph:
+    """构造一个含 Operator / Literal / State / Port 的图"""
+    g = nx.MultiDiGraph()
+    # Ports
+    g.add_node("m.clk", kind="Port", name="clk", direction="input",
+               location={"file": "x.sv", "line": 1})
+    g.add_node("m.rst_n", kind="Port", name="rst_n", direction="input",
+               location={"file": "x.sv", "line": 2})
+    g.add_node("m.q", kind="State", name="q",
+               location={"file": "x.sv", "line": 3})
+    # Operators (菱形)
+    g.add_node("op_1", kind="Operator", name="if", timing="combinational",
+               location={"file": "x.sv", "line": 4},
+               attributes={"operator_kind": "Conditional", "netlist_id": 1})
+    g.add_node("op_2", kind="Operator", name="<=", timing="combinational",
+               location={"file": "x.sv", "line": 5},
+               attributes={"operator_kind": "Assignment", "netlist_id": 2})
+    # Literal (虚线小矩形)
+    g.add_node("const_3", kind="Literal", name="8'h00", timing="combinational",
+               location={"file": "x.sv", "line": 6},
+               attributes={"value": "8'h00", "netlist_id": 3})
+
+    # Edges (rst -> if -> <= -> q; const -> <=)
+    g.add_edge("m.rst_n", "op_1", key=0, timing="combinational", edge_kind="None")
+    g.add_edge("op_1", "op_2", key=0, timing="combinational", edge_kind="None")
+    g.add_edge("const_3", "op_2", key=0, timing="combinational", edge_kind="None")
+    g.add_edge("op_2", "m.q", key=0, timing="sequential", edge_kind="AlwaysFF")
+    g.add_edge("m.clk", "m.q", key=0, timing="sequential", edge_kind="PosEdge")
+    return g
+
+
+@pytest.fixture
+def ops_graph() -> nx.MultiDiGraph:
+    return _make_graph_with_ops()
+
+
+@pytest.fixture
+def ops_exporter(ops_graph) -> ElkExporter:
+    return ElkExporter(view="dataflow").from_networkx(ops_graph)
+
+
+class TestOperatorNode:
+    """Stage 2.5 - Operator 节点映射"""
+
+    def test_operator_uses_orange_color(self, ops_exporter):
+        """Operator 应使用橙色 (#e67e22)"""
+        result = ops_exporter.to_elk_json()
+        op = next(c for c in result["children"] if c["id"] == "op_1")
+        assert op["properties"]["kind"] == "Operator"
+        assert op["properties"]["color"] == "#e67e22"
+
+    def test_operator_uses_smaller_size(self, ops_exporter):
+        """Operator 应使用 90x50 (小于默认 160x50)"""
+        result = ops_exporter.to_elk_json()
+        op = next(c for c in result["children"] if c["id"] == "op_1")
+        assert op["width"] == 90
+        assert op["height"] == 50
+
+    def test_operator_has_diamond_shape_hint(self, ops_exporter):
+        """Operator 应有 shape='diamond' 提示, 告诉 viewer 画菱形"""
+        result = ops_exporter.to_elk_json()
+        op = next(c for c in result["children"] if c["id"] == "op_1")
+        assert op.get("shape") == "diamond"
+
+    def test_operator_kind_in_properties(self, ops_exporter):
+        """Operator 的 operator_kind (Conditional/Assignment/Case/Merge) 应嵌入 properties"""
+        result = ops_exporter.to_elk_json()
+        op_conditional = next(c for c in result["children"] if c["id"] == "op_1")
+        op_assignment = next(c for c in result["children"] if c["id"] == "op_2")
+        assert op_conditional["properties"].get("operator_kind") == "Conditional"
+        assert op_assignment["properties"].get("operator_kind") == "Assignment"
+
+
+class TestLiteralNode:
+    """Stage 2.5 - Literal 节点映射"""
+
+    def test_literal_uses_gray_color(self, ops_exporter):
+        """Literal 应使用灰色 (#7f8c8d)"""
+        result = ops_exporter.to_elk_json()
+        lit = next(c for c in result["children"] if c["id"] == "const_3")
+        assert lit["properties"]["kind"] == "Literal"
+        assert lit["properties"]["color"] == "#7f8c8d"
+
+    def test_literal_uses_smaller_size(self, ops_exporter):
+        """Literal 应使用 80x36 (最小)"""
+        result = ops_exporter.to_elk_json()
+        lit = next(c for c in result["children"] if c["id"] == "const_3")
+        assert lit["width"] == 80
+        assert lit["height"] == 36
+
+    def test_literal_value_in_label_and_props(self, ops_exporter):
+        """Literal 的 value 应同时在 label 和 properties 中"""
+        result = ops_exporter.to_elk_json()
+        lit = next(c for c in result["children"] if c["id"] == "const_3")
+        # label 含 value + 文件:行号
+        assert "8'h00" in lit["labels"][0]["text"]
+        assert lit["properties"].get("value") == "8'h00"
+
+
+class TestKindColorsExtended:
+    """Stage 2.5 - KIND_COLORS 扩展"""
+
+    def test_operator_color_in_kind_colors(self):
+        from navisv.graph.elk_exporter import KIND_COLORS
+        assert "Operator" in KIND_COLORS
+        assert KIND_COLORS["Operator"] == "#e67e22"
+
+    def test_literal_color_in_kind_colors(self):
+        from navisv.graph.elk_exporter import KIND_COLORS
+        assert "Literal" in KIND_COLORS
+        assert KIND_COLORS["Literal"] == "#7f8c8d"
+
+    def test_kind_sizes_for_operator_literal(self):
+        from navisv.graph.elk_exporter import KIND_SIZES
+        assert KIND_SIZES["Operator"] == (90, 50)
+        assert KIND_SIZES["Literal"] == (80, 36)
+
+
+class TestViewerRendersOperatorAndLiteral:
+    """Stage 2.5 - HTML viewer 包含 Operator/Literal 渲染逻辑"""
+
+    def test_viewer_js_handles_diamond_polygon(self):
+        """viewer.js 应含 polygon 渲染逻辑 (diamond shape)"""
+        viewer_path = Path(__file__).parent.parent / "navisv" / "data" / "elk_viewer.js"
+        content = viewer_path.read_text()
+        assert "polygon" in content, "viewer.js should render <polygon>"
+        assert "operator" in content.lower(), "viewer.js should have operator handling"
+        assert "isOperator" in content or "kind === 'Operator'" in content
+
+    def test_viewer_js_handles_literal_dashed_rect(self):
+        """viewer.js 应含 Literal 虚线矩形渲染"""
+        viewer_path = Path(__file__).parent.parent / "navisv" / "data" / "elk_viewer.js"
+        content = viewer_path.read_text()
+        assert "stroke-dasharray" in content, "viewer.js should use dashed border for Literal"
+
+    def test_viewer_legend_includes_operator_and_literal(self):
+        """viewer.js 的 legend 应包含 Operator 和 Literal"""
+        viewer_path = Path(__file__).parent.parent / "navisv" / "data" / "elk_viewer.js"
+        content = viewer_path.read_text()
+        assert "Operator" in content, "legend should mention Operator"
+        assert "Literal" in content, "legend should mention Literal"
+
+    def test_viewer_css_has_operator_styles(self):
+        """viewer.css 应含 Operator/Literal 样式"""
+        css_path = Path(__file__).parent.parent / "navisv" / "data" / "elk_viewer.css"
+        content = css_path.read_text()
+        assert ".node-shape.operator" in content
+        assert ".node-shape.literal" in content
+
+
+class TestGraphBuilderPreserveOperators:
+    """Stage 2.5 - GraphBuilder.preserve_operators 选项"""
+
+    def test_default_preserve_operators_is_false(self):
+        """默认 preserve_operators=False (保持向后兼容)"""
+        from navisv.graph.graph_builder import GraphBuilder
+        import inspect
+        sig = inspect.signature(GraphBuilder.__init__)
+        param = sig.parameters.get("preserve_operators")
+        assert param is not None, "GraphBuilder 应该支持 preserve_operators 参数"
+        assert param.default is False
+
+    def test_add_intermediate_nodes_method_exists(self):
+        """GraphBuilder 应有 _add_intermediate_nodes() 方法"""
+        from navisv.graph.graph_builder import GraphBuilder
+        assert hasattr(GraphBuilder, "_add_intermediate_nodes")
+
+    def test_add_intermediate_nodes_skipped_when_disabled(self, monkeypatch):
+        """preserve_operators=False 时 _add_intermediate_nodes 直接返回"""
+        from navisv.graph.graph_builder import GraphBuilder
+
+        gb = GraphBuilder.__new__(GraphBuilder)
+        gb.preserve_operators = False
+        gb.graph = nx.MultiDiGraph()
+        gb.netlist = type("N", (), {"nodes": []})()
+        gb._node_attrs = {}
+        # 应直接 return, 不创建任何节点
+        gb._add_intermediate_nodes()
+        assert len(gb.graph.nodes) == 0
