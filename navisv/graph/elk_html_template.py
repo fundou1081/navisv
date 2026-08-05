@@ -66,6 +66,12 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
   <span id="zoom-level">100%</span>
   <button type="button" id="zoom-in" class="zoom-btn" title="Zoom in">+</button>
   <button type="button" id="reset-view" class="zoom-btn reset" title="Reset view">Reset</button>
+  <!-- (Stage 16) 主题切换: Light / Dark / Auto -->
+  <select id="theme-select" class="theme-select" title="Color theme">
+    <option value="auto">🌓 Auto</option>
+    <option value="light">☀️ Light</option>
+    <option value="dark">🌙 Dark</option>
+  </select>
   <!-- (Stage 10) 多格式导出菜单: SVG / PNG / JSON / Mermaid -->
   <div class="dropdown" id="export-dropdown">
     <button type="button" id="export-btn" class="zoom-btn export-trigger" title="Export current view">Export ▼</button>

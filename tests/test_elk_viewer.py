@@ -1140,3 +1140,185 @@ class TestNodeEmoji:
         with open(html) as f:
             content = f.read()
         assert 'Apple Color Emoji' in content or 'Segoe UI Emoji' in content
+
+
+class TestThemeSwitcherHtml:
+    """Stage 16 - theme selector HTML"""
+
+    @pytest.fixture
+    def html(self, tmp_path):
+        return _build_html(tmp_path, view='dataflow', filter_clock_reset=True)
+
+    def test_theme_select_present(self, html):
+        """应有 #theme-select 下拉"""
+        with open(html) as f:
+            content = f.read()
+        assert 'id="theme-select"' in content
+
+    def test_theme_select_class(self, html):
+        """下拉应有 .theme-select CSS 类"""
+        with open(html) as f:
+            content = f.read()
+        assert 'class="theme-select"' in content
+
+    def test_theme_options(self, html):
+        """应有 3 个 theme option: Auto / Light / Dark"""
+        with open(html) as f:
+            content = f.read()
+        for theme in ('auto', 'light', 'dark'):
+            assert f'value="{theme}"' in content, f"Missing theme option '{theme}'"
+
+    def test_theme_option_labels(self, html):
+        """option label 应包含 emoji (🌓 ☀️ 🌙)"""
+        with open(html) as f:
+            content = f.read()
+        for emoji in ('🌓', '☀️', '🌙'):
+            assert emoji in content, f"Missing theme emoji {emoji}"
+
+
+class TestThemeSwitcherJs:
+    """Stage 16 - theme switcher JS 逻辑"""
+
+    @pytest.fixture
+    def html(self, tmp_path):
+        return _build_html(tmp_path, view='dataflow', filter_clock_reset=True)
+
+    def test_apply_theme_function(self, html):
+        """应有 applyTheme 函数"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function applyTheme' in content
+
+    def test_bind_theme_select_function(self, html):
+        """应有 bindThemeSelect 函数"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function bindThemeSelect' in content
+
+    def test_get_system_theme_helper(self, html):
+        """应有 getSystemTheme helper (prefers-color-scheme 检测)"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function getSystemTheme' in content
+        assert 'prefers-color-scheme' in content
+        assert 'matchMedia' in content
+
+    def test_get_saved_theme_helper(self, html):
+        """应有 getSavedTheme helper (localStorage 读取)"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function getSavedTheme' in content
+        assert 'localStorage' in content
+
+    def test_save_theme_helper(self, html):
+        """应有 saveTheme helper (localStorage 写入)"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function saveTheme' in content
+        assert 'setItem' in content
+
+    def test_theme_storage_key(self, html):
+        """应有 THEME_STORAGE_KEY 常量"""
+        with open(html) as f:
+            content = f.read()
+        assert 'THEME_STORAGE_KEY' in content
+        assert 'navisv_elk_theme' in content
+
+    def test_apply_theme_sets_data_theme_attribute(self, html):
+        """applyTheme 应设置 :root data-theme 属性"""
+        with open(html) as f:
+            content = f.read()
+        assert "setAttribute('data-theme'" in content
+        assert "setAttribute('data-theme-source'" in content
+
+    def test_apply_theme_auto_falls_back(self, html):
+        """auto 模式应回退到 getSystemTheme"""
+        with open(html) as f:
+            content = f.read()
+        assert "theme === 'auto'" in content or 'theme === "auto"' in content
+        assert 'getSystemTheme()' in content
+
+    def test_change_event_handler(self, html):
+        """select 应绑 change 事件"""
+        with open(html) as f:
+            content = f.read()
+        assert "'change'" in content
+        assert 'addEventListener' in content
+
+    def test_localstorage_try_catch(self, html):
+        """localStorage 调用应有 try/catch (隐私模式 fallback)"""
+        with open(html) as f:
+            content = f.read()
+        # 至少 2 个 try (getItem + setItem)
+        assert content.count('try {') >= 2 or content.count('try{') >= 2
+
+    def test_matchmedia_change_listener(self, html):
+        """matchMedia 应绑 change 事件 (Auto 模式跟系统)"""
+        with open(html) as f:
+            content = f.read()
+        assert "addEventListener('change'" in content or "addListener(" in content
+
+    def test_bind_theme_select_called_after_render(self, html):
+        """render().then() 后应调 bindThemeSelect()"""
+        with open(html) as f:
+            content = f.read()
+        assert 'bindThemeSelect()' in content
+
+
+class TestThemeSwitcherCss:
+    """Stage 16 - theme CSS variables"""
+
+    @pytest.fixture
+    def html(self, tmp_path):
+        return _build_html(tmp_path, view='dataflow', filter_clock_reset=True)
+
+    def test_root_css_variables(self, html):
+        """:root 应定义 CSS variables (--bg-page 等)"""
+        with open(html) as f:
+            content = f.read()
+        assert ':root' in content
+        assert '--bg-page' in content
+        assert '--text-primary' in content
+        assert '--border' in content
+        assert '--accent' in content
+
+    def test_dark_theme_variables(self, html):
+        """:root[data-theme='dark'] 应覆盖变量"""
+        with open(html) as f:
+            content = f.read()
+        assert '[data-theme="dark"]' in content
+        # dark 模式应至少有 bg-page 和 text-primary 的覆盖
+        assert '--bg-page' in content
+
+    def test_theme_select_style(self, html):
+        """.theme-select 应有 padding + border + background CSS"""
+        with open(html) as f:
+            content = f.read()
+        assert '.theme-select' in content
+        assert 'border:' in content or 'border ' in content
+        assert 'padding' in content
+
+    def test_theme_select_hover(self, html):
+        """.theme-select:hover 应有 border 变化"""
+        with open(html) as f:
+            content = f.read()
+        assert '.theme-select:hover' in content
+
+    def test_dark_node_shape_literal(self, html):
+        """dark 模式 .node-shape.literal 应 fill 变化"""
+        with open(html) as f:
+            content = f.read()
+        assert '[data-theme="dark"] .node-shape.literal' in content
+
+    def test_dark_node_label_color(self, html):
+        """dark 模式 .node-label 应 fill 变化"""
+        with open(html) as f:
+            content = f.read()
+        assert '[data-theme="dark"] .node-label' in content
+        assert 'fill' in content
+
+    def test_dark_svg_background(self, html):
+        """dark 模式 #graph svg 应有 background"""
+        with open(html) as f:
+            content = f.read()
+        assert '[data-theme="dark"] #graph svg' in content

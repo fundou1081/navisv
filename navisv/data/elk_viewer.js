@@ -234,6 +234,9 @@
 
       // (Stage 12) 键盘快捷键
       bindKeyboardShortcuts();
+
+      // (Stage 16) 主题切换
+      bindThemeSelect();
     });
   }
 
@@ -618,6 +621,69 @@
       modal.addEventListener('click', function (e) {
         if (e.target === modal) closeHelp();
       });
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // (Stage 16) Theme switcher — Light / Dark / Auto
+  //  - 用 :root[data-theme] 属性切换 CSS 变量
+  //  - Auto 模式跟系统 prefers-color-scheme 同步
+  //  - 选择持久化到 localStorage (跨页面刷新)
+  // ---------------------------------------------------------------------
+
+  const THEME_STORAGE_KEY = 'navisv_elk_theme';
+
+  function getSystemTheme() {
+    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+      return 'dark';
+    }
+    return 'light';
+  }
+
+  function getSavedTheme() {
+    try {
+      return localStorage.getItem(THEME_STORAGE_KEY) || 'auto';
+    } catch (e) {
+      return 'auto';  // localStorage 可能被禁用 (隐私模式)
+    }
+  }
+
+  function saveTheme(theme) {
+    try {
+      localStorage.setItem(THEME_STORAGE_KEY, theme);
+    } catch (e) {
+      // localStorage 写入失败, 静默忽略
+    }
+  }
+
+  function applyTheme(theme) {
+    const actual = theme === 'auto' ? getSystemTheme() : theme;
+    document.documentElement.setAttribute('data-theme', actual);
+    document.documentElement.setAttribute('data-theme-source', theme);
+    // 同步 select 值
+    const sel = document.getElementById('theme-select');
+    if (sel && sel.value !== theme) sel.value = theme;
+  }
+
+  function bindThemeSelect() {
+    const sel = document.getElementById('theme-select');
+    if (!sel) return;
+    // 初始值: 优先 localStorage, 否则 auto
+    sel.value = getSavedTheme();
+    sel.addEventListener('change', function () {
+      const theme = sel.value;
+      saveTheme(theme);
+      applyTheme(theme);
+    });
+    // Auto 模式: 跟随系统变化
+    if (window.matchMedia) {
+      const mq = window.matchMedia('(prefers-color-scheme: dark)');
+      const handler = function () {
+        const current = getSavedTheme();
+        if (current === 'auto') applyTheme('auto');
+      };
+      if (mq.addEventListener) mq.addEventListener('change', handler);
+      else if (mq.addListener) mq.addListener(handler);  // 旧浏览器 fallback
     }
   }
 
