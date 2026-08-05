@@ -10,6 +10,7 @@ import tempfile
 from typing import List, Optional, Dict, Any
 
 from navisv.drivers import SlangDriver, NetlistDriver
+from navisv.drivers.netlist_driver import NetlistDriverError
 from navisv.parsers import ASTParser, NetlistParser, ConstraintParser, CovergroupParser, SVAParser, CallGraphParser, UVMTestbenchParser
 from navisv.graph import GraphBuilder, DesignGraph, ConstraintGraph, CovergroupAnalyzer, SVAGenerator, CallGraph, UVMTestbench
 
@@ -354,7 +355,10 @@ class DesignDriver:
         self._warning_count = result['warning_count']
     
     def _run_netlist(self):
-        """运行 slang-netlist 生成 Netlist"""
+        """运行 slang-netlist 生成 Netlist
+
+        (Stage 14) 失败时 raise NetlistDriverError (不再静默失败)
+        """
         self._netlist_driver = NetlistDriver(
             files=self.files,
             output_dir=self.output_dir,
@@ -364,6 +368,16 @@ class DesignDriver:
             top=self.top,
         )
         self._netlist_result = self._netlist_driver.run()
+        if not self._netlist_result.get('success', False):
+            # 静默失败修复: raise 让调用者看到原因
+            stderr = self._netlist_result.get('stderr', '') or ''
+            returncode = self._netlist_result.get('returncode', 'N/A')
+            # 截取 stderr 最后 800 字符 (避免超长输出)
+            tail = stderr[-800:] if len(stderr) > 800 else stderr
+            raise NetlistDriverError(
+                f"slang-netlist 失败 (returncode={returncode}). "
+                f"这是工具错误,不是 navisv bug。stderr 末尾:\n{tail}"
+            )
     
     def _parse_jsons(self):
         """解析 JSON 文件"""

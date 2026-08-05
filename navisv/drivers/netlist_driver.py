@@ -20,6 +20,16 @@ from typing import List, Optional, Dict, Any
 from navisv.config import NETLIST_BIN
 
 
+class NetlistDriverError(Exception):
+    """(Stage 14) slang-netlist 工具调用失败
+
+    之前 design_driver._run_netlist() 静默吞掉 NetlistDriver.run() 失败
+    结果 (success=False),导致后续代码拿到 _netlist_parser=None 而崩在
+    难懂的地方 ('list index out of range')。现在 raise 让调用者看到原因。
+    """
+    pass
+
+
 class NetlistDriver:
     """封装 slang-netlist 工具调用"""
     
