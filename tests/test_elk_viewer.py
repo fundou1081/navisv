@@ -222,3 +222,197 @@ class TestToolbarBehavior:
             content = f.read()
         # render().then(...) 里调用 applyFilters
         assert '.then(' in content and 'applyFilters()' in content
+
+
+class TestPanZoomToolbarHtml:
+    """Stage 7 - pan/zoom toolbar HTML 元素"""
+
+    @pytest.fixture
+    def html(self, tmp_path):
+        return _build_html(tmp_path, view='dataflow', filter_clock_reset=True)
+
+    def test_zoom_in_button_present(self, html):
+        """应有 zoom-in 按钮"""
+        with open(html) as f:
+            content = f.read()
+        assert 'id="zoom-in"' in content
+
+    def test_zoom_out_button_present(self, html):
+        """应有 zoom-out 按钮"""
+        with open(html) as f:
+            content = f.read()
+        assert 'id="zoom-out"' in content
+
+    def test_reset_button_present(self, html):
+        """应有 reset-view 按钮"""
+        with open(html) as f:
+            content = f.read()
+        assert 'id="reset-view"' in content
+        assert '>Reset<' in content
+
+    def test_zoom_level_span_present(self, html):
+        """应有 zoom-level span (显示当前 zoom %)"""
+        with open(html) as f:
+            content = f.read()
+        assert 'id="zoom-level"' in content
+        assert '100%' in content  # 初始值
+
+    def test_buttons_have_zoom_btn_class(self, html):
+        """所有 zoom 按钮应有 zoom-btn CSS 类"""
+        with open(html) as f:
+            content = f.read()
+        # 3 个按钮都有 zoom-btn 类
+        assert content.count('class="zoom-btn') >= 3
+
+
+class TestPanZoomJs:
+    """Stage 7 - pan/zoom JS 函数"""
+
+    @pytest.fixture
+    def html(self, tmp_path):
+        return _build_html(tmp_path, view='dataflow', filter_clock_reset=True)
+
+    def test_setup_pan_zoom_function(self, html):
+        """应有 setupPanZoom 函数"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function setupPanZoom' in content
+
+    def test_apply_view_transform_function(self, html):
+        """应有 applyViewTransform 函数"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function applyViewTransform' in content
+
+    def test_zoom_at_function(self, html):
+        """应有 zoomAt 函数 (保持缩放原点)"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function zoomAt' in content
+
+    def test_reset_view_function(self, html):
+        """应有 resetView 函数"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function resetView' in content
+
+    def test_clamp_scale_uses_safe_range(self, html):
+        """clampScale 应限制在 [0.1, 5]"""
+        with open(html) as f:
+            content = f.read()
+        assert 'clampScale' in content
+        assert '0.1' in content
+        assert 'Math.min(5' in content
+
+    def test_wheel_handler_prevents_default(self, html):
+        """wheel handler 应 preventDefault (避免页面滚动)"""
+        with open(html) as f:
+            content = f.read()
+        assert "'wheel'" in content and 'preventDefault' in content
+
+    def test_mousedown_excludes_nodes(self, html):
+        """mousedown 应只在背景触发, 不在节点/边/legend"""
+        with open(html) as f:
+            content = f.read()
+        assert "'mousedown'" in content
+        assert "closest('.node, .edge, .port, .legend')" in content
+
+    def test_mousemove_pan_handler(self, html):
+        """mousemove 应在 window 上处理 (拖动即使滑出 svg 也跟随)"""
+        with open(html) as f:
+            content = f.read()
+        assert "'mousemove'" in content
+        assert 'panStart' in content
+
+    def test_zoom_in_button_handler(self, html):
+        """zoom-in 按钮应绑 click 事件"""
+        with open(html) as f:
+            content = f.read()
+        assert 'zoom-in' in content and '1.25' in content  # 缩放因子
+
+    def test_zoom_out_button_handler(self, html):
+        """zoom-out 按钮应绑 click 事件"""
+        with open(html) as f:
+            content = f.read()
+        assert 'zoom-out' in content and '1 / 1.25' in content
+
+    def test_reset_button_handler(self, html):
+        """reset 按钮应调 resetView"""
+        with open(html) as f:
+            content = f.read()
+        assert "getElementById('reset-view')" in content
+        assert 'resetView' in content
+
+    def test_transform_attribute_format(self, html):
+        """applyViewTransform 应使用 SVG transform 属性 (split 多行)"""
+        with open(html) as f:
+            content = f.read()
+        # JS 中 setAttribute 是多行调用: g.setAttribute(\n  'transform',\n  ...
+        assert 'setAttribute(' in content
+        assert "'transform'" in content
+        assert 'translate(' in content
+        assert 'scale(' in content
+
+
+class TestPanZoomCss:
+    """Stage 7 - pan/zoom CSS 样式"""
+
+    @pytest.fixture
+    def html(self, tmp_path):
+        return _build_html(tmp_path, view='dataflow', filter_clock_reset=True)
+
+    def test_svg_cursor_grab(self, html):
+        """#graph svg 应有 cursor: grab (可拖提示)"""
+        with open(html) as f:
+            content = f.read()
+        assert '#graph svg' in content
+        assert 'cursor: grab' in content
+
+    def test_panning_cursor_grabbing(self, html):
+        """.panning 状态应有 cursor: grabbing"""
+        with open(html) as f:
+            content = f.read()
+        assert '.panning' in content
+        assert 'cursor: grabbing' in content
+
+    def test_zoom_btn_style(self, html):
+        """zoom-btn 应有 CSS 样式"""
+        with open(html) as f:
+            content = f.read()
+        assert '.zoom-btn' in content
+        assert '.zoom-btn:hover' in content
+
+    def test_zoom_level_style(self, html):
+        """zoom-level 应有 CSS 样式 (等宽字体 + 居中)"""
+        with open(html) as f:
+            content = f.read()
+        assert '#zoom-level' in content
+        assert 'min-width' in content
+
+
+class TestPanZoomSvg:
+    """Stage 7 - SVG 结构支持 pan/zoom"""
+
+    @pytest.fixture
+    def html(self, tmp_path):
+        return _build_html(tmp_path, view='dataflow', filter_clock_reset=True)
+
+    def test_graph_svg_id_present(self, html):
+        """<svg> 应有 id='graph-svg' (供 setupPanZoom 引用)"""
+        with open(html) as f:
+            content = f.read()
+        assert 'id="graph-svg"' in content
+
+    def test_graph_view_group_present(self, html):
+        """应有 <g id='graph-view'> (transform 应用到这个 group)"""
+        with open(html) as f:
+            content = f.read()
+        assert 'id="graph-view"' in content
+        assert 'translate(0,0) scale(1)' in content  # 初始 transform
+
+    def test_setup_pan_zoom_called_after_render(self, html):
+        """render().then() 后应调 setupPanZoom()"""
+        with open(html) as f:
+            content = f.read()
+        # 找到 render().then(...).catch 链
+        assert 'setupPanZoom()' in content

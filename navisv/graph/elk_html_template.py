@@ -52,6 +52,7 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
   <span class="meta">{meta}</span>
 </div>
 <!-- (Stage 4) 交互工具栏: 搜索 / 节点类型过滤 / CDC toggle -->
+<!-- (Stage 7) 加 zoom/pan 控件 (zoom-in/zoom-out/reset + zoom-level) -->
 <div id="toolbar">
   <input type="search" id="search-input" placeholder="🔍 Search nodes (case-insensitive)..." autocomplete="off">
   <span class="filter-group">
@@ -61,6 +62,10 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
     <label class="filter-label"><input type="checkbox" id="show-literal" checked> Literal</label>
   </span>
   <button type="button" id="toggle-cdc" class="toggle-button" data-on="false">CDC: off</button>
+  <button type="button" id="zoom-out" class="zoom-btn" title="Zoom out">−</button>
+  <span id="zoom-level">100%</span>
+  <button type="button" id="zoom-in" class="zoom-btn" title="Zoom in">+</button>
+  <button type="button" id="reset-view" class="zoom-btn reset" title="Reset view">Reset</button>
   <span class="match-count" id="match-count"></span>
 </div>
 <div id="graph"><div style="padding:40px;color:#7f8c8d;">Rendering graph...</div></div>

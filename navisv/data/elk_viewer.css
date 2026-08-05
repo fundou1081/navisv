@@ -49,6 +49,16 @@ body {
   min-height: 400px;
 }
 
+/* (Stage 7) pan/zoom 视觉提示 */
+#graph svg {
+  display: block;
+  cursor: grab;
+}
+
+#graph svg.panning {
+  cursor: grabbing;
+}
+
 .node-rect {
   cursor: pointer;
   transition: opacity 0.15s, stroke-width 0.15s;
@@ -248,4 +258,40 @@ body {
 
 .edge.cdc-dimmed {
   opacity: 0.25;
+}
+
+/* ---------------------------------------------------------------------
+ * (Stage 7) Zoom / Pan 工具栏按钮 + zoom-level 显示
+ * --------------------------------------------------------------------- */
+
+#zoom-level {
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  font-size: 12px;
+  color: #34495e;
+  min-width: 48px;
+  text-align: center;
+  user-select: none;
+}
+
+.zoom-btn {
+  padding: 6px 10px;
+  border: 1px solid #bdc3c7;
+  border-radius: 6px;
+  background: white;
+  color: #34495e;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+  min-width: 32px;
+}
+
+.zoom-btn:hover {
+  background: #ecf0f1;
+  border-color: #95a5a6;
+}
+
+.zoom-btn.reset {
+  font-size: 12px;
+  min-width: 60px;
 }

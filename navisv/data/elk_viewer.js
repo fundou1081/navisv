@@ -57,13 +57,16 @@
 
       let svg =
         '<svg width="' + (w + off * 2) + '" height="' + (h + off * 2) +
-        '" xmlns="http://www.w3.org/2000/svg">';
+        '" xmlns="http://www.w3.org/2000/svg" id="graph-svg">';
 
       // arrow marker
       svg +=
         '<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5"' +
         ' markerWidth="6" markerHeight="6" orient="auto">' +
         '<path d="M 0 0 L 10 5 L 0 10 z" fill="#2c3e50"/></marker></defs>';
+
+      // (Stage 7) pan/zoom transform group — all content is inside this group
+      svg += '<g id="graph-view" transform="translate(0,0) scale(1)">';
 
       // 边
       (layouted.edges || []).forEach(function (edge) {
@@ -196,6 +199,7 @@
         '<text class="legend-text" x="30" y="111">AlwaysFF</text>';
       svg += '</g>';
 
+      svg += '</g>';  // close #graph-view
       svg += '</svg>';
 
       const container = document.getElementById('graph');
@@ -203,6 +207,9 @@
 
       // 点击交互: 节点 / 边 → 显示到 #info
       setupClickHandlers(layouted);
+
+      // (Stage 7) pan/zoom 交互
+      setupPanZoom();
     });
   }
 
@@ -211,6 +218,104 @@
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;');
+  }
+
+  // ---------------------------------------------------------------------
+  // (Stage 7) Pan / Zoom
+  //  - wheel 滚轮: 以鼠标位置为原点缩放
+  //  - drag 背景: 平移 (节点/边 不触发, 用 target 检测)
+  //  - 工具栏按钮: zoom-in / zoom-out / reset
+  //  - 显示当前 zoom % 在 #zoom-level
+  // ---------------------------------------------------------------------
+  let viewState = { scale: 1, tx: 0, ty: 0 };
+  let isPanning = false;
+  let panStart = { x: 0, y: 0, tx: 0, ty: 0 };
+
+  function applyViewTransform() {
+    const g = document.getElementById('graph-view');
+    if (!g) return;
+    g.setAttribute(
+      'transform',
+      'translate(' + viewState.tx + ',' + viewState.ty + ') ' +
+      'scale(' + viewState.scale + ')'
+    );
+    const zl = document.getElementById('zoom-level');
+    if (zl) zl.textContent = Math.round(viewState.scale * 100) + '%';
+  }
+
+  function clampScale(s) {
+    return Math.max(0.1, Math.min(5, s));
+  }
+
+  function zoomAt(factor, cx, cy) {
+    const newScale = clampScale(viewState.scale * factor);
+    const actualFactor = newScale / viewState.scale;
+    // 保持缩放原点 (cx, cy) 不动
+    viewState.tx = cx - (cx - viewState.tx) * actualFactor;
+    viewState.ty = cy - (cy - viewState.ty) * actualFactor;
+    viewState.scale = newScale;
+    applyViewTransform();
+  }
+
+  function resetView() {
+    viewState = { scale: 1, tx: 0, ty: 0 };
+    applyViewTransform();
+  }
+
+  function setupPanZoom() {
+    const svg = document.getElementById('graph-svg');
+    if (!svg) return;
+
+    // wheel 缩放 (用 ctrlKey 修饰避免和浏览器原生冲突, 但这里直接拦截)
+    svg.addEventListener('wheel', function (e) {
+      e.preventDefault();
+      const rect = svg.getBoundingClientRect();
+      const cx = e.clientX - rect.left;
+      const cy = e.clientY - rect.top;
+      const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+      zoomAt(factor, cx, cy);
+    }, { passive: false });
+
+    // drag pan — 鼠标按下在 SVG 背景时触发 (不在节点/边)
+    svg.addEventListener('mousedown', function (e) {
+      // 只在背景 (svg 本身) 触发; 节点/边 会阻止 mousedown
+      if (e.target.closest('.node, .edge, .port, .legend')) return;
+      isPanning = true;
+      panStart = { x: e.clientX, y: e.clientY, tx: viewState.tx, ty: viewState.ty };
+      svg.classList.add('panning');
+      e.preventDefault();
+    });
+
+    window.addEventListener('mousemove', function (e) {
+      if (!isPanning) return;
+      viewState.tx = panStart.tx + (e.clientX - panStart.x);
+      viewState.ty = panStart.ty + (e.clientY - panStart.y);
+      applyViewTransform();
+    });
+
+    window.addEventListener('mouseup', function () {
+      if (isPanning) {
+        isPanning = false;
+        svg.classList.remove('panning');
+      }
+    });
+
+    // 工具栏按钮
+    const zoomIn = document.getElementById('zoom-in');
+    if (zoomIn) zoomIn.addEventListener('click', function () {
+      const rect = svg.getBoundingClientRect();
+      zoomAt(1.25, rect.width / 2, rect.height / 2);
+    });
+    const zoomOut = document.getElementById('zoom-out');
+    if (zoomOut) zoomOut.addEventListener('click', function () {
+      const rect = svg.getBoundingClientRect();
+      zoomAt(1 / 1.25, rect.width / 2, rect.height / 2);
+    });
+    const reset = document.getElementById('reset-view');
+    if (reset) reset.addEventListener('click', resetView);
+
+    // 初始同步 zoom-level 显示
+    applyViewTransform();
   }
 
   function setupClickHandlers(layouted) {
