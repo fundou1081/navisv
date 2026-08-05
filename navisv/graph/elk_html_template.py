@@ -66,6 +66,16 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
   <span id="zoom-level">100%</span>
   <button type="button" id="zoom-in" class="zoom-btn" title="Zoom in">+</button>
   <button type="button" id="reset-view" class="zoom-btn reset" title="Reset view">Reset</button>
+  <!-- (Stage 10) 多格式导出菜单: SVG / PNG / JSON / Mermaid -->
+  <div class="dropdown" id="export-dropdown">
+    <button type="button" id="export-btn" class="zoom-btn export-trigger" title="Export current view">Export ▼</button>
+    <div class="dropdown-content" id="export-menu" hidden>
+      <button type="button" class="export-item" data-format="svg">📄 SVG (vector)</button>
+      <button type="button" class="export-item" data-format="png">🖼 PNG (image)</button>
+      <button type="button" class="export-item" data-format="json">&#123; &#125; JSON (elk layout)</button>
+      <button type="button" class="export-item" data-format="mermaid">🧜 Mermaid (markdown)</button>
+    </div>
+  </div>
   <span class="match-count" id="match-count"></span>
 </div>
 <div id="graph"><div style="padding:40px;color:#7f8c8d;">Rendering graph...</div></div>

@@ -635,3 +635,230 @@ class TestSidebarCss:
             content = f.read()
         assert '.sidebar-section' in content
         assert 'uppercase' in content or 'text-transform' in content
+
+
+class TestExportMenuHtml:
+    """Stage 10 - export dropdown HTML"""
+
+    @pytest.fixture
+    def html(self, tmp_path):
+        return _build_html(tmp_path, view='dataflow', filter_clock_reset=True)
+
+    def test_export_dropdown_present(self, html):
+        """应有 #export-dropdown 容器"""
+        with open(html) as f:
+            content = f.read()
+        assert 'id="export-dropdown"' in content
+
+    def test_export_trigger_button(self, html):
+        """应有 #export-btn 触发按钮"""
+        with open(html) as f:
+            content = f.read()
+        assert 'id="export-btn"' in content
+        assert 'Export' in content
+
+    def test_export_menu_present(self, html):
+        """应有 #export-menu (dropdown content)"""
+        with open(html) as f:
+            content = f.read()
+        assert 'id="export-menu"' in content
+
+    def test_export_menu_hidden_by_default(self, html):
+        """menu 默认应有 hidden 属性"""
+        with open(html) as f:
+            content = f.read()
+        # 验证 <div class="dropdown-content" id="export-menu" hidden>
+        assert 'id="export-menu" hidden' in content or 'hidden id="export-menu"' in content
+
+    def test_export_format_svg(self, html):
+        """应有 SVG 导出项"""
+        with open(html) as f:
+            content = f.read()
+        assert 'data-format="svg"' in content
+        assert 'SVG' in content
+
+    def test_export_format_png(self, html):
+        """应有 PNG 导出项"""
+        with open(html) as f:
+            content = f.read()
+        assert 'data-format="png"' in content
+        assert 'PNG' in content
+
+    def test_export_format_json(self, html):
+        """应有 JSON 导出项"""
+        with open(html) as f:
+            content = f.read()
+        assert 'data-format="json"' in content
+        assert 'JSON' in content
+
+    def test_export_format_mermaid(self, html):
+        """应有 Mermaid 导出项"""
+        with open(html) as f:
+            content = f.read()
+        assert 'data-format="mermaid"' in content
+        assert 'Mermaid' in content
+
+
+class TestExportJs:
+    """Stage 10 - export JS 逻辑"""
+
+    @pytest.fixture
+    def html(self, tmp_path):
+        return _build_html(tmp_path, view='dataflow', filter_clock_reset=True)
+
+    def test_download_blob_helper(self, html):
+        """应有 downloadBlob 辅助函数"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function downloadBlob' in content
+        assert 'URL.createObjectURL' in content
+
+    def test_download_svg_function(self, html):
+        """应有 downloadSvg 函数"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function downloadSvg' in content
+        assert 'XMLSerializer' in content
+        assert 'image/svg+xml' in content
+
+    def test_download_svg_adds_background(self, html):
+        """downloadSvg 应加白色背景 rect (避免透明)"""
+        with open(html) as f:
+            content = f.read()
+        # 'fill="white"' 用于 rect background
+        assert "'white'" in content or '"white"' in content
+
+    def test_download_png_function(self, html):
+        """应有 downloadPng 函数 (Canvas + Image 渲染)"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function downloadPng' in content
+        assert 'createElement(\'canvas\')' in content or 'createElement("canvas")' in content
+        assert 'drawImage' in content
+        assert 'image/png' in content
+
+    def test_download_png_2x_scale(self, html):
+        """downloadPng 应用 2x scale 高清"""
+        with open(html) as f:
+            content = f.read()
+        assert '* scale' in content or '* 2' in content
+
+    def test_download_json_function(self, html):
+        """应有 downloadJson 函数"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function downloadJson' in content
+        assert 'JSON.stringify' in content
+
+    def test_download_mermaid_function(self, html):
+        """应有 downloadMermaid 函数"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function downloadMermaid' in content
+
+    def test_generate_mermaid_function(self, html):
+        """应有 generateMermaid 函数"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function generateMermaid' in content
+        assert 'flowchart LR' in content
+
+    def test_mermaid_arrow_for_cdc(self, html):
+        """CDC 边应用 ==> 粗箭头"""
+        with open(html) as f:
+            content = f.read()
+        assert "'==>'" in content or '"==>"' in content
+
+    def test_mermaid_normal_arrow(self, html):
+        """普通边用 --> 箭头"""
+        with open(html) as f:
+            content = f.read()
+        assert "'-->'" in content or '"-->"' in content
+
+    def test_sanitize_mermaid_id_helper(self, html):
+        """应有 sanitizeMermaidId helper (清理非法字符)"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function sanitizeMermaidId' in content
+        # mermaid ID 只允许 [A-Za-z0-9_]
+        assert '[^A-Za-z0-9_]' in content
+
+    def test_bind_export_menu_function(self, html):
+        """应有 bindExportMenu 函数"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function bindExportMenu' in content
+
+    def test_export_btn_toggle_handler(self, html):
+        """export-btn 应绑 click handler (toggle menu)"""
+        with open(html) as f:
+            content = f.read()
+        assert "getElementById('export-btn')" in content
+        assert "removeAttribute('hidden')" in content
+        assert "setAttribute('hidden', '')" in content
+
+    def test_export_item_format_dispatch(self, html):
+        """item click 应按 data-format dispatch"""
+        with open(html) as f:
+            content = f.read()
+        assert "dataset.format" in content
+        # 4 个分支
+        assert "fmt === 'svg'" in content or 'fmt === "svg"' in content
+        assert "fmt === 'png'" in content or 'fmt === "png"' in content
+        assert "fmt === 'json'" in content or 'fmt === "json"' in content
+        assert "fmt === 'mermaid'" in content or 'fmt === "mermaid"' in content
+
+    def test_export_click_outside_closes(self, html):
+        """点击 menu 外应关闭 menu"""
+        with open(html) as f:
+            content = f.read()
+        assert "closest('#export-dropdown')" in content
+
+    def test_bind_export_menu_called_after_render(self, html):
+        """render().then() 后应调 bindExportMenu()"""
+        with open(html) as f:
+            content = f.read()
+        assert 'bindExportMenu()' in content
+
+
+class TestExportCss:
+    """Stage 10 - export dropdown CSS"""
+
+    @pytest.fixture
+    def html(self, tmp_path):
+        return _build_html(tmp_path, view='dataflow', filter_clock_reset=True)
+
+    def test_dropdown_position_relative(self, html):
+        """.dropdown 应 position: relative (定位 anchor)"""
+        with open(html) as f:
+            content = f.read()
+        assert '.dropdown' in content
+        assert 'position: relative' in content
+
+    def test_dropdown_content_position(self, html):
+        """.dropdown-content 应 absolute 定位"""
+        with open(html) as f:
+            content = f.read()
+        assert '.dropdown-content' in content
+        assert 'position: absolute' in content
+
+    def test_dropdown_content_hidden(self, html):
+        """.dropdown-content[hidden] 应 display: none"""
+        with open(html) as f:
+            content = f.read()
+        assert '.dropdown-content[hidden]' in content
+        assert 'display: none' in content
+
+    def test_export_trigger_active_state(self, html):
+        """.export-trigger.active 应高亮"""
+        with open(html) as f:
+            content = f.read()
+        assert '.export-trigger.active' in content
+        assert '#3498db' in content  # 激活蓝色
+
+    def test_export_item_hover(self, html):
+        """.export-item:hover 应有 hover 背景"""
+        with open(html) as f:
+            content = f.read()
+        assert '.export-item' in content
+        assert '.export-item:hover' in content

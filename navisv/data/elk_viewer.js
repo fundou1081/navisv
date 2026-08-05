@@ -210,6 +210,9 @@
 
       // (Stage 7) pan/zoom 交互
       setupPanZoom();
+
+      // (Stage 10) 导出菜单 (只需要绑一次)
+      bindExportMenu();
     });
   }
 
@@ -260,6 +263,176 @@
   function resetView() {
     viewState = { scale: 1, tx: 0, ty: 0 };
     applyViewTransform();
+  }
+
+  // ---------------------------------------------------------------------
+  // (Stage 10) Export menu — 下载 SVG / PNG / JSON / Mermaid
+  //  - client-side blob 下载 (不需 server)
+  //  - PNG 用 canvas + Image 从 SVG 渲染
+  //  - Mermaid 用 flowchart LR 语法生成
+  // ---------------------------------------------------------------------
+
+  function downloadBlob(filename, mimeType, content) {
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+  }
+
+  function downloadSvg() {
+    const svg = document.getElementById('graph-svg');
+    if (!svg) return;
+    // 克隆 SVG (避免修改 DOM)
+    const clone = svg.cloneNode(true);
+    // 加 XML namespace (下载后独立可用)
+    clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+    // 加白色背景 (svg 默认透明)
+    const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    rect.setAttribute('width', '100%');
+    rect.setAttribute('height', '100%');
+    rect.setAttribute('fill', 'white');
+    clone.insertBefore(rect, clone.firstChild);
+    const xml = new XMLSerializer().serializeToString(clone);
+    downloadBlob('navisv_elk.svg', 'image/svg+xml;charset=utf-8', xml);
+  }
+
+  function downloadPng() {
+    const svg = document.getElementById('graph-svg');
+    if (!svg) return;
+    // 克隆 + 序列化
+    const clone = svg.cloneNode(true);
+    clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+    const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    rect.setAttribute('width', '100%');
+    rect.setAttribute('height', '100%');
+    rect.setAttribute('fill', 'white');
+    clone.insertBefore(rect, clone.firstChild);
+    const xml = new XMLSerializer().serializeToString(clone);
+    const blob = new Blob([xml], { type: 'image/svg+xml;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = function () {
+      const canvas = document.createElement('canvas');
+      const scale = 2;  // 2x 高清
+      canvas.width = (svg.getAttribute('width') || 800) * scale;
+      canvas.height = (svg.getAttribute('height') || 600) * scale;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = 'white';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      canvas.toBlob(function (pngBlob) {
+        if (!pngBlob) return;
+        const pngUrl = URL.createObjectURL(pngBlob);
+        const a = document.createElement('a');
+        a.href = pngUrl;
+        a.download = 'navisv_elk.png';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(function () { URL.revokeObjectURL(pngUrl); URL.revokeObjectURL(url); }, 1000);
+      }, 'image/png');
+    };
+    img.onerror = function () {
+      URL.revokeObjectURL(url);
+      console.error('PNG export: failed to load SVG into Image');
+    };
+    img.src = url;
+  }
+
+  function downloadJson() {
+    if (!currentLayouted) return;
+    const json = JSON.stringify(currentLayouted, null, 2);
+    downloadBlob('navisv_elk.json', 'application/json;charset=utf-8', json);
+  }
+
+  // Mermaid flowchart LR 生成
+  // - 节点 ID 清理 (mermaid 要求 ID 是 [A-Za-z0-9_])
+  // - 端口引用 (e.g., "node.port") 简化为 node
+  // - 边: A --> B
+  function sanitizeMermaidId(id) {
+    return String(id).replace(/[^A-Za-z0-9_]/g, '_');
+  }
+
+  function mermaidIdMap(layouted) {
+    const map = {};
+    let idx = 0;
+    (layouted.children || []).forEach(function (c) {
+      const safe = sanitizeMermaidId(c.id);
+      map[c.id] = 'n' + (idx++) + '_' + safe;
+    });
+    return map;
+  }
+
+  function generateMermaid() {
+    if (!currentLayouted) return '';
+    const idMap = mermaidIdMap(currentLayouted);
+    const lines = ['flowchart LR'];
+    // 节点定义
+    (currentLayouted.children || []).forEach(function (c) {
+      const label = getNodeLabel(c).replace(/"/g, '\\"').replace(/\n/g, ' ');
+      lines.push('  ' + idMap[c.id] + '["' + label + '"]');
+    });
+    // 边
+    (currentLayouted.edges || []).forEach(function (e) {
+      const src = e.sources && e.sources[0];
+      const tgt = e.targets && e.targets[0];
+      if (!src || !tgt || !idMap[src] || !idMap[tgt]) return;
+      // 提取端口 id (e.g., "node.port" → node)
+      const srcNode = src.split('.')[0];
+      const tgtNode = tgt.split('.')[0];
+      if (!idMap[srcNode] || !idMap[tgtNode]) return;
+      const lbl = e.labels && e.labels[0] ? e.labels[0].text : '';
+      const isCdc = e.properties && e.properties.cdc;
+      const arrow = isCdc ? '==>' : '-->';
+      const comment = lbl ? '|' + lbl.replace(/\|/g, '/') + '|' : '';
+      lines.push('  ' + idMap[srcNode] + ' ' + arrow + comment + ' ' + idMap[tgtNode]);
+    });
+    return lines.join('\n') + '\n';
+  }
+
+  function downloadMermaid() {
+    const code = generateMermaid();
+    if (!code) return;
+    downloadBlob('navisv_elk.mmd', 'text/plain;charset=utf-8', code);
+  }
+
+  function bindExportMenu() {
+    const btn = document.getElementById('export-btn');
+    const menu = document.getElementById('export-menu');
+    if (!btn || !menu) return;
+    // 点击按钮 → toggle menu
+    btn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      const hidden = menu.hasAttribute('hidden');
+      if (hidden) menu.removeAttribute('hidden');
+      else menu.setAttribute('hidden', '');
+      btn.classList.toggle('active', !hidden);
+    });
+    // 点击 menu item
+    menu.querySelectorAll('.export-item').forEach(function (item) {
+      item.addEventListener('click', function () {
+        const fmt = item.dataset.format;
+        if (fmt === 'svg') downloadSvg();
+        else if (fmt === 'png') downloadPng();
+        else if (fmt === 'json') downloadJson();
+        else if (fmt === 'mermaid') downloadMermaid();
+        // 关闭 menu
+        menu.setAttribute('hidden', '');
+        btn.classList.remove('active');
+      });
+    });
+    // 点击其他地方关闭 menu
+    document.addEventListener('click', function (e) {
+      if (!e.target.closest('#export-dropdown')) {
+        menu.setAttribute('hidden', '');
+        btn.classList.remove('active');
+      }
+    });
   }
 
   function setupPanZoom() {
