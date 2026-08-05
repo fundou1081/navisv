@@ -116,12 +116,16 @@ class NetlistParser:
         self.edges: List[NetlistEdge] = []
         self.node_map: Dict[int, NetlistNode] = {}  # id -> node
         self.path_map: Dict[str, NetlistNode] = {}  # path -> node (named nodes)
+        # (Stage 2.6) 文件表: fileIndex -> 文件路径
+        self.file_table: List[str] = []
     
     def parse(self) -> 'NetlistParser':
         """解析 JSON 文件"""
         with open(self.netlist_json_path) as f:
             self.data = json.load(f)
-        
+
+        self.file_table = self.data.get('fileTable', [])
+
         self._parse_nodes()
         self._parse_edges()
         self._build_maps()

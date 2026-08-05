@@ -789,3 +789,187 @@ class TestGraphBuilderPreserveOperators:
         # 应直接 return, 不创建任何节点
         gb._add_intermediate_nodes()
         assert len(gb.graph.nodes) == 0
+
+
+# ---------------------------------------------------------------------------
+# Tests: Stage 2.6 - AST op symbol extraction
+# ---------------------------------------------------------------------------
+
+class TestASTOpSymbolMap:
+    """Stage 2.6 - AST op enum -> human-readable symbol"""
+
+    def test_binary_op_addition(self):
+        from navisv.graph.graph_builder import AST_OP_TO_SYMBOL
+        assert AST_OP_TO_SYMBOL['Add'] == '+'
+
+    def test_binary_op_subtraction(self):
+        from navisv.graph.graph_builder import AST_OP_TO_SYMBOL
+        assert AST_OP_TO_SYMBOL['Subtract'] == '-'
+
+    def test_logical_not(self):
+        from navisv.graph.graph_builder import AST_OP_TO_SYMBOL
+        assert AST_OP_TO_SYMBOL['LogicalNot'] == '!'
+
+    def test_logical_and(self):
+        from navisv.graph.graph_builder import AST_OP_TO_SYMBOL
+        assert AST_OP_TO_SYMBOL['LogicalAnd'] == '&&'
+
+    def test_equality(self):
+        from navisv.graph.graph_builder import AST_OP_TO_SYMBOL
+        assert AST_OP_TO_SYMBOL['Equality'] == '=='
+
+    def test_assignment_kind_in_map_as_fallback(self):
+        """Assignment kind 在表里作为 fallback '<=' (实际用 isNonBlocking 区分 = / <=)"""
+        from navisv.graph.graph_builder import AST_OP_TO_SYMBOL
+        # Assignment 在表里, 但 _ast_match_to_info 会优先看 isNonBlocking
+        assert AST_OP_TO_SYMBOL.get('Assignment') == '<='
+
+
+class TestGraphBuilderStage26Counter:
+    """Stage 2.6 - end-to-end on counter.sv: operator labels show specific symbols"""
+
+    @pytest.fixture(scope="class")
+    def gb(self):
+        """端到端跑 counter.sv, 拿 GraphBuilder"""
+        from navisv.drivers.design_driver import DesignDriver
+        import glob, shutil, os
+        out = '/tmp/navisv_stage26_test'
+        if os.path.exists(out):
+            shutil.rmtree(out)
+        DesignDriver(['tests/fixtures/elk_counter.sv'], output_dir=out, cache=False).build()
+
+        from navisv.parsers.ast_parser import ASTParser
+        from navisv.parsers.netlist_parser import NetlistParser
+        ast = ASTParser(glob.glob(f'{out}/*ast*.json')[0]).parse()
+        nl = NetlistParser(glob.glob(f'{out}/*netlist*.json')[0]).parse()
+
+        from navisv.graph.graph_builder import GraphBuilder
+        gb = GraphBuilder(ast, nl, ast_json_path=f'{out}/ast.json',
+                          source_files=['tests/fixtures/elk_counter.sv'],
+                          preserve_operators=True)
+        gb.build()
+        return gb
+
+    def test_unary_not_in_conditional(self, gb):
+        """`if (!rst_n)` -> Conditional 节点 label 应为 '!'"""
+        op_5 = gb._node_attrs.get('op_5')
+        assert op_5 is not None
+        assert op_5.kind == 'Operator'
+        assert op_5.name == '!'
+        assert op_5.attributes['ast_kind'] == 'Conditional'
+        assert op_5.attributes['ast_op'] == 'LogicalNot'
+
+    def test_plain_conditional_falls_back_to_if(self, gb):
+        """`if (enable)` -> Conditional 节点 label 应为 'if' (无具体 operator)"""
+        op_8 = gb._node_attrs.get('op_8')
+        assert op_8 is not None
+        assert op_8.kind == 'Operator'
+        assert op_8.name == 'if'
+        assert op_8.attributes['ast_kind'] == 'Conditional'
+
+    def test_assignment_with_binary_op_rhs(self, gb):
+        """`count <= count + 1` -> Assignment 节点 label 应为 '+'"""
+        op_9 = gb._node_attrs.get('op_9')
+        assert op_9 is not None
+        assert op_9.kind == 'Operator'
+        assert op_9.name == '+'
+        assert op_9.attributes['ast_kind'] == 'Assignment'
+        assert op_9.attributes['ast_op'] == 'Add'
+
+    def test_assignment_with_literal_rhs_falls_back_to_le(self, gb):
+        """`count <= 0` -> Assignment 节点 label 应为 '<=' (无具体 RHS operator)"""
+        op_6 = gb._node_attrs.get('op_6')
+        assert op_6 is not None
+        assert op_6.kind == 'Operator'
+        assert op_6.name == '<='
+        assert op_6.attributes['ast_kind'] == 'Assignment'
+
+    def test_constant_uses_ast_value(self, gb):
+        """Constant 节点 label 用 AST Conversion.value"""
+        const = gb._node_attrs.get('const_7')
+        assert const is not None
+        assert const.kind == 'Literal'
+        assert const.name == "4'b0"
+        assert const.attributes['ast_kind'] == 'Conversion'
+
+    def test_merge_nodes_fall_back(self, gb):
+        """Merge 节点无 AST 对应, fallback 到 'merge'"""
+        op_10 = gb._node_attrs.get('op_10')
+        op_11 = gb._node_attrs.get('op_11')
+        assert op_10.kind == 'Operator'
+        assert op_10.name == 'merge'
+        assert op_11.kind == 'Operator'
+        assert op_11.name == 'merge'
+
+
+class TestFindFirstOperatorHelper:
+    """Stage 2.6 - _find_first_operator 严格限制 walk 范围"""
+
+    def test_conditional_does_not_walk_into_iftrue_iffalse(self):
+        """Conditional 只看 conditions[*].expr, 不进 ifTrue/ifFalse"""
+        # Mock AST node 类似: Conditional(conditions=[{expr: UnaryOp}],
+        #                                 ifTrue=Assignment(BinaryOp))
+        from navisv.graph.graph_builder import GraphBuilder
+
+        cond = {
+            'kind': 'Conditional',
+            'conditions': [{'expr': {'kind': 'UnaryOp', 'op': 'LogicalNot'}}],
+            'ifTrue': {
+                'kind': 'ExpressionStatement',
+                'expr': {
+                    'kind': 'Assignment',
+                    'right': {'kind': 'BinaryOp', 'op': 'Add'},
+                },
+            },
+        }
+        # Mock object 类似 ASTNode
+        class FakeNode:
+            def __init__(self, d):
+                self.attributes = d
+                self.kind = d.get('kind', '')
+                self.children = []
+
+        gb = GraphBuilder.__new__(GraphBuilder)
+        op = gb._find_first_operator(FakeNode(cond))
+        assert op == 'LogicalNot', f"Expected 'LogicalNot', got {op!r}"
+
+    def test_assignment_only_walks_right_not_left(self):
+        """Assignment 只看 right, 不看 left"""
+        from navisv.graph.graph_builder import GraphBuilder
+
+        assign = {
+            'kind': 'Assignment',
+            'left': {'kind': 'BinaryOp', 'op': 'Add'},  # 不应被 walk
+            'right': {'kind': 'Conversion', 'operand': {'kind': 'IntegerLiteral', 'value': "4'b0"}},
+            'isNonBlocking': True,
+        }
+        class FakeNode:
+            def __init__(self, d):
+                self.attributes = d
+                self.kind = d.get('kind', '')
+                self.children = []
+
+        gb = GraphBuilder.__new__(GraphBuilder)
+        op = gb._find_first_operator(FakeNode(assign))
+        # left 是 BinaryOp 但不应被 walk, Conversion 又没 op, 结果是 None
+        assert op is None, f"Expected None (no op in right), got {op!r}"
+
+    def test_assignment_with_binary_op_right(self):
+        """Assignment.right 是 BinaryOp -> 返回 op"""
+        from navisv.graph.graph_builder import GraphBuilder
+
+        assign = {
+            'kind': 'Assignment',
+            'left': {'kind': 'NamedValue'},
+            'right': {'kind': 'BinaryOp', 'op': 'Add'},
+            'isNonBlocking': True,
+        }
+        class FakeNode:
+            def __init__(self, d):
+                self.attributes = d
+                self.kind = d.get('kind', '')
+                self.children = []
+
+        gb = GraphBuilder.__new__(GraphBuilder)
+        op = gb._find_first_operator(FakeNode(assign))
+        assert op == 'Add'

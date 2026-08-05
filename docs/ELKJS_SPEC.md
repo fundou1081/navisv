@@ -50,6 +50,28 @@ Stage 2.5 新增：把 graph_builder 中间节点（Conditional/Assignment/Case/
 
 **限制**：当前 Operator 显示的 label 是 netlist kind（`if` / `<=` / `merge`），不是具体的运算符符号（`+` / `-` / `==` / `&&` / `!`）。要拿到具体符号需要 pyslang AST 集成（Stage 4+ 或 pyslang 路线图）。
 
+### 2.1.1 (Stage 2.6) AST 驱动的具体运算符符号
+
+Stage 2.6 修正 Operator label 显示的符号为 AST 提取的真实运算符:
+
+| netlist kind | AST 探查路径 | Stage 2.5 (前) | Stage 2.6 (后) |
+|---|---|---|---|
+| Conditional | `conditions[*].expr` → 第一个 op | `if` | `if` / `!` / `&&` / ... (例如 `!rst_n` 显示 `!`) |
+| Assignment | `right` → 第一个 op | `<=` | `<=` / `+` / `-` / `==` / ... (例如 `count+1` 显示 `+`) |
+| Constant | Conversion.constant / IntegerLiteral.value | netlist.value | 同左 (例: `4'b0`) |
+| Merge | 无 AST 对应 | `merge` | `merge` (fallback) |
+
+**映射表** `AST_OP_TO_SYMBOL` 位于 `navisv/graph/graph_builder.py`:
+- BinaryOp: `Add → +`, `Subtract → -`, `Multiply → *`, `Divide → /`, `Mod → %`, `Equality → ==`, `Inequality → !=`, `LogicalAnd → &&`, `LogicalOr → ||`, `BitwiseAnd → &`, ...
+- UnaryOp: `LogicalNot → !`, `BitwiseNot → ~`, `Minus → -`, `Plus → +`
+- Assignment (fallback): `<=` (当 RHS 无子 operator)
+- Conditional / ConditionalOp (fallback): `if` / `?:`
+
+**限制**:
+- Merge 节点无 AST 对应, 只能 fallback `merge` (slang-netlist 内部优化产出)
+- 只看第一个 operator (顶层 RHS / 顶层 condition), 深层嵌套不展开
+- Counter 示例: `op_5 = !` (LogicalNot), `op_9 = +` (Add), `op_8 = if` (NamedValue condition), `op_6 = <=` (literal RHS)
+
 ---
 
 ## 3. 数据格式 (elkjs 原生 JSON)

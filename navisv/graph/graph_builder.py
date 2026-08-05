@@ -19,6 +19,75 @@ from navisv.graph.condition_annotator import ConditionAnnotator
 from navisv.graph.ast_analyzer import ASTAnalyzer
 
 
+# (Stage 2.6) slang AST op 枚举 → 人类可读符号
+# 来源: slang AST schema (Expression op field)
+AST_OP_TO_SYMBOL: Dict[str, str] = {
+    # Assignment
+    'Assignment': '<=',
+
+    # Conditional
+    'Conditional': 'if',
+    'ConditionalOp': '?:',
+
+    # BinaryOp - 算术
+    'Add': '+',
+    'Subtract': '-',
+    'Multiply': '*',
+    'Divide': '/',
+    'Mod': '%',
+    'Power': '**',
+    # BinaryOp - 位运算
+    'BitwiseAnd': '&',
+    'BitwiseOr': '|',
+    'BitwiseXor': '^',
+    'BitwiseNand': '~&',
+    'BitwiseNor': '~|',
+    'BitwiseXnor': '~^',
+    'ShiftLeft': '<<',
+    'ShiftRight': '>>',
+    'ArithmeticShiftLeft': '<<<',
+    'ArithmeticShiftRight': '>>>',
+    # BinaryOp - 逻辑
+    'LogicalAnd': '&&',
+    'LogicalOr': '||',
+    'LogicalImplication': '->',
+    'LogicalEquivalence': '<->',
+    # BinaryOp - 比较
+    'Equality': '==',
+    'Inequality': '!=',
+    'CaseEquality': '===',
+    'CaseInequality': '!==',
+    'GreaterThan': '>',
+    'GreaterThanEqual': '>=',
+    'LessThan': '<',
+    'LessThanEqual': '<=',
+    'WildcardEquality': '==?',
+    'WildcardInequality': '!=?',
+
+    # UnaryOp
+    'Plus': '+',
+    'Minus': '-',
+    'LogicalNot': '!',
+    'BitwiseNot': '~',
+    'PreIncrement': '++',
+    'PreDecrement': '--',
+    'PostIncrement': '++',
+    'PostDecrement': '--',
+
+    # Other
+    'Replication': '{n{}}',
+    'StreamingConcat': '{<<{}}',
+}
+
+# Netlist 中间节点 kind → AST Kind (供精确匹配使用)
+NETLIST_INTERMEDIATE_TO_AST: Dict[str, str] = {
+    'Conditional': 'Conditional',
+    'Assignment': 'Assignment',
+    # 'Merge' 无 AST 对应 (slang 内部 multi-way merge)
+    # 'Case'   等同 Conditional (slang --netlist 不区分)
+}
+
+
 @dataclass
 class NodeAttr:
     """节点属性"""
@@ -337,19 +406,27 @@ class GraphBuilder:
         self._node_attrs[path] = attr
 
     def _add_intermediate_nodes(self):
-        """(Stage 2.5) 为中间节点 (Operator/Literal) 创建图节点
+        """(Stage 2.5/2.6) 为中间节点 (Operator/Literal) 创建图节点
 
         仅在 preserve_operators=True 时生效。
         - Assignment / Conditional / Case / Merge -> kind='Operator'
         - Constant -> kind='Literal' (使用 netlist node.value)
+
+        (Stage 2.6) 优先用 AST 表达式 (op / value) 生成具体符号
+                    匹配不上时 fallback 到 netlist kind label
 
         生成的图节点 path 格式: 'op_<id>' 或 'const_<id>'
         """
         if not self.preserve_operators:
             return
 
-        # Operator kind -> 显示符号
-        operator_label = {
+        # (Stage 2.6) 建立 AST 表达式索引: (file, line, col) -> Expression info
+        #   file 来自 ast_json_path
+        #   line, col 来自 ASTNode attributes (source_line_start, source_column_start)
+        ast_index = self._build_ast_expression_index()
+
+        # Operator kind -> 默认 label (fallback)
+        operator_label_fallback = {
             'Assignment': '<=',
             'Conditional': 'if',
             'Case': 'case',
@@ -361,7 +438,21 @@ class GraphBuilder:
                 op_path = f"op_{node.id}"
                 if op_path in self._node_attrs:
                     continue
-                label = operator_label.get(node.kind, node.kind.lower())
+
+                # (Stage 2.6) 从 AST 拿具体 op 符号
+                ast_match = self._match_netlist_to_ast(node, ast_index)
+                if ast_match and ast_match.get('symbol'):
+                    label = ast_match['symbol']
+                    op_attrs = {
+                        'operator_kind': node.kind,
+                        'netlist_id': node.id,
+                        'ast_kind': ast_match.get('ast_kind', ''),
+                        'ast_op': ast_match.get('op', ''),
+                    }
+                else:
+                    label = operator_label_fallback.get(node.kind, node.kind.lower())
+                    op_attrs = {'operator_kind': node.kind, 'netlist_id': node.id}
+
                 attr = NodeAttr(
                     name=label,
                     path=op_path,
@@ -370,7 +461,7 @@ class GraphBuilder:
                     timing='combinational',
                     module='',
                     location=node.location,
-                    attributes={'operator_kind': node.kind, 'netlist_id': node.id},
+                    attributes=op_attrs,
                 )
                 self._add_node(op_path, attr)
 
@@ -378,18 +469,274 @@ class GraphBuilder:
                 const_path = f"const_{node.id}"
                 if const_path in self._node_attrs:
                     continue
-                value_str = node.value if node.value is not None else '?'
+                # (Stage 2.6) 优先用 AST IntegerLiteral.value, fallback 到 netlist
+                ast_match = self._match_netlist_to_ast(node, ast_index)
+                if ast_match and ast_match.get('value'):
+                    value_str = ast_match['value']
+                else:
+                    value_str = str(node.value) if node.value is not None else '?'
                 attr = NodeAttr(
-                    name=str(value_str),
+                    name=value_str,
                     path=const_path,
                     kind='Literal',
                     bit_width=node.bounds,
                     timing='combinational',
                     module='',
                     location=node.location,
-                    attributes={'value': node.value, 'netlist_id': node.id},
+                    attributes={
+                        'value': value_str,
+                        'netlist_id': node.id,
+                        'ast_kind': ast_match.get('ast_kind', '') if ast_match else '',
+                    },
                 )
                 self._add_node(const_path, attr)
+
+    # ------------------------------------------------------------------
+    # (Stage 2.6) AST 表达式提取 + 位置匹配
+    # ------------------------------------------------------------------
+
+    def _build_ast_expression_index(self) -> Dict[Tuple[str, int], List[Dict]]:
+        """Walk AST 收集所有 expression 节点, 按 (file, line) 索引
+
+        Returns:
+            {(file_key, line): [{ast_kind, op, value, col, location}, ...]}
+            - 同一行可能有多个表达式, 按 col 排序
+            - file_key 用 netlist fileTable 中的 basename, 以跟 netlist.location 对齐
+        """
+        index: Dict[Tuple[str, int], List[Dict]] = {}
+
+        if not self.ast or not self.ast.root:
+            return index
+
+        # 定位源文件: 第一个非 $root 的 source_file
+        ast_source_file = ''
+        try:
+            defn = self.ast.data.get('definitions', [{}])[0] if hasattr(self.ast, 'data') else {}
+            ast_source_file = defn.get('source_file', '')
+        except Exception:
+            pass
+        if not ast_source_file:
+            ast_source_file = os.path.basename(self.source_files[0]) if self.source_files else ''
+
+        def walk(node):
+            # ASTParser 节点的 attributes dict 是从原始 JSON 拷过来的,
+            # source_line_start / source_column_start 在那里
+            attrs = node.attributes or {}
+            kind = node.kind
+            line_start = attrs.get('source_line_start', 0)
+            col_start = attrs.get('source_column_start', 0)
+
+            if line_start > 0 and kind in (
+                'Assignment', 'Conditional', 'BinaryOp', 'UnaryOp',
+                'ConditionalOp', 'IntegerLiteral', 'Conversion',
+            ):
+                key = (ast_source_file, line_start)
+                if key not in index:
+                    index[key] = []
+                index[key].append({
+                    'ast_kind': kind,
+                    'op': attrs.get('op', ''),
+                    'value': attrs.get('value', ''),
+                    'constant': attrs.get('constant', ''),
+                    'col': col_start,
+                    'isNonBlocking': attrs.get('isNonBlocking', False),
+                    'node': node,
+                })
+
+            for child in node.children:
+                walk(child)
+
+        walk(self.ast.root)
+
+        # 按 col 排序, 方便 binary search
+        for key in index:
+            index[key].sort(key=lambda x: x['col'])
+
+        return index
+
+    def _match_netlist_to_ast(self, netlist_node, ast_index: Dict[Tuple[str, int], List[Dict]]) -> Optional[Dict]:
+        """按 (file, line) + 临近 col 在 ast_index 找最佳匹配
+
+        策略:
+        1. file_key 使用 ast_source_file 的 basename (跟 netlist fileTable index 一致)
+        2. line 完全匹配
+        3. 同一行多表达式时, 取 col 最接近 netlist.column 的
+        4. kind 匹配优先 (Assignment ↔ Assignment, Constant ↔ Conversion/IntegerLiteral)
+        """
+        loc = netlist_node.location or {}
+        line = loc.get('line', 0)
+        col = loc.get('column', 0)
+        file_index = loc.get('fileIndex', 0)
+
+        # 拿到 ast_index 所有 keys, 用 file basename 匹配
+        # netlist 用 fileTable, ast 直接用 source_file 路径
+        # 我们用 ast_index 的第一个 key 的 file 部分
+        ast_file_key = None
+        for (f, l) in ast_index.keys():
+            ast_file_key = f
+            break
+
+        # 计算 netlist 的 file basename
+        netlist_file = ''
+        if self.netlist.file_table:
+            netlist_file = self.netlist.file_table[file_index]
+        netlist_file_base = os.path.basename(netlist_file) if netlist_file else ''
+        ast_file_base = os.path.basename(ast_file_key) if ast_file_key else ''
+
+        # line 必须匹配
+        if not line:
+            return None
+
+        # 尝试两种 file_key
+        candidates = None
+        for key in [(ast_file_base, line), (ast_file_key, line)]:
+            if key in ast_index:
+                candidates = ast_index[key]
+                break
+
+        if not candidates:
+            return None
+
+        # kind 过滤: netlist Assignment -> AST Assignment, Constant -> Conversion/IntegerLiteral
+        if netlist_node.kind == 'Assignment':
+            filtered = [c for c in candidates if c['ast_kind'] == 'Assignment']
+        elif netlist_node.kind == 'Conditional':
+            filtered = [c for c in candidates if c['ast_kind'] == 'Conditional']
+        elif netlist_node.kind == 'Case':
+            filtered = [c for c in candidates if c['ast_kind'] == 'Conditional']  # slang 把 case 映射成 Conditional
+        elif netlist_node.kind == 'Constant':
+            filtered = [c for c in candidates if c['ast_kind'] in ('Conversion', 'IntegerLiteral')]
+        else:
+            filtered = candidates
+
+        if not filtered:
+            filtered = candidates  # fallback 用所有
+
+        # col 最近
+        best = min(filtered, key=lambda c: abs(c['col'] - col))
+        return self._ast_match_to_info(netlist_node.kind, best)
+
+    def _ast_match_to_info(self, netlist_kind: str, ast_entry: Dict) -> Dict:
+        """把 AST 表达式 entry 转成 Operator/Literal 需要的 info dict
+
+        Returns:
+            {symbol, value, ast_kind, op}
+
+        (Stage 2.6) Assignment 节点如果 RHS 是单一 BinaryOp/UnaryOp/ConditionalOp,
+                     用具体 op symbol 覆盖 <= / = label
+        """
+        ast_kind = ast_entry['ast_kind']
+        op = ast_entry['op']
+        value = ast_entry['value']
+        constant = ast_entry['constant']
+        is_nb = ast_entry.get('isNonBlocking', False)
+        ast_node = ast_entry.get('node')
+
+        if netlist_kind == 'Constant':
+            # 优先用 Conversion.constant, fallback IntegerLiteral.value
+            lit = constant or value or '?'
+            return {'symbol': lit, 'value': lit, 'ast_kind': ast_kind, 'op': op}
+
+        # Operator
+        if ast_kind == 'Assignment':
+            # (Stage 2.6) 探查 RHS 是否有具体 operator
+            rhs_op = self._find_first_operator(ast_node, skip_named_value=True)
+            if rhs_op and rhs_op in AST_OP_TO_SYMBOL:
+                sym = AST_OP_TO_SYMBOL[rhs_op]
+                return {'symbol': sym, 'ast_kind': ast_kind, 'op': rhs_op}
+            # fallback to assignment symbol
+            sym = '<=' if is_nb else '='
+            return {'symbol': sym, 'ast_kind': ast_kind, 'op': op or sym}
+
+        if ast_kind == 'Conditional':
+            # (Stage 2.6) 探查 condition 是否有具体 operator
+            cond_op = self._find_first_operator(ast_node, skip_named_value=True,
+                                                 skip_conditional=True)
+            if cond_op and cond_op in AST_OP_TO_SYMBOL:
+                sym = AST_OP_TO_SYMBOL[cond_op]
+                return {'symbol': sym, 'ast_kind': ast_kind, 'op': cond_op}
+            return {'symbol': 'if', 'ast_kind': ast_kind, 'op': op or 'if'}
+
+        if ast_kind == 'ConditionalOp':
+            return {'symbol': '?:', 'ast_kind': ast_kind, 'op': op or '?:'}
+
+        # BinaryOp / UnaryOp -> AST_OP_TO_SYMBOL
+        sym = AST_OP_TO_SYMBOL.get(op, op or ast_kind.lower())
+        return {'symbol': sym, 'ast_kind': ast_kind, 'op': op}
+
+    def _find_first_operator(self, ast_node, skip_named_value: bool = True,
+                              skip_conditional: bool = False) -> Optional[str]:
+        """从 AST 节点往下走, 找第一个真正的 operator (BinaryOp/UnaryOp/ConditionalOp)
+
+        (Stage 2.6 bugfix) 严格限制 walk 范围:
+          - Conditional 只看 conditions[*].expr (不看 ifTrue/ifFalse 避免跳到嵌套语句)
+          - Assignment 只看 right (不看 left 是 NamedValue)
+          - Conversion 看 operand
+
+        Args:
+            ast_node: 起点 AST 节点 (Conditional/Assignment 等)
+            skip_named_value: 跳过 NamedValue (不加)
+            skip_conditional: 跳过 Conditional (避免多层 if 套娃)
+        """
+        target_kinds = ('BinaryOp', 'UnaryOp', 'ConditionalOp')
+
+        attrs = ast_node.attributes or {}
+        kind = ast_node.kind
+
+        if kind == 'Conditional':
+            # 只 walk conditions[*].expr
+            conds = attrs.get('conditions', [])
+            for cond in conds:
+                if not isinstance(cond, dict): continue
+                expr = cond.get('expr')
+                if isinstance(expr, dict):
+                    r = self._walk_for_op(expr, target_kinds, skip_named_value, depth=0)
+                    if r: return r
+            return None
+
+        if kind == 'Assignment':
+            # 只 walk right
+            right = attrs.get('right')
+            if isinstance(right, dict):
+                return self._walk_for_op(right, target_kinds, skip_named_value, depth=0)
+            return None
+
+        # fallback: walk children
+        for child in ast_node.children:
+            r = self._walk_for_op(child, target_kinds, skip_named_value, depth=0)
+            if r: return r
+        return None
+
+    def _walk_for_op(self, node, target_kinds, skip_named_value: bool, depth: int) -> Optional[str]:
+        """递归 walk dict AST 节点找 operator (不走 ASTNode.children, 直接用 attributes)"""
+        if depth > 10: return None
+        if not isinstance(node, dict): return None
+        kind = node.get('kind', '')
+        if kind in target_kinds:
+            return node.get('op', '')
+        if skip_named_value and kind == 'NamedValue':
+            return None
+        # Conversion 看 operand
+        if kind == 'Conversion':
+            op = node.get('operand')
+            if isinstance(op, dict):
+                return self._walk_for_op(op, target_kinds, skip_named_value, depth+1)
+            return None
+        # 递归子表达式: left/right/operand/expr/conditions[*].expr
+        for key in ('left', 'right', 'operand', 'expr'):
+            v = node.get(key)
+            if isinstance(v, dict):
+                r = self._walk_for_op(v, target_kinds, skip_named_value, depth+1)
+                if r: return r
+        conds = node.get('conditions', [])
+        if isinstance(conds, list):
+            for c in conds:
+                if isinstance(c, dict):
+                    e = c.get('expr')
+                    if isinstance(e, dict):
+                        r = self._walk_for_op(e, target_kinds, skip_named_value, depth+1)
+                        if r: return r
+        return None
 
     def _add_edges(self):
         """从 Netlist 添加边"""

@@ -12,6 +12,7 @@
 Stage 1    ElkExporter 骨架 + 数据流转换           → 2h
 Stage 2    HTML viewer + bundled elkjs              → 1.5h
 Stage 2.5  Operator / Literal 节点 (菱形 + 虚线)    → 1.5h (插队, 2026-08-05)
+Stage 2.6  AST 驱动的具体运算符符号 (!, +, <=)      → 1h (插队, 2026-08-05)
 Stage 3    CLI + 3 视图                            → 2h
 Stage 4    交互层 (搜索/高亮/CDC toggle)           → 1.5h
 Stage 5    真实 RTL 测试                           → 1h
@@ -56,6 +57,60 @@ Stage 6    examples + README + push                → 1h
 ### Commit
 ```
 feat(elk): Stage 2.5 — Operator / Literal nodes (diamond + dashed rect)
+```
+
+---
+
+## Stage 2.6: AST 驱动的具体运算符符号 (2026-08-05)
+
+**背景**: 用户反馈「operator 要显示具体符号，先改这个」
+
+Stage 2.5 的 Operator label 仍是 netlist kind (`if`/`<=`/`merge`)。
+用户期待看到具体运算符（`!`、`+`、`&&` 等）。
+
+### 任务
+- [x] `navisv/graph/graph_builder.py`: 加 `AST_OP_TO_SYMBOL` 映射表 (~40 entries)
+  - BinaryOp: Add/Sub/Mul/Div/Mod, Equality/Inequality, LogicalAnd/Or, BitwiseAnd/Or/Xor, ShiftLeft/Right, GreaterThan/LessThan
+  - UnaryOp: LogicalNot/BitwiseNot/Plus/Minus/PreIncrement/PostIncrement
+  - ConditionalOp → `?:`
+- [x] `navisv/graph/graph_builder.py`: `_build_ast_expression_index()` walk AST
+  - 收集 expression 节点 (Conditional/BinaryOp/UnaryOp/ConditionalOp/Assignment/Conversion/IntegerLiteral)
+  - 按 (file, line) 索引, 行内按 col 排序
+- [x] `navisv/graph/graph_builder.py`: `_match_netlist_to_ast()`
+  - 按 (file, line) + col 临近匹配
+  - kind 过滤 (Conditional ↔ Conditional, Assignment ↔ Assignment, Constant ↔ Conversion/IntegerLiteral)
+  - Merge fallback
+- [x] `navisv/graph/graph_builder.py`: `_find_first_operator()` 严格 walk
+  - Conditional 只看 `conditions[*].expr`, 不进 ifTrue/ifFalse (避免跨语句吸到嵌套 BinaryOp)
+  - Assignment 只看 `right`, 不看 left (NamedValue)
+  - Conversion 看 operand
+- [x] `navisv/graph/graph_builder.py`: `_add_intermediate_nodes()` 用 AST 匹配覆盖 netlist kind fallback
+- [x] `navisv/parsers/netlist_parser.py`: 加 `file_table` 属性 (从 netlist.fileTable 读取)
+- [x] `tests/test_elk_exporter.py`: +15 个新测试 (TestASTOpSymbolMap / TestGraphBuilderStage26Counter / TestFindFirstOperatorHelper)
+
+### 验收
+- counter.sv:
+  - op_5 (`if !rst_n`): `if` → **`!`** ✅
+  - op_6 (`count <= 0`): `<=` → `<=` (RHS 是字面值, fallback)
+  - op_8 (`if enable`): `if` → `if` (condition 是 NamedValue, fallback)
+  - op_9 (`count <= count+1`): `<=` → **`+`** ✅
+  - const_7: `4'b0` → `4'b0` ✅
+  - op_10/op_11 (Merge): `merge` → `merge` (fallback)
+- 79 elk_exporter tests pass, 318 navisv tests pass, 0 regression
+- PNG 渲染 5 个 Operator 菱形 + 1 Literal, 标签 `!` `+` `<=` `if` `merge` `4'b0`
+
+### 关键 bugfix
+第一次实现时 `_find_first_operator()` walk 了所有 children, 把嵌套 if 块里 Assignment 的 BinaryOp Add "吸"到外面 Conditional 节点上, 导致 op_5/op_8 都显示 `+`。
+**修复**: 严格按 `conditions[*].expr` / `right` 字段 walk, 不跨语句边界。
+
+### 限制 / 待办
+- Merge fallback `merge` (无 AST 对应)
+- 只看第一个 operator, 不展开深层嵌套
+- 三元 `?:` / 位选 `[7:0]` / 类型转换 `int'()` 待 pyslang 或更精细 walk
+
+### Commit
+```
+feat(elk): Stage 2.6 — operator labels show specific symbols (!, +, <=, if)
 ```
 
 ---
