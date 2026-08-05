@@ -77,6 +77,13 @@ body {
   pointer-events: none;
 }
 
+/* (Stage 13) emoji 前缀样式: emoji 用 Apple Color Emoji 字体,稍微大点 */
+.node-label-emoji {
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+  font-size: 13px;
+  margin-right: 2px;
+}
+
 .edge {
   cursor: pointer;
   transition: stroke-width 0.15s;

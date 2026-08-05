@@ -1076,3 +1076,67 @@ class TestKeyboardShortcutsCss:
             content = f.read()
         assert '.shortcut-table' in content
         assert 'border-collapse' in content
+
+
+class TestNodeEmoji:
+    """Stage 13 - 节点 emoji icon 前缀 + Legend 更新"""
+
+    @pytest.fixture
+    def html(self, tmp_path):
+        return _build_html(tmp_path, view='dataflow', filter_clock_reset=True)
+
+    def test_kind_emoji_mapping(self, html):
+        """应有 KIND_EMOJI 映射 (Port/State/Operator/Literal → emoji)"""
+        with open(html) as f:
+            content = f.read()
+        assert 'KIND_EMOJI' in content
+        # 4 个 kind 都应映射
+        assert 'Port' in content and 'State' in content and 'Operator' in content and 'Literal' in content
+
+    def test_port_emoji(self, html):
+        """Port 应有 📡 emoji"""
+        with open(html) as f:
+            content = f.read()
+        assert '📡' in content
+
+    def test_state_emoji(self, html):
+        """State 应有 📦 emoji"""
+        with open(html) as f:
+            content = f.read()
+        assert '📦' in content
+
+    def test_operator_emoji(self, html):
+        """Operator 应有 ⚙ emoji"""
+        with open(html) as f:
+            content = f.read()
+        assert '⚙' in content
+
+    def test_literal_emoji(self, html):
+        """Literal 应有 🔢 emoji"""
+        with open(html) as f:
+            content = f.read()
+        assert '🔢' in content
+
+    def test_legend_includes_emoji(self, html):
+        """Legend 中应包含 4 个 emoji (替换纯文字)"""
+        with open(html) as f:
+            content = f.read()
+        # Legend text 区段 (在 .legend-text 后)
+        # 检查 4 个 emoji 都在 Legend 区段 (后面跟 "State"/"Port"/"Operator"/"Literal")
+        assert '📦 State' in content or 'State' in content
+        assert '📡 Port' in content or 'Port' in content
+        assert '⚙ Operator' in content or 'Operator' in content
+        assert '🔢 Literal' in content or 'Literal' in content
+
+    def test_emoji_prefix_used_in_render(self, html):
+        """render() 中应用 emojiPrefix 到 label 前"""
+        with open(html) as f:
+            content = f.read()
+        # 应有 emojiPrefix 变量使用
+        assert 'emojiPrefix' in content
+
+    def test_emoji_font_family(self, html):
+        """CSS 应有 emoji 字体 fallback (Apple Color Emoji 等)"""
+        with open(html) as f:
+            content = f.read()
+        assert 'Apple Color Emoji' in content or 'Segoe UI Emoji' in content

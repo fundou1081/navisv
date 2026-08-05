@@ -55,6 +55,18 @@
       const h = Math.max(layouted.height || 400, 400);
       const off = 20;
 
+      // (Stage 13) emoji 映射: 节点类型 + emoji 前缀
+      // - Port (in/out): 📡 信号天线
+      // - State (reg):   📦 仓库/容器
+      // - Operator:      ⚙️ 齿轮 (if/<= 逻辑)
+      // - Literal:       🔢 数字
+      const KIND_EMOJI = {
+        'Port': '📡',
+        'State': '📦',
+        'Operator': '⚙️',
+        'Literal': '🔢',
+      };
+
       let svg =
         '<svg width="' + (w + off * 2) + '" height="' + (h + off * 2) +
         '" xmlns="http://www.w3.org/2000/svg" id="graph-svg">';
@@ -118,13 +130,16 @@
             [cx, y + node.height], // bottom
             [x, cy]                // left
           ].map(function (p) { return p.join(','); }).join(' ');
+          // (Stage 13) emoji 前缀
+          const emojiPrefix = KIND_EMOJI['Operator'] ? KIND_EMOJI['Operator'] + ' ' : '';
           svg +=
             '<polygon class="node-shape operator" points="' + pts +
             '" fill="white" stroke="' + color + '" stroke-width="2"/>' +
             '<text class="node-label" x="' + cx + '" y="' + (cy + 4) +
-            '">' + escapeHtml(lbl) + '</text>';
+            '">' + emojiPrefix + escapeHtml(lbl) + '</text>';
         } else if (isLiteral) {
           // 小矩形,颜色淡
+          const emojiPrefix = KIND_EMOJI['Literal'] ? KIND_EMOJI['Literal'] + ' ' : '';
           svg +=
             '<rect class="node-shape literal" x="' + x + '" y="' + y +
             '" width="' + node.width + '" height="' + node.height +
@@ -132,15 +147,17 @@
             '" stroke-width="1.5" stroke-dasharray="3,2"/>' +
             '<text class="node-label literal" x="' + (x + node.width / 2) +
             '" y="' + (y + node.height / 2 + 4) + '">' +
-            escapeHtml(lbl) + '</text>';
+            emojiPrefix + escapeHtml(lbl) + '</text>';
         } else {
+          // (Stage 13) Port 或 State: 用 kind emoji 前缀
+          const emojiPrefix = KIND_EMOJI[kind] ? KIND_EMOJI[kind] + ' ' : '';
           svg +=
             '<rect class="node-rect" x="' + x + '" y="' + y +
             '" width="' + node.width + '" height="' + node.height +
             '" rx="6" fill="white" stroke="' + color + '" stroke-width="2"/>' +
             '<text class="node-label" x="' + (x + node.width / 2) +
             '" y="' + (y + node.height / 2 + 4) + '">' +
-            escapeHtml(lbl) + '</text>';
+            emojiPrefix + escapeHtml(lbl) + '</text>';
         }
         if (node.ports) {
           node.ports.forEach(function (port) {
@@ -167,6 +184,7 @@
       });
 
       // Legend (固定右上角) - 包含 Operator / Literal (Stage 2.5)
+      // (Stage 13) 加 emoji 到 legend
       svg += '<g class="legend" transform="translate(' + (off + 10) + ',' + (off + 10) + ')">';
       svg +=
         '<rect x="0" y="0" width="190" height="118" fill="white"' +
@@ -176,22 +194,22 @@
       svg +=
         '<rect x="10" y="28" width="14" height="10" fill="white"' +
         ' stroke="#27ae60" stroke-width="2"/>' +
-        '<text class="legend-text" x="30" y="37">State (Reg)</text>';
+        '<text class="legend-text" x="30" y="37">📦 State (Reg)</text>';
       // Port
       svg +=
         '<rect x="10" y="44" width="14" height="10" fill="white"' +
         ' stroke="#3498db" stroke-width="2"/>' +
-        '<text class="legend-text" x="30" y="53">Port (in/out)</text>';
+        '<text class="legend-text" x="30" y="53">📡 Port (in/out)</text>';
       // Operator (菱形)
       svg +=
         '<polygon points="10,72 17,64 24,72 17,80" fill="white"' +
         ' stroke="#e67e22" stroke-width="2"/>' +
-        '<text class="legend-text" x="30" y="72">Operator (if/&lt;=)</text>';
+        '<text class="legend-text" x="30" y="72">⚙️ Operator (if/&lt;=)</text>';
       // Literal (虚线)
       svg +=
         '<rect x="10" y="88" width="14" height="10" fill="#ecf0f1"' +
         ' stroke="#7f8c8d" stroke-width="1.5" stroke-dasharray="2,2"/>' +
-        '<text class="legend-text" x="30" y="97">Literal (4&#39;h1)</text>';
+        '<text class="legend-text" x="30" y="97">🔢 Literal (4&#39;h1)</text>';
       // AlwaysFF (边)
       svg +=
         '<line x1="10" y1="108" x2="24" y2="108" stroke="#16a085"' +
