@@ -33,6 +33,26 @@ from navisv import DesignDriver
 from navisv.config import check_tools
 
 
+
+def _resolve_design_input(args):
+    """从 args 解析 (files, filelist) - 二选一
+
+    Returns:
+        (files: List[str], filelist: Optional[str])
+    Raises:
+        ValueError if both/neither provided
+    """
+    raw = getattr(args, 'file', None)
+    files = raw if isinstance(raw, list) else ([raw] if raw else [])
+    files = [f for f in files if f]
+    filelist = getattr(args, 'filelist', None)
+    if filelist and files:
+        raise ValueError("file 和 --filelist 不能同时使用 (二选一)")
+    if not filelist and not files:
+        raise ValueError("必须提供 file 或 --filelist")
+    return files, filelist
+
+
 def format_signal_info(info, verbose=False):
     """格式化信号信息"""
     signal = info.get('signal', 'unknown')
@@ -100,7 +120,8 @@ def run_info(args):
 
     output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
     try:
-        dd = DesignDriver([args.file], output_dir=output_dir, include_dirs=args.include or [])
+        files, filelist = _resolve_design_input(args)
+        dd = DesignDriver(files, output_dir=output_dir, include_dirs=args.include or [], filelist=filelist)
         dd.build()
         dg = dd.design_graph
 
@@ -127,7 +148,8 @@ def run_registers(args):
 
     output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
     try:
-        dd = DesignDriver([args.file], output_dir=output_dir, include_dirs=args.include or [])
+        files, filelist = _resolve_design_input(args)
+        dd = DesignDriver(files, output_dir=output_dir, include_dirs=args.include or [], filelist=filelist)
         dd.build()
         dg = dd.design_graph
 
@@ -175,7 +197,8 @@ def run_ast(args):
 
     output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
     try:
-        dd = DesignDriver([args.file], output_dir=output_dir, include_dirs=args.include or [])
+        files, filelist = _resolve_design_input(args)
+        dd = DesignDriver(files, output_dir=output_dir, include_dirs=args.include or [], filelist=filelist)
         dd.build()
 
         ast_json = os.path.join(output_dir, 'ast.json')
@@ -306,18 +329,21 @@ def main():
 
     # navisv info <file> <signal>
     p = sub.add_parser('info', help='获取信号完整信息')
-    p.add_argument('file', help='设计文件')
+    p.add_argument('file', nargs='*', help='设计文件 (单/多个, 与 --filelist 互斥)')
+    p.add_argument('--filelist', '-F', help='filelist 文件路径 (与 file 互斥)')
     p.add_argument('signal', help='信号路径')
     p.add_argument('--source', '-s', choices=['ast', 'netlist', 'both'],
                    default='both', help='数据源')
 
     # navisv registers <file>
     p = sub.add_parser('registers', help='报告所有寄存器')
-    p.add_argument('file', help='设计文件')
+    p.add_argument('file', nargs='*', help='设计文件 (单/多个, 与 --filelist 互斥)')
+    p.add_argument('--filelist', '-F', help='filelist 文件路径 (与 file 互斥)')
 
     # navisv ast <file>
     p = sub.add_parser('ast', help='生成 AST JSON')
-    p.add_argument('file', help='设计文件')
+    p.add_argument('file', nargs='*', help='设计文件 (单/多个, 与 --filelist 互斥)')
+    p.add_argument('--filelist', '-F', help='filelist 文件路径 (与 file 互斥)')
 
     # navisv tools
     p = sub.add_parser('tools', help='检查依赖工具')
@@ -331,32 +357,38 @@ def main():
 
     # navisv trace <file> <src> <dst>
     p = sub.add_parser('trace', help='路径追踪')
-    p.add_argument('file', help='设计文件')
+    p.add_argument('file', nargs='*', help='设计文件 (单/多个, 与 --filelist 互斥)')
+    p.add_argument('--filelist', '-F', help='filelist 文件路径 (与 file 互斥)')
     p.add_argument('src', help='起始信号')
     p.add_argument('dst', help='目标信号')
 
     # navisv batch-trace <file> <path1> <path2> ...
     p = sub.add_parser('batch-trace', help='批量路径追踪')
-    p.add_argument('file', help='设计文件')
+    p.add_argument('file', nargs='*', help='设计文件 (单/多个, 与 --filelist 互斥)')
+    p.add_argument('--filelist', '-F', help='filelist 文件路径 (与 file 互斥)')
     p.add_argument('paths', nargs='+', help='路径对,格式: src->dst')
 
     # navisv timing <file>
     p = sub.add_parser('timing', help='时序报告')
-    p.add_argument('file', help='设计文件')
+    p.add_argument('file', nargs='*', help='设计文件 (单/多个, 与 --filelist 互斥)')
+    p.add_argument('--filelist', '-F', help='filelist 文件路径 (与 file 互斥)')
 
     # navisv fanout <file> <signal>
     p = sub.add_parser('fanout', help='Fan-out 时序分析')
-    p.add_argument('file', help='设计文件')
+    p.add_argument('file', nargs='*', help='设计文件 (单/多个, 与 --filelist 互斥)')
+    p.add_argument('--filelist', '-F', help='filelist 文件路径 (与 file 互斥)')
     p.add_argument('signal', help='信号路径')
 
     # navisv coverage <file> [signal]
     p = sub.add_parser('coverage', help='条件覆盖率分析')
-    p.add_argument('file', help='设计文件')
+    p.add_argument('file', nargs='*', help='设计文件 (单/多个, 与 --filelist 互斥)')
+    p.add_argument('--filelist', '-F', help='filelist 文件路径 (与 file 互斥)')
     p.add_argument('signal', nargs='?', help='信号路径 (省略则批量分析)')
 
     # navisv dot <file>
     p = sub.add_parser('dot', help='DOT 导出 (Graphviz, 模块聚类 + CDC 高亮 + 图例)')
-    p.add_argument('file', help='设计文件')
+    p.add_argument('file', nargs='*', help='设计文件 (单/多个, 与 --filelist 互斥)')
+    p.add_argument('--filelist', '-F', help='filelist 文件路径 (与 file 互斥)')
     p.add_argument('--subgraph', '-s', help='子图过滤模式 (如 module.*)')
     p.add_argument('--cdc-highlight', action='store_true',
                    help='CDC 路径用粉红粗边高亮')
@@ -369,7 +401,8 @@ def main():
 
     # navisv mermaid <file> (独立 mermaid 命令,支持与 dot 相同参数)
     p = sub.add_parser('mermaid', help='Mermaid 导出 (模块分组 + CDC 高亮 + 图例)')
-    p.add_argument('file', help='设计文件')
+    p.add_argument('file', nargs='*', help='设计文件 (单/多个, 与 --filelist 互斥)')
+    p.add_argument('--filelist', '-F', help='filelist 文件路径 (与 file 互斥)')
     p.add_argument('--subgraph', '-s', help='子图过滤模式 (如 module.*)')
     p.add_argument('--cdc-highlight', action='store_true',
                    help='CDC 路径用双线高亮 (==)')
@@ -410,48 +443,56 @@ def main():
 
     # navisv fanin-cone <file> <signal>
     p = sub.add_parser('fanin-cone', help='Fan-in 锥分析')
-    p.add_argument('file', help='设计文件')
+    p.add_argument('file', nargs='*', help='设计文件 (单/多个, 与 --filelist 互斥)')
+    p.add_argument('--filelist', '-F', help='filelist 文件路径 (与 file 互斥)')
     p.add_argument('signal', help='信号路径')
     p.add_argument('--depth', '-d', type=int, help='深度 (默认 3)')
 
     # navisv constraints <file>
     p = sub.add_parser('constraints', help='列出所有 class 和 constraint')
-    p.add_argument('file', help='设计文件')
+    p.add_argument('file', nargs='*', help='设计文件 (单/多个, 与 --filelist 互斥)')
+    p.add_argument('--filelist', '-F', help='filelist 文件路径 (与 file 互斥)')
     p.add_argument('--verbose', '-v', action='store_true', help='显示约束体内容')
 
     # navisv cvar <file> <variable>
     p = sub.add_parser('cvar', help='Q1: 变量在哪些 constraint 中')
-    p.add_argument('file', help='设计文件')
+    p.add_argument('file', nargs='*', help='设计文件 (单/多个, 与 --filelist 互斥)')
+    p.add_argument('--filelist', '-F', help='filelist 文件路径 (与 file 互斥)')
     p.add_argument('variable', help='变量路径 (如 pkg.Class.var)')
     p.add_argument('--composition', '-c', action='store_true', help='包含组合关系')
     p.add_argument('--verbose', '-v', action='store_true', help='显示约束体')
 
     # navisv ccons <file> <constraint>
     p = sub.add_parser('ccons', help='Q2: 约束影响哪些变量')
-    p.add_argument('file', help='设计文件')
+    p.add_argument('file', nargs='*', help='设计文件 (单/多个, 与 --filelist 互斥)')
+    p.add_argument('--filelist', '-F', help='filelist 文件路径 (与 file 互斥)')
     p.add_argument('constraint', help='约束路径 (如 pkg.Class.constraint)')
 
     # navisv crel <file> <var1> <var2>
     p = sub.add_parser('crel', help='Q3: 两变量间的约束关系')
-    p.add_argument('file', help='设计文件')
+    p.add_argument('file', nargs='*', help='设计文件 (单/多个, 与 --filelist 互斥)')
+    p.add_argument('--filelist', '-F', help='filelist 文件路径 (与 file 互斥)')
     p.add_argument('var1', help='变量1路径')
     p.add_argument('var2', help='变量2路径')
 
     # navisv cg-list <file>
     p = sub.add_parser('cg-list', help='列出所有 covergroup/coverpoint/bins')
-    p.add_argument('file', help='设计文件')
+    p.add_argument('file', nargs='*', help='设计文件 (单/多个, 与 --filelist 互斥)')
+    p.add_argument('--filelist', '-F', help='filelist 文件路径 (与 file 互斥)')
     p.add_argument('--verbose', '-v', action='store_true', help='显示 bins 详情')
 
     # navisv cg-check <file> <variable> <cg> <cp>
     p = sub.add_parser('cg-check', help='bin-constraint 一致性检查')
-    p.add_argument('file', help='设计文件')
+    p.add_argument('file', nargs='*', help='设计文件 (单/多个, 与 --filelist 互斥)')
+    p.add_argument('--filelist', '-F', help='filelist 文件路径 (与 file 互斥)')
     p.add_argument('variable', help='变量路径')
     p.add_argument('cg', help='covergroup 名')
     p.add_argument('cp', help='coverpoint 名')
 
     # navisv cg-quality <file> <variable> <cg> <cp> [--type data|control]
     p = sub.add_parser('cg-quality', help='coverage 质量评估')
-    p.add_argument('file', help='设计文件')
+    p.add_argument('file', nargs='*', help='设计文件 (单/多个, 与 --filelist 互斥)')
+    p.add_argument('--filelist', '-F', help='filelist 文件路径 (与 file 互斥)')
     p.add_argument('variable', nargs='?', help='变量路径 (省略则 cg 级别评估)')
     p.add_argument('cg', nargs='?', help='covergroup 名')
     p.add_argument('cp', nargs='?', help='coverpoint 名')
@@ -459,7 +500,8 @@ def main():
 
     # navisv temporal <file> <src> <dst>
     p = sub.add_parser('temporal', help='时序关系分析')
-    p.add_argument('file', help='设计文件')
+    p.add_argument('file', nargs='*', help='设计文件 (单/多个, 与 --filelist 互斥)')
+    p.add_argument('--filelist', '-F', help='filelist 文件路径 (与 file 互斥)')
     p.add_argument('src', nargs='?', help='源信号 (省略则批量分析)')
     p.add_argument('dst', nargs='?', help='目标信号')
     p.add_argument('--depth', '-d', type=int, default=3, help='寄存器链深度')
@@ -468,19 +510,22 @@ def main():
 
     # navisv sva-align <file>
     p = sub.add_parser('sva-align', help='SVA 时序对齐检查')
-    p.add_argument('file', help='设计文件')
+    p.add_argument('file', nargs='*', help='设计文件 (单/多个, 与 --filelist 互斥)')
+    p.add_argument('--filelist', '-F', help='filelist 文件路径 (与 file 互斥)')
     p.add_argument('--min-latency', '-l', type=int, default=1, help='最小延迟级数')
     p.add_argument('--limit', '-n', type=int, default=20, help='显示数量')
 
     # navisv verify-map <file>
     p = sub.add_parser('verify-map', help='模块验证覆盖率地图')
-    p.add_argument('file', help='设计文件')
+    p.add_argument('file', nargs='*', help='设计文件 (单/多个, 与 --filelist 互斥)')
+    p.add_argument('--filelist', '-F', help='filelist 文件路径 (与 file 互斥)')
     p.add_argument('--module', '-m', help='模块前缀 (省略则自动检测)')
     p.add_argument('--limit', '-n', type=int, default=50, help='未覆盖信号显示数量')
 
     # navisv cdc <file>
     p = sub.add_parser('cdc', help='CDC 跨时钟域检测')
-    p.add_argument('file', help='设计文件')
+    p.add_argument('file', nargs='*', help='设计文件 (单/多个, 与 --filelist 互斥)')
+    p.add_argument('--filelist', '-F', help='filelist 文件路径 (与 file 互斥)')
     p.add_argument('--module', '-m', help='模块前缀 (省略则自动检测)')
     p.add_argument('--limit', '-n', type=int, default=50, help='最多显示路径数')
     p.add_argument('--format', '-f', choices=['text', 'json'], default='text',
@@ -488,14 +533,16 @@ def main():
 
     # navisv clock-stats <file>
     p = sub.add_parser('clock-stats', help='时钟/复位 fan-out 统计')
-    p.add_argument('file', help='设计文件')
+    p.add_argument('file', nargs='*', help='设计文件 (单/多个, 与 --filelist 互斥)')
+    p.add_argument('--filelist', '-F', help='filelist 文件路径 (与 file 互斥)')
     p.add_argument('--module', '-m', help='模块前缀 (省略则自动检测)')
     p.add_argument('--format', '-f', choices=['text', 'json'], default='text',
                     help='输出格式')
 
     # navisv eco <file>
     p = sub.add_parser('eco', help='ECO 影响分析 (diff 或 before/after)')
-    p.add_argument('file', help='设计文件')
+    p.add_argument('file', nargs='*', help='设计文件 (单/多个, 与 --filelist 互斥)')
+    p.add_argument('--filelist', '-F', help='filelist 文件路径 (与 file 互斥)')
     p.add_argument('--diff', help='git diff 文件路径')
     p.add_argument('--before', help='改动前文件路径 (CDC 模式)')
     p.add_argument('--after', help='改动后文件路径 (CDC 模式)')
@@ -506,7 +553,8 @@ def main():
 
     # navisv risk <file>
     p = sub.add_parser('risk', help='信号风险/复杂度分析')
-    p.add_argument('file', help='设计文件')
+    p.add_argument('file', nargs='*', help='设计文件 (单/多个, 与 --filelist 互斥)')
+    p.add_argument('--filelist', '-F', help='filelist 文件路径 (与 file 互斥)')
     p.add_argument('--module', '-m', help='模块前缀 (省略则自动检测)')
     p.add_argument('--limit', '-n', type=int, default=20, help='高风险信号显示数量')
     p.add_argument('--cdc-highlight', action='store_true',
@@ -589,7 +637,8 @@ def run_trace(args):
 
     output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
     try:
-        dd = DesignDriver([args.file], output_dir=output_dir, include_dirs=args.include or [])
+        files, filelist = _resolve_design_input(args)
+        dd = DesignDriver(files, output_dir=output_dir, include_dirs=args.include or [], filelist=filelist)
         dd.build()
         dg = dd.design_graph
 
@@ -626,7 +675,8 @@ def run_batch_trace(args):
 
     output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
     try:
-        dd = DesignDriver([args.file], output_dir=output_dir, include_dirs=args.include or [])
+        files, filelist = _resolve_design_input(args)
+        dd = DesignDriver(files, output_dir=output_dir, include_dirs=args.include or [], filelist=filelist)
         dd.build()
         dg = dd.design_graph
 
@@ -673,7 +723,8 @@ def run_timing(args):
 
     output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
     try:
-        dd = DesignDriver([args.file], output_dir=output_dir, include_dirs=args.include or [])
+        files, filelist = _resolve_design_input(args)
+        dd = DesignDriver(files, output_dir=output_dir, include_dirs=args.include or [], filelist=filelist)
         dd.build()
         dg = dd.design_graph
 
@@ -703,7 +754,8 @@ def run_fanout(args):
 
     output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
     try:
-        dd = DesignDriver([args.file], output_dir=output_dir, include_dirs=args.include or [])
+        files, filelist = _resolve_design_input(args)
+        dd = DesignDriver(files, output_dir=output_dir, include_dirs=args.include or [], filelist=filelist)
         dd.build()
         dg = dd.design_graph
 
@@ -751,7 +803,8 @@ def run_coverage(args):
 
     output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
     try:
-        dd = DesignDriver([args.file], output_dir=output_dir, include_dirs=args.include or [])
+        files, filelist = _resolve_design_input(args)
+        dd = DesignDriver(files, output_dir=output_dir, include_dirs=args.include or [], filelist=filelist)
         dd.build()
         dg = dd.design_graph
 
@@ -816,8 +869,10 @@ def run_dot(args):
 
     output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
     try:
-        dd = DesignDriver([args.file], output_dir=output_dir,
-                         include_dirs=args.include or [], cache=True)
+        files, filelist = _resolve_design_input(args)
+        dd = DesignDriver(files, output_dir=output_dir,
+        include_dirs=args.include or [], cache=True,
+        filelist=filelist)
         dd.build()
         dg = dd.design_graph
 
@@ -869,8 +924,10 @@ def run_mermaid(args):
 
     output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
     try:
-        dd = DesignDriver([args.file], output_dir=output_dir,
-                         include_dirs=args.include or [], cache=True)
+        files, filelist = _resolve_design_input(args)
+        dd = DesignDriver(files, output_dir=output_dir,
+        include_dirs=args.include or [], cache=True,
+        filelist=filelist)
         dd.build()
         dg = dd.design_graph
 
@@ -1037,7 +1094,8 @@ def run_fanin_cone(args):
 
     output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
     try:
-        dd = DesignDriver([args.file], output_dir=output_dir, include_dirs=args.include or [])
+        files, filelist = _resolve_design_input(args)
+        dd = DesignDriver(files, output_dir=output_dir, include_dirs=args.include or [], filelist=filelist)
         dd.build()
         dg = dd.design_graph
 
@@ -1068,7 +1126,8 @@ def run_constraints(args):
     """列出所有类和约束"""
     output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
     try:
-        dd = DesignDriver([args.file], output_dir=output_dir, include_dirs=args.include or [])
+        files, filelist = _resolve_design_input(args)
+        dd = DesignDriver(files, output_dir=output_dir, include_dirs=args.include or [], filelist=filelist)
         dd.build()
         cg = dd.constraint_graph
         if not cg:
@@ -1135,7 +1194,8 @@ def run_constraint_query(args):
     """Q1: 变量在哪些约束中 / Q2: 约束影响哪些变量 / Q3: 变量关系"""
     output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
     try:
-        dd = DesignDriver([args.file], output_dir=output_dir, include_dirs=args.include or [])
+        files, filelist = _resolve_design_input(args)
+        dd = DesignDriver(files, output_dir=output_dir, include_dirs=args.include or [], filelist=filelist)
         dd.build()
         cg = dd.constraint_graph
         if not cg:
@@ -1207,7 +1267,8 @@ def run_cg_list(args):
     """列出所有 covergroup/coverpoint/bins"""
     output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
     try:
-        dd = DesignDriver([args.file], output_dir=output_dir, include_dirs=args.include or [])
+        files, filelist = _resolve_design_input(args)
+        dd = DesignDriver(files, output_dir=output_dir, include_dirs=args.include or [], filelist=filelist)
         dd.build()
         cg = dd.covergroups
         if not cg:
@@ -1258,7 +1319,8 @@ def run_cg_check(args):
     """bin-constraint 一致性检查"""
     output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
     try:
-        dd = DesignDriver([args.file], output_dir=output_dir, include_dirs=args.include or [])
+        files, filelist = _resolve_design_input(args)
+        dd = DesignDriver(files, output_dir=output_dir, include_dirs=args.include or [], filelist=filelist)
         dd.build()
         cg = dd.covergroups
         if not cg:
@@ -1296,7 +1358,8 @@ def run_cg_quality(args):
     """coverage 质量评估"""
     output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
     try:
-        dd = DesignDriver([args.file], output_dir=output_dir, include_dirs=args.include or [])
+        files, filelist = _resolve_design_input(args)
+        dd = DesignDriver(files, output_dir=output_dir, include_dirs=args.include or [], filelist=filelist)
         dd.build()
         cg = dd.covergroups
         if not cg:
@@ -1669,7 +1732,8 @@ def run_temporal(args):
 
     output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
     try:
-        dd = DesignDriver([args.file], output_dir=output_dir, include_dirs=args.include or [])
+        files, filelist = _resolve_design_input(args)
+        dd = DesignDriver(files, output_dir=output_dir, include_dirs=args.include or [], filelist=filelist)
         dd.build()
         dg = dd.design_graph
         ta = TemporalAnalyzer(dg)
@@ -1847,7 +1911,8 @@ def run_sva_align(args):
 
     output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
     try:
-        dd = DesignDriver([args.file], output_dir=output_dir, include_dirs=args.include or [])
+        files, filelist = _resolve_design_input(args)
+        dd = DesignDriver(files, output_dir=output_dir, include_dirs=args.include or [], filelist=filelist)
         dd.build()
         dg = dd.design_graph
 
@@ -1915,7 +1980,8 @@ def run_verify_map(args):
 
     output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
     try:
-        dd = DesignDriver([args.file], output_dir=output_dir, include_dirs=args.include or [])
+        files, filelist = _resolve_design_input(args)
+        dd = DesignDriver(files, output_dir=output_dir, include_dirs=args.include or [], filelist=filelist)
         dd.build()
         dg = dd.design_graph
 
@@ -2033,7 +2099,8 @@ def run_risk(args):
 
     output_dir = tempfile.mkdtemp(prefix='navisv_cli_')
     try:
-        dd = DesignDriver([args.file], output_dir=output_dir, include_dirs=args.include or [])
+        files, filelist = _resolve_design_input(args)
+        dd = DesignDriver(files, output_dir=output_dir, include_dirs=args.include or [], filelist=filelist)
         dd.build()
         dg = dd.design_graph
 
