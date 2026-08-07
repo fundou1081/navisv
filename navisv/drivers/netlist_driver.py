@@ -39,58 +39,71 @@ class NetlistDriver:
                  include_dirs: Optional[List[str]] = None,
                  defines: Optional[Dict[str, str]] = None,
                  top: Optional[str] = None,
-                 params: Optional[Dict[str, str]] = None):
+                 params: Optional[Dict[str, str]] = None,
+                 filelist: Optional[str] = None,
+                 filelist_includes: Optional[List[str]] = None):
         """
         Args:
-            files: 要分析的文件列表
+            files: 要分析的文件列表 (单文件场景, 与 filelist 二选一)
             output_dir: 输出目录
             std: Verilog/SystemVerilog 标准
             include_dirs: include 搜索路径
             defines: 宏定义
             top: 顶层模块名
             params: 参数覆盖
+            filelist: filelist 文件路径 (用 slang-netlist -F 选项)
+            filelist_includes: filelist 内的相对 include 目录
         """
+        if filelist and files:
+            raise ValueError("filelist 和 files 不能同时指定 (二选一)")
+        if not filelist and not files:
+            raise ValueError("必须指定 files 或 filelist 之一")
         self.files = files
         self.output_dir = output_dir or f'/tmp/navisv_netlist_{os.getpid()}'
         self.std = std
-        self.include_dirs = include_dirs or []
+        self.include_dirs = list(include_dirs or [])
         self.defines = defines or {}
         self.top = top
         self.params = params or {}
+        self.filelist = filelist
+        self.filelist_includes = filelist_includes or []
     
     def _build_cmd(self, extra_args: Optional[List[str]] = None) -> List[str]:
         """构建命令"""
         cmd = [NETLIST_BIN]
-        
+
         # 语言标准
         cmd.extend(['--std', self.std])
-        
+
         # Include 路径
         for inc_dir in self.include_dirs:
             cmd.extend(['-I', inc_dir])
-        
+
         # 宏定义
         for macro, value in self.defines.items():
             if value:
                 cmd.extend(['-D', f'{macro}={value}'])
             else:
                 cmd.extend(['-D', macro])
-        
+
         # 顶层模块
         if self.top:
             cmd.extend(['--top', self.top])
-        
+
         # 参数覆盖
         for name, value in self.params.items():
             cmd.extend(['-G', f'{name}={value}'])
-        
+
         # 额外参数
         if extra_args:
             cmd.extend(extra_args)
-        
-        # 源文件
-        cmd.extend(self.files)
-        
+
+        # 源文件 (filelist 或 files, 二选一)
+        if self.filelist:
+            cmd.extend(['-F', self.filelist])
+        else:
+            cmd.extend(self.files)
+
         return cmd
     
     def run(self, scope: Optional[str] = None) -> Dict[str, Any]:

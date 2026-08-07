@@ -382,7 +382,8 @@ def main():
 
     # navisv elk <file> --view {dataflow,controlflow,modules}
     p = sub.add_parser('elk', help='ELK layered 可视化 (HTML/SVG/PNG)')
-    p.add_argument('file', help='设计文件 (SystemVerilog)')
+    p.add_argument('file', nargs='*', help='设计文件 (可多个, 或与 --filelist 互斥)')
+    p.add_argument('--filelist', '-F', help='filelist 文件路径 (多文件设计, 与 file 互斥)')
     p.add_argument('--view', choices=['dataflow', 'controlflow', 'modules'], default='dataflow',
                    help='视图: dataflow (默认, 组合+时序路径) / controlflow (控制结构: if/case/always_ff) / modules (架构)')
     p.add_argument('--output', '-o', help='输出文件路径 (后缀决定格式: .html/.svg/.png; 默认 <file>.elk.html)')
@@ -930,17 +931,27 @@ def run_elk(args):
     from navisv.tools.elk_layout import run_elk_layout
     from navisv.tools.render_svg import render_svg
 
+    # (Step 4) 解析 files / filelist 二选一
+    files = args.file or []
+    if args.filelist and files:
+        print('错误: --filelist 和 file 不能同时使用 (二选一)', file=sys.stderr)
+        return {'success': False}
+    if not args.filelist and not files:
+        print('错误: 必须提供 file 或 --filelist', file=sys.stderr)
+        return {'success': False}
+
     output_dir = tempfile.mkdtemp(prefix='navisv_elk_')
     try:
         # cache=False: ELK 需要 GraphBuilder (dataflow graph), 不只是 DesignGraph (module hierarchy)
-        dd = DesignDriver([args.file], output_dir=output_dir,
-                         include_dirs=args.include or [], cache=False)
+        dd = DesignDriver(files, output_dir=output_dir,
+                         include_dirs=args.include or [], cache=False,
+                         filelist=args.filelist)
         dd.build()
         ast = ASTParser(_glob.glob(f'{output_dir}/*ast*.json')[0]).parse()
         nl = NetlistParser(_glob.glob(f'{output_dir}/*netlist*.json')[0]).parse()
         gb = GraphBuilder(
             ast, nl, ast_json_path=f'{output_dir}/ast.json',
-            source_files=[args.file],
+            source_files=files,
             preserve_operators=args.preserve_operators,
         )
         gb.build()
@@ -957,9 +968,10 @@ def run_elk(args):
         ).from_graph_builder(gb)
         elk_json = exporter.to_elk_json()
 
-        # (Stage 3) 输出路径: 默认 <file>.elk.html
+        # (Stage 3) 输出路径: 默认 <file>.elk.html (用第一个文件作 basename)
+        primary_file = files[0] if files else args.filelist
         if args.output is None:
-            base = os.path.splitext(os.path.basename(args.file))[0]
+            base = os.path.splitext(os.path.basename(primary_file))[0]
             args.output = f'{base}.elk.html'
         ext = os.path.splitext(args.output)[1].lower()
 
@@ -969,7 +981,7 @@ def run_elk(args):
             positioned = run_elk_layout(elk_json, direction=args.direction)
             svg = render_svg(
                 positioned,
-                title=f'navisv {args.view} — {os.path.basename(args.file)}',
+                title=f'navisv {args.view} — {os.path.basename(primary_file)}',
                 subtitle=f'filter_clock_reset={args.filter_clock_reset}, cdc_highlight={args.cdc_highlight}',
             )
             if ext == '.svg':

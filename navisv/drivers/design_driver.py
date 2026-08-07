@@ -44,10 +44,12 @@ class DesignDriver:
         std: str = '1800-2017',
         single_unit: bool = False,
         cache: bool = True,
+        filelist: Optional[str] = None,
+        filelist_includes: Optional[List[str]] = None,
     ):
         """
         Args:
-            files: 设计文件列表
+            files: 设计文件列表 (单文件场景, 与 filelist 二选一)
             top: 顶层模块名
             include_dirs: include 搜索路径
             defines: 宏定义
@@ -56,7 +58,17 @@ class DesignDriver:
             std: 语言标准
             single_unit: 是否将所有文件视为同一编译单元
             cache: 是否使用磁盘缓存（默认开启，可大幅加速重复解析）
+            filelist: filelist 文件路径 (用 slang/slang-netlist -F 选项)
+            filelist_includes: filelist 内的相对 include 目录
+
+        Note:
+            _auto_discover_files 已删除 (历史遗留, 导致 examples/ 多模块互相污染).
+            多文件场景请用 --filelist 显式指定.
         """
+        if filelist and files:
+            raise ValueError("filelist 和 files 不能同时指定 (二选一)")
+        if not filelist and not files:
+            raise ValueError("必须指定 files 或 filelist 之一")
         self.files = files
         self.top = top
         self.include_dirs = include_dirs or []
@@ -66,11 +78,10 @@ class DesignDriver:
         self.std = std
         self.single_unit = single_unit
         self.cache = cache
+        self.filelist = filelist
+        self.filelist_includes = filelist_includes or []
         self._cache_key: Optional[str] = None
         self._cache_hit: bool = False
-        
-        # 自动发现同目录文件
-        self.files = self._auto_discover_files(files)
         
         # 结果缓存
         self._slang_driver: Optional[SlangDriver] = None
@@ -104,94 +115,7 @@ class DesignDriver:
         self._diagnostics: List[Dict[str, Any]] = []
         self._error_count: int = 0
         self._warning_count: int = 0
-    
-    def _auto_discover_files(self, files: List[str]) -> List[str]:
-        """自动发现同目录下的 SV 文件
-        
-        当只传入一个文件时，扫描同目录下的所有 .sv/.v 文件。
-        排除测试文件和备份文件。
-        """
-        if len(files) != 1:
-            return files
-        
-        main_file = files[0]
-        if not os.path.isfile(main_file):
-            return files
-        
-        # 测试文件不做自动发现
-        if 'tests/' in main_file or 'test_' in os.path.basename(main_file):
-            return files
-        
-        main_dir = os.path.dirname(os.path.abspath(main_file))
-        if not main_dir:
-            return files
-        
-        discovered = set()
-        discovered.add(os.path.abspath(main_file))
-        
-        # 扫描同目录
-        try:
-            for f in os.listdir(main_dir):
-                if f.endswith(('.sv', '.v', '.svh', '.vh')):
-                    full = os.path.join(main_dir, f)
-                    # 跳过测试/备份文件
-                    if any(skip in f.lower() for skip in ('test_', 'tb_', '_tb.', '_test.', '.bak', '.orig')):
-                        continue
-                    discovered.add(os.path.abspath(full))
-        except OSError:
-            pass
-        
-        # 也扫描 include_dirs
-        for inc_dir in self.include_dirs:
-            if os.path.isdir(inc_dir):
-                try:
-                    for f in os.listdir(inc_dir):
-                        if f.endswith(('.sv', '.v', '.svh', '.vh')):
-                            full = os.path.join(inc_dir, f)
-                            if any(skip in f.lower() for skip in ('test_', 'tb_', '_tb.', '_test.', '.bak', '.orig')):
-                                continue
-                            discovered.add(os.path.abspath(full))
-                except OSError:
-                    pass
-        
-        result = sorted(discovered)
-        if len(result) > 1:
-            import logging
-            logging.getLogger('navisv').info(
-                f'Auto-discovered {len(result)} files in {main_dir}'
-            )
-        return result
-        self._netlist_driver: Optional[NetlistDriver] = None
-        self._netlist_result: Optional[Dict] = None  # NetlistDriver.run() 结果
-        self._ast_parser: Optional[ASTParser] = None
-        self._netlist_parser: Optional[NetlistParser] = None
-        self._graph_builder: Optional[GraphBuilder] = None
-        self._design_graph: Optional[DesignGraph] = None
-        
-        # ConstraintGraph 缓存
-        self._constraint_parser: Optional[ConstraintParser] = None
-        self._constraint_graph: Optional[ConstraintGraph] = None
-        
-        # CovergroupAnalyzer 缓存
-        self._covergroup_parser: Optional[CovergroupParser] = None
-        self._covergroup_analyzer: Optional[CovergroupAnalyzer] = None
-        
-        # SVA 缓存
-        self._sva_parser: Optional[SVAParser] = None
-        
-        # CallGraph 缓存
-        self._call_graph_parser: Optional[CallGraphParser] = None
-        self._call_graph: Optional[CallGraph] = None
-        
-        # UVM Testbench 缓存
-        self._uvm_tb_parser: Optional[UVMTestbenchParser] = None
-        self._uvm_tb: Optional[UVMTestbench] = None
-        
-        # 诊断信息
-        self._diagnostics: List[Dict[str, Any]] = []
-        self._error_count: int = 0
-        self._warning_count: int = 0
-    
+
     def check_tools(self) -> Dict[str, bool]:
         """检查工具是否可用"""
         return {
@@ -346,6 +270,8 @@ class DesignDriver:
             top=self.top,
             source_info=True,
             single_unit=self.single_unit,
+            filelist=self.filelist,
+            filelist_includes=self.filelist_includes,
         )
         result = self._slang_driver.run()
         
@@ -366,6 +292,8 @@ class DesignDriver:
             include_dirs=self.include_dirs,
             defines=self.defines,
             top=self.top,
+            filelist=self.filelist,
+            filelist_includes=self.filelist_includes,
         )
         self._netlist_result = self._netlist_driver.run()
         if not self._netlist_result.get('success', False):

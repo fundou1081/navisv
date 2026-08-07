@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 class SlangDriver:
     """封装 slang 工具调用"""
     
-    def __init__(self, files: List[str], 
+    def __init__(self, files: List[str],
                  output_dir: Optional[str] = None,
                  std: str = '1800-2017',
                  include_dirs: Optional[List[str]] = None,
@@ -36,10 +36,12 @@ class SlangDriver:
                  source_info: bool = False,
                  detailed_types: bool = False,
                  scope: Optional[str] = None,
-                 single_unit: bool = False):
+                 single_unit: bool = False,
+                 filelist: Optional[str] = None,
+                 filelist_includes: Optional[List[str]] = None):
         """
         Args:
-            files: 要分析的文件列表
+            files: 要分析的文件列表 (单文件场景, 与 filelist 二选一)
             output_dir: 输出目录，默认使用系统临时目录
             std: Verilog/SystemVerilog 标准 (1364-2005, 1800-2017, 1800-2023, latest)
             include_dirs: include 搜索路径
@@ -50,11 +52,17 @@ class SlangDriver:
             detailed_types: 是否包含详细类型信息
             scope: 限制 AST 作用域到指定路径
             single_unit: 是否将所有文件视为同一编译单元
+            filelist: filelist 文件路径（自动使用 slang -F 选项）
+            filelist_includes: filelist 内的相对 include 目录
         """
+        if filelist and files:
+            raise ValueError("filelist 和 files 不能同时指定 (二选一)")
+        if not filelist and not files:
+            raise ValueError("必须指定 files 或 filelist 之一")
         self.files = files
         self.output_dir = output_dir or f'/tmp/navisv_slang_{os.getpid()}'
         self.std = std
-        self.include_dirs = include_dirs or []
+        self.include_dirs = list(include_dirs or [])
         self.defines = defines or {}
         self.top = top
         self.params = params or {}
@@ -62,60 +70,65 @@ class SlangDriver:
         self.detailed_types = detailed_types
         self.scope = scope
         self.single_unit = single_unit
+        self.filelist = filelist
+        self.filelist_includes = filelist_includes or []
     
     def _build_cmd(self) -> List[str]:
         """构建命令"""
         cmd = [SLANG_BIN]
-        
+
         # 语言标准
         cmd.extend(['--std', self.std])
-        
+
         # 单元模式
         if self.single_unit:
             cmd.append('--single-unit')
-        
+
         # Include 路径
         for inc_dir in self.include_dirs:
             cmd.extend(['-I', inc_dir])
-        
+
         # 宏定义
         for macro, value in self.defines.items():
             if value:
                 cmd.extend(['-D', f'{macro}={value}'])
             else:
                 cmd.extend(['-D', macro])
-        
+
         # 顶层模块
         if self.top:
             cmd.extend(['--top', self.top])
-        
+
         # 参数覆盖
         for name, value in self.params.items():
             cmd.extend(['-G', f'{name}={value}'])
-        
+
         # AST JSON 输出
         ast_json = os.path.join(self.output_dir, 'ast.json')
         cmd.extend(['--ast-json', ast_json])
-        
+
         # 源码信息
         if self.source_info:
             cmd.append('--ast-json-source-info')
-        
+
         # 详细类型
         if self.detailed_types:
             cmd.append('--ast-json-detailed-types')
-        
+
         # 作用域限制
         if self.scope:
             cmd.extend(['--ast-json-scope', self.scope])
-        
+
         # 诊断 JSON
         diag_json = os.path.join(self.output_dir, 'diag.json')
         cmd.extend(['--diag-json', diag_json])
-        
-        # 源文件
-        cmd.extend(self.files)
-        
+
+        # 源文件 (filelist 或 files, 二选一)
+        if self.filelist:
+            cmd.extend(['-F', self.filelist])
+        else:
+            cmd.extend(self.files)
+
         return cmd
     
     def run(self, scope: Optional[str] = None) -> Dict[str, Any]:
