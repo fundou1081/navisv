@@ -274,6 +274,10 @@
     );
     const zl = document.getElementById('zoom-level');
     if (zl) zl.textContent = Math.round(viewState.scale * 100) + '%';
+    // (Stage 22) minimap viewport 同步 pan/zoom
+    if (typeof updateMiniMapViewport === 'function') {
+      try { updateMiniMapViewport(); } catch (e) { /* minimap not ready */ }
+    }
   }
 
   function clampScale(s) {
@@ -1423,12 +1427,105 @@
     }
   }
 
+  // ---------------------------------------------------------------------
+  // (Stage 22) Mini-map — 右下角缩略图 + 视口框 + 点击跳转
+  // ---------------------------------------------------------------------
+
+  let minimapScale = 0.05;  // 主图 → 缩略图 比例
+  const MINIMAP_W = 200;
+  const MINIMAP_H = 140;
+
+  function renderMiniMap() {
+    if (!currentLayouted) return;
+    const content = document.getElementById('minimap-content');
+    const svg = document.getElementById('minimap-svg');
+    const bg = document.getElementById('minimap-bg');
+    if (!content || !svg || !bg) return;
+
+    const w = currentLayouted.width || 600;
+    const h = currentLayouted.height || 400;
+    // 计算 minimap scale (适应 200x140 容器)
+    const scaleX = MINIMAP_W / w;
+    const scaleY = MINIMAP_H / h;
+    minimapScale = Math.min(scaleX, scaleY);
+
+    svg.setAttribute('viewBox', '0 0 ' + MINIMAP_W + ' ' + MINIMAP_H);
+    bg.setAttribute('width', MINIMAP_W);
+    bg.setAttribute('height', MINIMAP_H);
+
+    // 渲染每个节点为小方块
+    let inner = '';
+    (currentLayouted.children || []).forEach(function (c) {
+      const x = (c.x || 0) * minimapScale;
+      const y = (c.y || 0) * minimapScale;
+      const nw = Math.max((c.width || 10) * minimapScale, 2);
+      const nh = Math.max((c.height || 10) * minimapScale, 2);
+      const color = (c.properties && c.properties.color) || '#34495e';
+      const kind = (c.properties && c.properties.kind) || '';
+      const opacity = kind === 'Literal' ? '0.5' : '1';
+      inner += '<rect x="' + x + '" y="' + y + '" width="' + nw +
+               '" height="' + nh + '" fill="' + color + '" opacity="' + opacity + '"/>';
+    });
+    content.innerHTML = inner;
+    updateMiniMapViewport();
+  }
+
+  function updateMiniMapViewport() {
+    const viewport = document.getElementById('minimap-viewport');
+    if (!viewport) return;
+    // 主图 SVG 的当前可见区域 (根据 pan/zoom 反推)
+    const svg = document.getElementById('graph-svg');
+    if (!svg) return;
+    const off = 20;
+    const w = parseFloat(svg.getAttribute('width')) || 600;
+    const h = parseFloat(svg.getAttribute('height')) || 400;
+    // 主图坐标系中可见区域: [(0 - off - tx) / scale, ...]
+    const visX = (-off - viewState.tx) / viewState.scale;
+    const visY = (-off - viewState.ty) / viewState.scale;
+    const visW = (w - 2 * off) / viewState.scale;
+    const visH = (h - 2 * off) / viewState.scale;
+    // 缩放到 minimap 坐标
+    viewport.setAttribute('x', Math.max(0, visX * minimapScale));
+    viewport.setAttribute('y', Math.max(0, visY * minimapScale));
+    viewport.setAttribute('width', visW * minimapScale);
+    viewport.setAttribute('height', visH * minimapScale);
+  }
+
+  function bindMiniMap() {
+    const minimap = document.getElementById('minimap');
+    if (!minimap) return;
+    // 点击 minimap → 主图 pan 到对应位置 (让点击点居中)
+    minimap.addEventListener('click', function (e) {
+      const rect = minimap.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+      // minimap 坐标 → 主图坐标 (layouted 坐标系)
+      const gx = mx / minimapScale;
+      const gy = my / minimapScale;
+      // 主图 SVG 尺寸 + offset
+      const svg = document.getElementById('graph-svg');
+      if (!svg) return;
+      const off = 20;
+      const w = parseFloat(svg.getAttribute('width')) || 600;
+      const h = parseFloat(svg.getAttribute('height')) || 400;
+      // 计算 pan 让 (gx, gy) 居中
+      viewState.tx = w / 2 - off - gx * viewState.scale;
+      viewState.ty = h / 2 - off - gy * viewState.scale;
+      applyViewTransform();
+      updateMiniMapViewport();
+    });
+  }
+
+  // ---------------------------------------------------------------------
   // 启动 (GRAPH_DATA 由模板嵌入)
+  // ---------------------------------------------------------------------
   if (typeof GRAPH_DATA !== 'undefined') {
     render(GRAPH_DATA).then(function (layouted) {
       currentLayouted = layouted;
       bindFilterControls();
-      applyFilters();  // 初始化时也跑一遍 (确保 cdc-dimmed 等初始状态)
+      applyFilters();
+      renderMiniMap();
+      bindMiniMap();
     }).catch(function (err) {
       const container = document.getElementById('graph');
       if (container) {

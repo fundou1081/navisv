@@ -1704,3 +1704,168 @@ class TestContextMenuCss:
         # .context-menu 用 var(--bg-card) 等会自动适配
         assert 'var(--bg-card)' in content
         assert 'var(--text-primary)' in content
+
+# =============================================================================
+# (Stage 22) Mini-map — 右下角缩略图 + 视口框 + 点击跳转
+# =============================================================================
+
+class TestMiniMapHtml:
+    """HTML 模板: #minimap 容器 + svg/rects 结构"""
+
+    @pytest.fixture
+    def html(self, tmp_path):
+        return _build_html(tmp_path, view='dataflow', filter_clock_reset=True)
+
+    def test_minimap_div_present(self, html):
+        """<div id="minimap"> 容器必须存在"""
+        with open(html) as f:
+            content = f.read()
+        assert 'id="minimap"' in content
+        assert 'class="minimap"' in content
+
+    def test_minimap_svg_present(self, html):
+        """<svg id="minimap-svg"> 必须存在 (200x140 viewBox)"""
+        with open(html) as f:
+            content = f.read()
+        assert 'id="minimap-svg"' in content
+        assert 'viewBox="0 0 200 140"' in content
+
+    def test_minimap_content_group(self, html):
+        """<g id="minimap-content"> 节点缩略方块容器"""
+        with open(html) as f:
+            content = f.read()
+        assert 'id="minimap-content"' in content
+
+    def test_minimap_viewport_rect(self, html):
+        """<rect id="minimap-viewport"> 主图视口框"""
+        with open(html) as f:
+            content = f.read()
+        assert 'id="minimap-viewport"' in content
+
+    def test_minimap_bg_rect(self, html):
+        """<rect id="minimap-bg"> 背景填充"""
+        with open(html) as f:
+            content = f.read()
+        assert 'id="minimap-bg"' in content
+
+
+class TestMiniMapJs:
+    """JS: renderMiniMap / updateMiniMapViewport / bindMiniMap + 链入 render().then()"""
+
+    @pytest.fixture
+    def html(self, tmp_path):
+        return _build_html(tmp_path, view='dataflow', filter_clock_reset=True)
+
+    def test_render_minimap_function(self, html):
+        """renderMiniMap 函数定义"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function renderMiniMap' in content
+        assert 'minimap-content' in content
+        assert 'minimapScale' in content
+
+    def test_update_minimap_viewport_function(self, html):
+        """updateMiniMapViewport 函数定义 + 缩放计算"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function updateMiniMapViewport' in content
+        assert 'minimap-viewport' in content
+        assert 'viewState.scale' in content
+
+    def test_bind_minimap_function(self, html):
+        """bindMiniMap 函数定义 + click handler"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function bindMiniMap' in content
+        assert 'minimap' in content
+        assert 'addEventListener' in content
+        assert 'click' in content
+
+    def test_render_minimap_in_bootstrap_chain(self, html):
+        """renderMiniMap 必须在 .then() 链里调用"""
+        with open(html) as f:
+            content = f.read()
+        # 期望 render(...).then(...renderMiniMap()...bindMiniMap()...)
+        # 匹配: renderMiniMap() 在 applyFilters 之后
+        assert 'applyFilters' in content
+        assert 'renderMiniMap()' in content
+
+    def test_bind_minimap_in_bootstrap_chain(self, html):
+        """bindMiniMap 必须在 .then() 链里调用"""
+        with open(html) as f:
+            content = f.read()
+        assert 'bindMiniMap()' in content
+
+    def test_apply_view_transform_calls_update_minimap(self, html):
+        """applyViewTransform 必须调 updateMiniMapViewport (pan/zoom 同步)"""
+        with open(html) as f:
+            content = f.read()
+        # applyViewTransform 体内应有 updateMiniMapViewport() 调用
+        # 抓取函数体片段
+        idx = content.find('function applyViewTransform')
+        assert idx > -1
+        # 找下一个 function 或 IIFE 结束
+        body_end = content.find('function clampScale', idx)
+        assert body_end > idx
+        body = content[idx:body_end]
+        assert 'updateMiniMapViewport' in body
+
+    def test_minimap_click_pans_main_view(self, html):
+        """minimap click handler 必须修改 viewState + 调用 applyViewTransform"""
+        with open(html) as f:
+            content = f.read()
+        idx = content.find('function bindMiniMap')
+        assert idx > -1
+        body_end = content.find('\n  }\n', idx + 50)
+        body = content[idx:body_end] if body_end > idx else content[idx:idx + 1500]
+        assert 'viewState.tx' in body
+        assert 'viewState.ty' in body
+        assert 'applyViewTransform' in body
+
+
+class TestMiniMapCss:
+    """.minimap CSS 样式 + dark theme"""
+
+    @pytest.fixture
+    def html(self, tmp_path):
+        return _build_html(tmp_path, view='dataflow', filter_clock_reset=True)
+
+    def test_minimap_position_fixed(self, html):
+        """.minimap 应 position: fixed"""
+        with open(html) as f:
+            content = f.read()
+        assert '.minimap' in content
+        assert 'position: fixed' in content
+
+    def test_minimap_bottom_right(self, html):
+        """.minimap 应 bottom: 20px + right: 20px (右下角)"""
+        with open(html) as f:
+            content = f.read()
+        # 找到 .minimap 规则块
+        idx = content.find('.minimap {')
+        assert idx > -1
+        # 找到下一个 } 关闭块
+        block_end = content.find('}', idx)
+        block = content[idx:block_end]
+        assert 'bottom:' in block
+        assert 'right:' in block
+
+    def test_minimap_size_200x140(self, html):
+        """.minimap 应 width: 200px + height: 140px"""
+        with open(html) as f:
+            content = f.read()
+        idx = content.find('.minimap {')
+        assert idx > -1
+        block_end = content.find('}', idx)
+        block = content[idx:block_end]
+        assert '200px' in block
+        assert '140px' in block
+
+    def test_dark_minimap_style(self, html):
+        """dark mode 应有 :root[data-theme='dark'] .minimap 覆盖"""
+        with open(html) as f:
+            content = f.read()
+        assert "data-theme='dark']" in content
+        assert '.minimap' in content
+        # minimap-viewport 也有 dark 变体
+        assert 'minimap-viewport' in content

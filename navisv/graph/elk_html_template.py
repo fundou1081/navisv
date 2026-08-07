@@ -110,6 +110,15 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
 <!-- (Stage 18) Share 复制成功 toast 提示 -->
 <div id="toast" class="toast" hidden>✅ URL copied to clipboard</div>
 
+<!-- (Stage 22) Mini-map: 右下角缩略图 + 视口框 + 点击跳转 -->
+<div id="minimap" class="minimap" title="Mini-map (click to jump)">
+  <svg id="minimap-svg" class="minimap-svg" width="200" height="140" viewBox="0 0 200 140">
+    <rect id="minimap-bg" x="0" y="0" width="200" height="140" fill="rgba(200,200,200,0.15)" />
+    <g id="minimap-content"></g>
+    <rect id="minimap-viewport" x="0" y="0" width="40" height="30" fill="rgba(74,144,226,0.25)" stroke="rgba(74,144,226,0.9)" stroke-width="1.5" />
+  </svg>
+</div>
+
 <!-- (Stage 12) 快捷键帮助面板: 按 ? 弹窗显示所有快捷键 -->
 <div id="help-modal" class="modal-overlay" hidden role="dialog" aria-label="Keyboard shortcuts">
   <div class="modal-content">
