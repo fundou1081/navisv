@@ -557,6 +557,8 @@
     if (e.key === 'Escape') {
       if (isHelpOpen()) { closeHelp(); e.preventDefault(); return; }
       if (isSidebarOpen()) { closeSidebar(); e.preventDefault(); return; }
+      // (Stage 23) Esc 优先级: 多选有内容 → 清空多选
+      if (selectedNodes.size > 0) { clearSelection(); e.preventDefault(); return; }
       // 如果在 input 中, 清除搜索
       const s = document.getElementById('search-input');
       if (s && s.value) { clearSearch(); e.preventDefault(); }
@@ -1092,12 +1094,27 @@
     if (!info) return;
 
     document.querySelectorAll('.node').forEach(function (g) {
-      g.addEventListener('click', function () {
+      g.addEventListener('click', function (e) {
         const id = g.dataset.nodeId;
         const node = (layouted.children || []).find(function (c) {
           return c.id === id;
         });
         if (!node) return;
+        // (Stage 23) Shift+click → 多选添加; 普通 click → 单选
+        if (e.shiftKey) {
+          if (selectedNodes.has(id)) {
+            selectedNodes.delete(id);
+            g.classList.remove('selected');
+          } else {
+            selectedNodes.add(id);
+            g.classList.add('selected');
+          }
+        } else {
+          // 普通 click: 清旧 + 选这个
+          clearSelection();
+          selectedNodes.add(id);
+          g.classList.add('selected');
+        }
         const p = node.properties || {};
         // (Stage 9) 节点详情侧边栏 — 替换 #info 文本式展示
         const sidebar = document.getElementById('sidebar');
@@ -1105,6 +1122,7 @@
         const sidebarTitle = document.getElementById('sidebar-title');
         if (sidebar && sidebarBody && sidebarTitle) {
           renderNodeDetails(node, layouted, sidebarBody, sidebarTitle);
+          renderMultiSelectBanner(sidebarBody, sidebarTitle);
           sidebar.classList.remove('sidebar-closed');
         } else {
           // 后备: 底部 #info 文本
@@ -1323,6 +1341,49 @@
   // (Stage 4) 交互层: 搜索 / 节点类型过滤器 / CDC toggle
   // ---------------------------------------------------------------------
   let currentLayouted = null;  // 保存最近渲染的 layouted 给 filters 用
+
+  // (Stage 23) 多选状态: Shift+click 加选, 普通 click 替换, Esc 清空
+  const selectedNodes = new Set();
+
+  function clearSelection() {
+    selectedNodes.forEach(function (id) {
+      const el = document.querySelector('.node[data-node-id="' + cssEscape(id) + '"]');
+      if (el) el.classList.remove('selected');
+    });
+    selectedNodes.clear();
+  }
+
+  function cssEscape(s) {
+    // CSS attribute selector 转义: 空格/引号
+    if (window.CSS && CSS.escape) return CSS.escape(s);
+    return String(s).replace(/(["'\\\s])/g, '\\$1');
+  }
+
+  function getSelectedNodesData() {
+    if (!currentLayouted) return [];
+    return Array.from(selectedNodes).map(function (id) {
+      return (currentLayouted.children || []).find(function (c) {
+        return c.id === id;
+      });
+    }).filter(Boolean);
+  }
+
+  function renderMultiSelectBanner(sidebarBody, sidebarTitle) {
+    const count = selectedNodes.size;
+    if (count < 2) return;  // 只在 2+ 时显示
+    // 在 sidebarBody 顶部插入横幅
+    let banner = sidebarBody.querySelector('.multi-select-banner');
+    if (!banner) {
+      banner = document.createElement('div');
+      banner.className = 'multi-select-banner';
+      sidebarBody.insertBefore(banner, sidebarBody.firstChild);
+    }
+    const list = Array.from(selectedNodes).slice(0, 5).join(', ') +
+                 (count > 5 ? ` +${count - 5} more` : '');
+    banner.innerHTML = `<b>📌 Selected ${count} nodes</b><br>` +
+                       `<span class="multi-select-list">${escapeHtml(list)}</span><br>` +
+                       `<small>Shift+click to add/remove • Esc to clear</small>`;
+  }
 
   function getNodeKind(node) {
     return (node.properties && node.properties.kind) || '';

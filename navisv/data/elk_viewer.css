@@ -257,6 +257,36 @@ body {
   filter: drop-shadow(0 0 4px rgba(243, 156, 18, 0.5));
 }
 
+/* (Stage 23) Multi-select — Shift+click 选中节点高亮 (区别于 highlighted) */
+.node.selected .node-rect,
+.node.selected .node-shape {
+  stroke: #4a90e2;
+  stroke-width: 2.5;
+  filter: drop-shadow(0 0 3px rgba(74, 144, 226, 0.45));
+}
+.multi-select-banner {
+  background: rgba(74, 144, 226, 0.08);
+  border-left: 3px solid #4a90e2;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  border-radius: 3px;
+  font-size: 12px;
+  color: var(--text-primary, #2c3e50);
+}
+.multi-select-banner .multi-select-list {
+  font-family: "SF Mono", Menlo, monospace;
+  font-size: 11px;
+  color: #4a90e2;
+  word-break: break-all;
+}
+:root[data-theme='dark'] .multi-select-banner {
+  background: rgba(116, 185, 255, 0.10);
+  border-left-color: #74b9ff;
+}
+:root[data-theme='dark'] .multi-select-banner .multi-select-list {
+  color: #74b9ff;
+}
+
 .edge.cdc-highlighted {
   stroke: #e74c3c !important;
   stroke-width: 4 !important;

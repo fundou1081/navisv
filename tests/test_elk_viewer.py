@@ -1869,3 +1869,107 @@ class TestMiniMapCss:
         assert '.minimap' in content
         # minimap-viewport 也有 dark 变体
         assert 'minimap-viewport' in content
+
+
+class TestMultiSelectCss:
+    """Stage 23 — 多选 CSS (selected + multi-select-banner)"""
+
+    @pytest.fixture
+    def html(self, tmp_path):
+        return _build_html(tmp_path, view='dataflow', filter_clock_reset=True)
+
+    def test_node_selected_stroke_blue(self, html):
+        """.node.selected 应 stroke 蓝色 + 2.5px stroke-width"""
+        with open(html) as f:
+            content = f.read()
+        assert '.node.selected' in content
+        # 抽出 .node.selected 规则块
+        idx = content.find('.node.selected')
+        assert idx > -1
+        block_end = content.find('}', idx)
+        block = content[idx:block_end]
+        assert 'stroke' in block
+        assert '4a90e2' in block or 'blue' in block.lower()
+        assert '2.5' in block
+
+    def test_multi_select_banner_styles(self, html):
+        """.multi-select-banner 应有背景色 + border-left + padding"""
+        with open(html) as f:
+            content = f.read()
+        assert '.multi-select-banner' in content
+
+    def test_dark_mode_banner(self, html):
+        """dark theme 覆盖 .multi-select-banner"""
+        with open(html) as f:
+            content = f.read()
+        assert ".multi-select-banner" in content
+        # dark 主题覆盖存在
+        assert "data-theme='dark']" in content
+
+
+class TestMultiSelectJs:
+    """Stage 23 — JS: selectedNodes Set + Shift+click + Esc clear + banner"""
+
+    @pytest.fixture
+    def html(self, tmp_path):
+        return _build_html(tmp_path, view='dataflow', filter_clock_reset=True)
+
+    def test_selected_nodes_set(self, html):
+        """JS 应定义 selectedNodes = new Set()"""
+        with open(html) as f:
+            content = f.read()
+        assert 'selectedNodes' in content
+        assert 'new Set()' in content
+
+    def test_clear_selection_function(self, html):
+        """JS 应有 clearSelection() 函数"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function clearSelection' in content
+        # clearSelection 调用 classList.remove('selected')
+        assert "classList.remove('selected')" in content
+
+    def test_shift_click_adds_to_selection(self, html):
+        """setupClickHandlers 应检测 e.shiftKey 添加到 selection"""
+        with open(html) as f:
+            content = f.read()
+        assert 'e.shiftKey' in content
+        # 选中加 selected class
+        assert "classList.add('selected')" in content
+
+    def test_esc_clears_multi_select(self, html):
+        """handleShortcut Esc 分支应先处理 multi-select"""
+        with open(html) as f:
+            content = f.read()
+        # 'selectedNodes.size > 0' 在 handleShortcut Esc 分支里
+        assert 'selectedNodes.size > 0' in content
+        assert 'clearSelection()' in content
+
+    def test_multi_select_banner_function(self, html):
+        """renderMultiSelectBanner 应在 2+ 选中时显示"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function renderMultiSelectBanner' in content
+        # 横幅在 sidebarBody 顶部
+        assert 'multi-select-banner' in content
+
+    def test_get_selected_nodes_data(self, html):
+        """getSelectedNodesData 返回当前 layouted 中选中节点"""
+        with open(html) as f:
+            content = f.read()
+        assert 'function getSelectedNodesData' in content
+
+
+class TestMultiSelectHtml:
+    """Stage 23 — sidebar 中插入 multi-select-banner (动态)"""
+
+    @pytest.fixture
+    def html(self, tmp_path):
+        return _build_html(tmp_path, view='dataflow', filter_clock_reset=True)
+
+    def test_no_static_banner_in_template(self, html):
+        """HTML 模板不应硬编码 multi-select-banner (运行时 JS 注入)"""
+        with open(html) as f:
+            content = f.read()
+        # 静态模板没有 banner 元素
+        assert '<div class="multi-select-banner">' not in content
