@@ -335,6 +335,13 @@ class ElkExporter:
         # 节点颜色 (CSS 变量名由 viewer 解析)
         node_color = KIND_COLORS.get(kind, "#34495e")
 
+        # (Stage C) confidence / uncertain 透传: 优先级 location > timing > direction
+        confidence = 0.0
+        if location: confidence += 0.4
+        if attrs.get("timing", "unknown") != "unknown": confidence += 0.3
+        if direction: confidence += 0.3
+        uncertain = confidence < 0.7
+
         elk_node: Dict[str, Any] = {
             "id": node_path,
             "labels": [{"text": label_text}],
@@ -354,6 +361,9 @@ class ElkExporter:
                 # (Stage 2.5) Operator/Literal 特有字段
                 "operator_kind": attrs.get("attributes", {}).get("operator_kind", ""),
                 "value": attrs.get("attributes", {}).get("value", ""),
+                # (Stage C) 不确定性评分: location/timing/direction 完整度
+                "confidence": round(confidence, 2),
+                "uncertain": uncertain,
             },
         }
 

@@ -101,12 +101,35 @@ class NodeAttr:
     location: Optional[Dict[str, Any]] = None
     attributes: Dict[str, Any] = field(default_factory=dict)
 
+    # (Stage C) 不确定性阈值: 任何主要信息缺失 < 0.7 → 标记 uncertain
+    UNCERTAIN_THRESHOLD = 0.7
+
     @property
     def bit_width_str(self) -> str:
         msb, lsb = self.bit_width
         if msb == lsb:
             return f"[{msb}]"
         return f"[{msb}:{lsb}]"
+
+    @property
+    def confidence(self) -> float:
+        """节点置信度评分 (0.0 - 1.0)
+
+        评分维度 (总和 1.0):
+        - location 存在: +0.4  (知道文件/行)
+        - timing != 'unknown': +0.3  (知道时序)
+        - direction 非空: +0.3  (知道方向, Port 才有意义)
+        """
+        score = 0.0
+        if self.location: score += 0.4
+        if self.timing != 'unknown': score += 0.3
+        if self.direction: score += 0.3
+        return score
+
+    @property
+    def uncertain(self) -> bool:
+        """True 表示节点信息不完整, viewer 需虚线/灰色提示"""
+        return self.confidence < self.UNCERTAIN_THRESHOLD
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -119,6 +142,10 @@ class NodeAttr:
             'module': self.module,
             'location': self.location,
             'attributes': self.attributes,
+            # (Stage C) confidence / uncertain 是从以上字段计算的,
+            # 不用手工设置, 保证始终同步
+            'confidence': self.confidence,
+            'uncertain': self.uncertain,
         }
 
 

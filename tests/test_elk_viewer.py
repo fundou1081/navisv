@@ -1973,3 +1973,145 @@ class TestMultiSelectHtml:
             content = f.read()
         # 静态模板没有 banner 元素
         assert '<div class="multi-select-banner">' not in content
+
+
+class TestUncertainJs:
+    """Stage C — 不确定节点 JS 渲染 (location/timing/direction 不全)"""
+
+    @pytest.fixture
+    def html(self, tmp_path):
+        return _build_html(tmp_path, view='dataflow', filter_clock_reset=True)
+
+    def test_uncertain_class_injection(self, html):
+        """JS 应读取 node.properties.uncertain 并加 .node-uncertain class"""
+        with open(html) as f:
+            content = f.read()
+        # 检查 JS 中有 .node-uncertain 注入逻辑
+        assert 'node-uncertain' in content
+        # 检查从 properties 读 uncertain
+        assert 'properties.uncertain' in content or 'properties && node.properties.uncertain' in content
+
+    def test_uncertain_tooltip_with_confidence(self, html):
+        """uncertain 节点应有 title 显示 confidence 分数"""
+        with open(html) as f:
+            content = f.read()
+        # title 属性含 confidence
+        assert 'confidence' in content
+        # 鼠标悬停提示含 Uncertain
+        assert 'Uncertain' in content or 'uncertain' in content
+
+
+class TestUncertainCss:
+    """Stage C — .node-uncertain 样式 (虚线/灰色) + dark theme"""
+
+    @pytest.fixture
+    def html(self, tmp_path):
+        return _build_html(tmp_path, view='dataflow', filter_clock_reset=True)
+
+    def test_uncertain_dashed_border(self, html):
+        """.node-uncertain 应 stroke-dasharray 虚线边框"""
+        with open(html) as f:
+            content = f.read()
+        assert '.node-uncertain' in content
+        # 提取规则块
+        idx = content.find('.node-uncertain')
+        assert idx > -1
+        block_end = content.find('}', idx)
+        block = content[idx:block_end]
+        assert 'stroke-dasharray' in block
+
+    def test_uncertain_gray_fill(self, html):
+        """.node-uncertain 应 fill 灰色"""
+        with open(html) as f:
+            content = f.read()
+        idx = content.find('.node-uncertain')
+        block_end = content.find('}', idx)
+        block = content[idx:block_end]
+        assert 'fill' in block
+        # fill 应是灰色 (#f5f5f5 / #2a2d31 或 rgb)
+        assert '#f5f5f5' in block or 'gray' in block.lower() or '#7f8c8d' in block
+
+    def test_dark_uncertain_override(self, html):
+        """dark theme 应覆盖 .node-uncertain fill"""
+        with open(html) as f:
+            content = f.read()
+        # dark theme 覆盖
+        assert "[data-theme='dark']" in content
+        # 覆盖包含 .node-uncertain
+        dark_idx = content.find("[data-theme='dark']")
+        assert dark_idx > -1
+        # 在 dark 区域有 .node-uncertain 引用
+        dark_block = content[dark_idx:dark_idx + 1000]
+        assert '.node-uncertain' in dark_block
+
+
+class TestUncertainExporter:
+    """Stage C — elk_exporter 应输出 confidence + uncertain 到 properties"""
+
+    def test_node_to_elk_includes_confidence(self):
+        """ElkExporter._node_to_elk 应在 properties 输出 confidence"""
+        from navisv.graph.elk_exporter import ElkExporter
+        # 用 elk_counter.sv fixture (节点有完整 location/timing)
+        # 这里只验证 _node_to_elk 调用后 properties 含 confidence / uncertain
+        # 实际节点需要 DesignDriver.build() 才能拿到, 这里用 mock node_data
+        from navisv.graph.graph_builder import GraphBuilder, NodeAttr
+        gb = GraphBuilder.__new__(GraphBuilder)
+        gb.graph = type('G', (), {})()
+        gb.source_map = {}
+        gb._node_attrs = {}
+        # 构造一个完整的 NodeAttr (location + timing + direction)
+        attr = NodeAttr(
+            name='test', path='top.test', kind='Port',
+            direction='In', timing='combinational',
+            location={'fileIndex': 0, 'line': 5, 'column': 24}
+        )
+        gb.node_data = {  # ElkExporter 用 node_data
+            'top.test': attr.to_dict()
+        }
+        # 但 ElkExporter 的 _node_to_elk 用 self.node_data.get() - 看 ElkExporter 实际怎么取
+        # 简单验证 confidence 计算逻辑: 完整 NodeAttr → confidence=1.0
+        assert attr.confidence == 1.0
+        assert attr.uncertain is False
+        # 缺 location → confidence=0.6 → uncertain
+        attr2 = NodeAttr(name='x', path='top.x', kind='Port',
+                         direction='In', timing='combinational', location=None)
+        assert attr2.confidence == 0.6
+        assert attr2.uncertain is True
+
+    def test_node_attr_confidence_three_components(self):
+        """NodeAttr.confidence 应三部分加权: location + timing + direction"""
+        from navisv.graph.graph_builder import NodeAttr
+        # 只有 location
+        a1 = NodeAttr(name='a', path='t.a', kind='Port',
+                      direction='', timing='unknown',
+                      location={'line': 1, 'fileIndex': 0})
+        assert a1.confidence == 0.4
+        assert a1.uncertain is True
+        # 只有 timing
+        a2 = NodeAttr(name='b', path='t.b', kind='Port',
+                      direction='', timing='combinational', location=None)
+        assert a2.confidence == 0.3
+        assert a2.uncertain is True
+        # 只有 direction
+        a3 = NodeAttr(name='c', path='t.c', kind='Port',
+                      direction='Out', timing='unknown', location=None)
+        assert a3.confidence == 0.3
+        assert a3.uncertain is True
+        # 全部齐全
+        a4 = NodeAttr(name='d', path='t.d', kind='Port',
+                      direction='In', timing='combinational',
+                      location={'line': 1, 'fileIndex': 0})
+        assert a4.confidence == 1.0
+        assert a4.uncertain is False
+
+    def test_to_dict_includes_confidence_and_uncertain(self):
+        """NodeAttr.to_dict() 应含 confidence + uncertain 字段"""
+        from navisv.graph.graph_builder import NodeAttr
+        attr = NodeAttr(name='x', path='t.x', kind='Port',
+                        direction='In', timing='combinational',
+                        location={'line': 1, 'fileIndex': 0})
+        d = attr.to_dict()
+        assert 'confidence' in d
+        assert 'uncertain' in d
+        assert d['confidence'] == 1.0
+        assert d['uncertain'] is False

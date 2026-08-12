@@ -116,9 +116,15 @@
           node.labels && node.labels[0] ? node.labels[0].text : node.id;
         const isOperator = (kind === 'Operator');
         const isLiteral = (kind === 'Literal');
+        // (Stage C) uncertain 节点: location/timing/direction 不全 → 虚线/灰色提示
+        const isUncertain = !!(node.properties && node.properties.uncertain);
+        const confidence = (node.properties && node.properties.confidence) || 1.0;
 
         svg += '<g class="node node-' + kind.toLowerCase() +
-               '" data-node-id="' + node.id + '">';
+               (isUncertain ? ' node-uncertain' : '') +
+               '" data-node-id="' + node.id + '"' +
+               (isUncertain ? ' title="⚠️ Uncertain (confidence: ' + confidence + ') — location/timing/direction 信息不全"' : '') +
+               '>';
 
         if (isOperator) {
           // 菱形: 中心点 (x+w/2, y+h/2),四个角点
