@@ -201,3 +201,35 @@ serv_decode.PRE_REGISTER = 1
 ---
 
 *更新：2026-05-18 v3 测试后*
+---
+
+## Issue-O 更新 (2026-08-13)
+
+**Status**: 🔍 → 调查完成, slang bug, 提供 workaround
+
+### 现象
+- `navisv elk picorv32.v` → `slang-netlist 失败 (returncode=-11)`
+- 第一次 slang 调用 (list tops) 成功
+- **第二次调用 (elaboration → netlist) SIGSEGV**
+
+### 调查
+| Top | exit | 结果 |
+|-----|------|------|
+| `picorv32_axi` | -11 (SIGSEGV) | ❌ crash |
+| `picorv32_regs` | 0 | ✅ netlist 6534 bytes |
+| `picorv32_wb` | -11 (SIGSEGV) | ❌ crash |
+
+### 结论
+- **slang 内部 bug** (不是 navisv bug)
+- 4GB pre-alloc **不解决** (非内存压力)
+- 触发: elaborate `picorv32_core` 时 (2938 行附近复杂 generate)
+
+### Workaround
+```bash
+navisv elk picorv32.v --top picorv32_regs -o /tmp/pico.html
+# 用 regs top (最小, 不依赖 axi/wb 接口) 跑通
+```
+
+### 长期方案
+- 上报 slang upstream: https://github.com/MikePopoloski/slang/issues
+- 跟踪 picorv32 + slang 兼容性
